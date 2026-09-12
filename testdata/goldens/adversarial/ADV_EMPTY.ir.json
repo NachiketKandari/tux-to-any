@@ -1,0 +1,8 @@
+{
+  "path": "testdata/adversarial/ADV_EMPTY.pc",
+  "functions": null,
+  "branch_count": 0,
+  "branching_factor": 0,
+  "queries": null,
+  "host_vars": []
+}

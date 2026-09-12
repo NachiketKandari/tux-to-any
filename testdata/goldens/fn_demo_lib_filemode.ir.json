@@ -1,0 +1,46 @@
+{
+  "path": "testdata/nav/fn_demo_lib.pc",
+  "functions": [
+    "fn_is_demo_active"
+  ],
+  "branch_count": 1,
+  "branching_factor": 1,
+  "queries": [
+    {
+      "id": "q1",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "SELECT DECODE(COUNT(*), 0, 'N', 'Y') INTO :c_active_flag FROM DEMO_CLIENT_MAP, DEMO_USER_ACCOUNTS WHERE DEMO_MATCH_ACC = :c_mtch_accnt AND DEMO_USER_ID = DEMO_ACCT_USER_ID AND DEMO_PLAN_ACTIVE_FLAG = 'A' AND ROWNUM = 1",
+      "start_line": 33,
+      "end_line": 40,
+      "owning_function": "fn_is_demo_active",
+      "tables": [
+        "DEMO_CLIENT_MAP",
+        "DEMO_USER_ACCOUNTS"
+      ],
+      "binds": [
+        "c_mtch_accnt"
+      ],
+      "bind_arity": 1,
+      "row_shape": [
+        "c_active_flag"
+      ],
+      "sites": [
+        33
+      ],
+      "dedup_key": "SELECT DECODE(COUNT(*), 0, 'N', 'Y') INTO :c_active_flag FROM DEMO_CLIENT_MAP, DEMO_USER_ACCOUNTS WHERE DEMO_MATCH_ACC = :c_mtch_accnt AND DEMO_USER_ID = DEMO_ACCT_USER_ID AND DEMO_PLAN_ACTIVE_FLAG = 'A' AND ROWNUM = 1"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "c_active_flag",
+      "c_type": "char",
+      "go_hint": "string"
+    },
+    {
+      "name": "c_mtch_accnt",
+      "c_type": "char",
+      "go_hint": "string"
+    }
+  ]
+}

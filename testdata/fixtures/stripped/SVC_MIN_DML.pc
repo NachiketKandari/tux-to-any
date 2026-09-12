@@ -1,0 +1,74 @@
+/*******************************************************************************
+ * Name    : SVC_MIN_DML
+ * Purpose : stripped DML demo — UPDATE, DELETE, MERGE across an
+ *           if/elseif/else chain (three conditions).
+ ******************************************************************************/
+
+#include <atmi.h>
+#include <fml32.h>
+#include <sqlca.h>
+#include <string.h>
+
+char c_ServiceName[33];
+
+void SVC_MIN_DML(TPSVCINFO* rqst)
+{
+    FBFR32 *ptr_fml_Ibuffer;
+    FBFR32 *ptr_fml_Obuffer;
+    char c_flag;
+    EXEC SQL BEGIN DECLARE SECTION;
+        varchar sql_min_acc[12];
+        long    sql_min_amt;
+    EXEC SQL END DECLARE SECTION;
+
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data;
+    ptr_fml_Obuffer = (FBFR32*)NULL;
+    strcpy(c_ServiceName,rqst->name);
+
+    Fget32(ptr_fml_Ibuffer,FML_MODE_FLG,0,(char*)&c_flag,0);
+    Fget32(ptr_fml_Ibuffer,FML_ACC_ID,0,(char*)&sql_min_acc,0);
+    Fget32(ptr_fml_Ibuffer,FML_AMT,0,(char*)&sql_min_amt,0);
+
+    if(c_flag == 'U')
+    {
+        EXEC SQL
+        UPDATE MIN_ACCOUNTS
+        SET    MIN_AMT = :sql_min_amt
+        WHERE  MIN_ACC_ID = :sql_min_acc;
+
+        if(SQLCODE)
+        {
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0);
+        }
+    }
+    else if(c_flag == 'D')
+    {
+        EXEC SQL
+        DELETE FROM MIN_ACCOUNTS
+        WHERE  MIN_ACC_ID = :sql_min_acc;
+
+        if(SQLCODE)
+        {
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0);
+        }
+    }
+    else
+    {
+        EXEC SQL
+            MERGE INTO MIN_ACCOUNTS a
+            USING (SELECT :sql_min_acc AS "ID" FROM DUAL) s
+            ON (a.MIN_ACC_ID = s.ID)
+            WHEN MATCHED THEN
+                UPDATE SET a.MIN_AMT = :sql_min_amt
+            WHEN NOT MATCHED THEN
+                INSERT (MIN_ACC_ID, MIN_AMT) VALUES (:sql_min_acc, :sql_min_amt);
+
+        if(SQLCODE)
+        {
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0);
+        }
+    }
+
+    Fadd32(ptr_fml_Obuffer,FML_ERR_MSG,"ok",0);
+    tpreturn(TPSUCCESS,0L,(char *)ptr_fml_Obuffer,0L,0);
+}

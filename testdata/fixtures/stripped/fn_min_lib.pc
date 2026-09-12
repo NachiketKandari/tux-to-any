@@ -1,0 +1,43 @@
+/****************************************************************************************************
+ *                  fn_min_lib.pc
+ *
+ * Purpose : stripped demo helper library — one SQL-bearing fn + one pure fn.
+ ****************************************************************************************************/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <sqlca.h>
+#include <string.h>
+#include <atmi.h>
+#include <userlog.h>
+#include <fml32.h>
+
+int fn_min_check(char* c_ServiceName, char* c_match, char* c_out_flg, char* c_err_msg)
+{
+    char c_flg;
+
+    EXEC SQL
+    SELECT DECODE(COUNT(*), 0, 'N', 'Y')
+    INTO   :c_flg
+    FROM   MIN_CLIENT_MAP
+    WHERE  MIN_MATCH_ACC = :c_match
+    AND    ROWNUM = 1;
+
+    if(SQLCODE != 0)
+    {
+        return -1;
+    }
+
+    *c_out_flg = c_flg;
+
+    return 1;
+}
+
+long fn_min_scale(long v, int pct)
+{
+    if (pct <= 0)
+    {
+        return 0;
+    }
+    return (v * pct) / 100;
+}

@@ -1,0 +1,51 @@
+/****************************************************************************************************
+*                  fn_demo_lib.pc
+*
+* Description:     demo library
+*
+* Author : (demo maintainer)
+*
+* 14-Apr-2021 : rev 1.0 - Initial release (demo phase 2)
+****************************************************************************************************/
+
+/* Standards include files*/
+#include <stdio.h>       /* C Header File */
+#include <stdlib.h>      /* C Header File */
+#include <sqlca.h>       /* Oracle header file */
+#include <atmi.h>        /* TUXEDO Header File */
+#include <userlog.h>     /* TUXEDO Header File */
+#include <fml32.h>       /* TUXEDO Header File */
+#include <Usysflds.h>    /* TUXEDO Field Definitions */
+#include <string.h>
+#include <demo_rout.h>
+#include <demo_eq_tap_lib.h>
+#include <fn_read_debug_lvl.h>
+#include <demo_eba.h>
+#include <demo_fml_def.h>
+#include <demo_fml_mf.h>
+#include <fo_demo_fml_def.h>
+#include <unistd.h>
+
+int fn_is_demo_active(char* c_ServiceName, char* c_mtch_accnt, char* c_is_active_flg, char* c_err_msg)
+{
+    char c_active_flag;
+
+    EXEC SQL
+    SELECT DECODE(COUNT(*), 0, 'N', 'Y')
+    INTO   :c_active_flag
+    FROM   DEMO_CLIENT_MAP, DEMO_USER_ACCOUNTS
+    WHERE  DEMO_MATCH_ACC = :c_mtch_accnt
+    AND    DEMO_USER_ID = DEMO_ACCT_USER_ID
+    AND    DEMO_PLAN_ACTIVE_FLAG = 'A'
+    AND    ROWNUM = 1;
+
+    if(SQLCODE != 0)
+    {
+        errlog(c_ServiceName,"S31240",SQLMSG,(char *)DEF_USR,DEF_SSSN,c_err_msg);
+        return -1;
+    }
+
+    *c_is_active_flg = c_active_flag;
+
+    return 1;
+}

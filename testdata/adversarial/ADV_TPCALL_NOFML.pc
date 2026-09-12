@@ -1,0 +1,35 @@
+/* ADV_TPCALL_NOFML — a tpcall site with no send/recv FML ops in its block:
+ * the contract cannot be correlated and must degrade to a visible
+ * ambiguous fact, never a guess. */
+#include <atmi.h>
+#include <fml32.h>
+
+char c_ServiceName[33];
+
+void SVC_ADV_TPNOFML(TPSVCINFO* rqst)
+{
+    FBFR32 *ptr_fml_Ibuffer;
+    char c_flag;
+    char *sbuffer;
+    char **rbuffer;
+    long llen;
+
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data;
+    strcpy(c_ServiceName,rqst->name);
+    Fget32(ptr_fml_Ibuffer,FML_MODE_FLG,0,(char*)&c_flag,0);
+
+    if(c_flag == 'T')
+    {
+        sbuffer = (char *)tpalloc("FML32",NULL,1024);
+        if(tpcall("SVC_ADV_TARGET",sbuffer,0,&rbuffer,&llen,TPNOTRANS) == -1)
+        {
+            userlog("tpcall failed");
+        }
+    }
+    else
+    {
+        userlog("bad flag");
+    }
+
+    tpreturn(TPSUCCESS,0L,0L,0L,0);
+}

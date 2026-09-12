@@ -1,0 +1,69 @@
+{
+  "path": "testdata/stripped/BAT_MIN_SIMPLE.pc",
+  "functions": [
+    "main"
+  ],
+  "branch_count": 1,
+  "branching_factor": 1,
+  "queries": [
+    {
+      "id": "cur_bat",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT BAT_ID, BAT_AMT FROM MIN_BAT_Q WHERE BAT_ST = 'N' ORDER BY BAT_ID",
+      "start_line": 24,
+      "end_line": 42,
+      "owning_function": "main",
+      "cursor_name": "cur_bat",
+      "cursor_flattened": true,
+      "tables": [
+        "MIN_BAT_Q"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "v_id",
+        "l_amt"
+      ],
+      "order_by": "BAT_ID",
+      "sites": [
+        24
+      ],
+      "dedup_key": "SELECT BAT_ID, BAT_AMT FROM MIN_BAT_Q WHERE BAT_ST = 'N' ORDER BY BAT_ID"
+    },
+    {
+      "id": "q2",
+      "type": "UPDATE",
+      "template_id": "db_method_update_tx",
+      "sql": "UPDATE MIN_BAT_Q SET BAT_ST = 'P' WHERE BAT_ID = :v_id",
+      "start_line": 39,
+      "end_line": 39,
+      "owning_function": "main",
+      "tables": [
+        "MIN_BAT_Q"
+      ],
+      "binds": [
+        "v_id"
+      ],
+      "bind_arity": 1,
+      "sites": [
+        39
+      ],
+      "dedup_key": "UPDATE MIN_BAT_Q SET BAT_ST = 'P' WHERE BAT_ID = :v_id"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "l_amt",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "v_id",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true
+    }
+  ]
+}

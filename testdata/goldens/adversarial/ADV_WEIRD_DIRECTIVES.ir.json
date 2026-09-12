@@ -1,0 +1,52 @@
+{
+  "path": "testdata/adversarial/ADV_WEIRD_DIRECTIVES.pc",
+  "entry": "SVC_ADV_WEIRD",
+  "functions": [
+    "SVC_ADV_WEIRD"
+  ],
+  "defines": [
+    {
+      "name": "FAKE_MACRO",
+      "value": "(x) ((x) * 2 + \"string in macro\")",
+      "line": 5,
+      "macro": true
+    },
+    {
+      "name": "UNBALANCED_PAREN",
+      "value": "( (x",
+      "line": 6,
+      "macro": true
+    }
+  ],
+  "branch_count": 0,
+  "branching_factor": 0,
+  "queries": [
+    {
+      "id": "q1",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "SELECT MIN_ACC_ID INTO :sql_min_acc FROM MIN_ACCOUNTS WHERE MIN_ACTIVE = 'A'",
+      "start_line": 12,
+      "end_line": 16,
+      "owning_function": "SVC_ADV_WEIRD",
+      "tables": [
+        "MIN_ACCOUNTS"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "sql_min_acc"
+      ],
+      "sites": [
+        12
+      ],
+      "dedup_key": "SELECT MIN_ACC_ID INTO :sql_min_acc FROM MIN_ACCOUNTS WHERE MIN_ACTIVE = 'A'"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "sql_min_acc",
+      "from_header": true
+    }
+  ]
+}

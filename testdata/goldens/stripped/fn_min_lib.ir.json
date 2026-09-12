@@ -1,0 +1,46 @@
+{
+  "path": "testdata/stripped/fn_min_lib.pc",
+  "functions": [
+    "fn_min_check",
+    "fn_min_scale"
+  ],
+  "branch_count": 2,
+  "branching_factor": 2,
+  "queries": [
+    {
+      "id": "q1",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "SELECT DECODE(COUNT(*), 0, 'N', 'Y') INTO :c_flg FROM MIN_CLIENT_MAP WHERE MIN_MATCH_ACC = :c_match AND ROWNUM = 1",
+      "start_line": 19,
+      "end_line": 24,
+      "owning_function": "fn_min_check",
+      "tables": [
+        "MIN_CLIENT_MAP"
+      ],
+      "binds": [
+        "c_match"
+      ],
+      "bind_arity": 1,
+      "row_shape": [
+        "c_flg"
+      ],
+      "sites": [
+        19
+      ],
+      "dedup_key": "SELECT DECODE(COUNT(*), 0, 'N', 'Y') INTO :c_flg FROM MIN_CLIENT_MAP WHERE MIN_MATCH_ACC = :c_match AND ROWNUM = 1"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "c_flg",
+      "c_type": "char",
+      "go_hint": "string"
+    },
+    {
+      "name": "c_match",
+      "c_type": "char",
+      "go_hint": "string"
+    }
+  ]
+}

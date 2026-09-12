@@ -1,0 +1,32 @@
+/* Fragment fixture (PF-3 gate): one branch slice of a NAV-style entry
+ * function, holding its own decls, one embedded cursor, and FML calls. */
+char c_flag;
+long li_demo_comp;
+varchar sql_nav_date[21];
+varchar sql_nav_nav[21];
+
+if(c_flag == 'H')
+{
+    if(Fget32(Ibuffer,FML_COMP_CD,0,(char*)&li_demo_comp,0) == -1)
+    {
+        tpreturn(TPFAIL,0L,0L,0L,0);
+    }
+
+    EXEC SQL
+    DECLARE cur_demo CURSOR FOR
+        SELECT NAV_DATE, NAV_VALUE
+        FROM DEMO_PRICE_HIST
+        WHERE COMP_CD = :li_demo_comp
+        ORDER BY NAV_DATE DESC;
+
+    EXEC SQL OPEN cur_demo;
+    EXEC SQL FETCH cur_demo INTO :sql_nav_date, :sql_nav_nav;
+    EXEC SQL CLOSE cur_demo;
+
+    Fadd32(Obuffer,FML_NAV_DATE,(char*)sql_nav_date.arr,0);
+    Fadd32(Obuffer,FML_NAV_VALUE,(char*)sql_nav_nav.arr,0);
+}
+else
+{
+    Fadd32(Obuffer,FML_ERR_MSG,"bad flag",0);
+}

@@ -1,0 +1,145 @@
+{
+  "path": "testdata/stripped/SVC_MIN_CURSOR.pc",
+  "entry": "SVC_MIN_CURSOR",
+  "functions": [
+    "SVC_MIN_CURSOR"
+  ],
+  "branch_count": 3,
+  "branching_factor": 5,
+  "conditions": [
+    {
+      "index": 1,
+      "kind": "if",
+      "expr": "c_flag == 'C'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'C'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 32,
+      "end_line": 61,
+      "fml_ops": [
+        {
+          "kind": "add",
+          "field": "FML_ACC_ID",
+          "target": "sql_min_acc",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 57
+        }
+      ],
+      "query_ids": [
+        "cur_min"
+      ]
+    },
+    {
+      "index": 2,
+      "kind": "else",
+      "start_line": 62,
+      "end_line": 65,
+      "fml_ops": [
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 64,
+          "code": "bad flag",
+          "dropped": true
+        }
+      ],
+      "is_default": true
+    }
+  ],
+  "fml_ops": [
+    {
+      "kind": "get",
+      "field": "FML_USER_ID",
+      "target": "c_user_id",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 29,
+      "dropped": true
+    },
+    {
+      "kind": "get",
+      "field": "FML_MODE_FLG",
+      "target": "c_flag",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 30
+    }
+  ],
+  "buffers": [
+    {
+      "name": "ptr_fml_Ibuffer",
+      "role": "input"
+    },
+    {
+      "name": "ptr_fml_Obuffer",
+      "role": "output"
+    }
+  ],
+  "queries": [
+    {
+      "id": "cur_min",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT MIN_ACC_ID, MIN_AMT FROM MIN_ACCOUNTS WHERE MIN_USER_ID = :c_user_id AND MIN_ACTIVE = 'A' ORDER BY MIN_AMT desc",
+      "start_line": 34,
+      "end_line": 60,
+      "owning_function": "SVC_MIN_CURSOR",
+      "cursor_name": "cur_min",
+      "cursor_flattened": true,
+      "tables": [
+        "MIN_ACCOUNTS"
+      ],
+      "binds": [
+        "c_user_id"
+      ],
+      "bind_arity": 1,
+      "row_shape": [
+        "sql_min_acc",
+        "sql_min_amt"
+      ],
+      "order_by": "MIN_AMT desc",
+      "sites": [
+        34
+      ],
+      "dedup_key": "SELECT MIN_ACC_ID, MIN_AMT FROM MIN_ACCOUNTS WHERE MIN_USER_ID = :c_user_id AND MIN_ACTIVE = 'A' ORDER BY MIN_AMT desc"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "c_flag",
+      "c_type": "char",
+      "go_hint": "string"
+    },
+    {
+      "name": "c_user_id",
+      "c_type": "char",
+      "go_hint": "string",
+      "array": true
+    },
+    {
+      "name": "sql_min_acc",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true,
+      "in_declare_section": true
+    },
+    {
+      "name": "sql_min_amt",
+      "c_type": "long",
+      "go_hint": "int64",
+      "in_declare_section": true
+    }
+  ]
+}

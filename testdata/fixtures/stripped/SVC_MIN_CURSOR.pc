@@ -1,0 +1,68 @@
+/*******************************************************************************
+ * Name    : SVC_MIN_CURSOR
+ * Purpose : stripped cursor demo — one SELECT_MULTI via the full
+ *           DECLARE/OPEN/FETCH/CLOSE choreography inside one flag branch.
+ ******************************************************************************/
+
+#include <atmi.h>
+#include <fml32.h>
+#include <sqlca.h>
+#include <string.h>
+
+char c_ServiceName[33];
+
+void SVC_MIN_CURSOR(TPSVCINFO* rqst)
+{
+    FBFR32 *ptr_fml_Ibuffer;
+    FBFR32 *ptr_fml_Obuffer;
+    char c_flag;
+    char c_user_id[9];
+    EXEC SQL BEGIN DECLARE SECTION;
+        varchar sql_min_acc[12];
+        long    sql_min_amt;
+    EXEC SQL END DECLARE SECTION;
+
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data;
+    ptr_fml_Obuffer = (FBFR32*)NULL;
+    strcpy(c_ServiceName,rqst->name);
+
+    Fget32(ptr_fml_Ibuffer,FML_USER_ID,0,c_user_id,0);
+    Fget32(ptr_fml_Ibuffer,FML_MODE_FLG,0,(char*)&c_flag,0);
+
+    if(c_flag == 'C')
+    {
+        EXEC SQL
+        DECLARE cur_min CURSOR FOR
+        SELECT MIN_ACC_ID,
+               MIN_AMT
+        FROM   MIN_ACCOUNTS
+        WHERE  MIN_USER_ID = :c_user_id
+        AND    MIN_ACTIVE  = 'A'
+        ORDER BY MIN_AMT desc;
+
+        EXEC SQL OPEN cur_min;
+
+        if(SQLCODE)
+        {
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0);
+        }
+
+        while(1)
+        {
+            EXEC SQL FETCH cur_min INTO :sql_min_acc, :sql_min_amt;
+            if(SQLCODE)
+            {
+                break;
+            }
+            Fadd32(ptr_fml_Obuffer,FML_ACC_ID,sql_min_acc,0);
+        }
+
+        EXEC SQL CLOSE cur_min;
+    }
+    else
+    {
+        Fadd32(ptr_fml_Obuffer,FML_ERR_MSG,"bad flag",0);
+    }
+
+    tpreturn(TPSUCCESS,0L,(char *)ptr_fml_Obuffer,0L,0);
+}

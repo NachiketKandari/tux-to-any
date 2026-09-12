@@ -1,0 +1,142 @@
+{
+  "path": "testdata/pf/fragment_nav_slice.txt",
+  "entry": "__fragment",
+  "fragment": true,
+  "functions": [
+    "__fragment"
+  ],
+  "branch_count": 2,
+  "branching_factor": 3,
+  "conditions": [
+    {
+      "index": 1,
+      "kind": "if",
+      "expr": "c_flag == 'H'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'H'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 8,
+      "end_line": 28,
+      "fml_ops": [
+        {
+          "kind": "get",
+          "field": "FML_COMP_CD",
+          "target": "li_demo_comp",
+          "buffer": "Ibuffer",
+          "line": 10
+        },
+        {
+          "kind": "add",
+          "field": "FML_NAV_DATE",
+          "target": "sql_nav_date",
+          "buffer": "Obuffer",
+          "line": 26
+        },
+        {
+          "kind": "add",
+          "field": "FML_NAV_VALUE",
+          "target": "sql_nav_nav",
+          "buffer": "Obuffer",
+          "line": 27
+        }
+      ],
+      "query_ids": [
+        "cur_demo"
+      ]
+    },
+    {
+      "index": 2,
+      "kind": "else",
+      "start_line": 29,
+      "end_line": 32,
+      "fml_ops": [
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "buffer": "Obuffer",
+          "line": 31,
+          "code": "bad flag",
+          "dropped": true
+        }
+      ],
+      "is_default": true
+    }
+  ],
+  "buffers": [
+    {
+      "name": "Ibuffer",
+      "role": "input"
+    },
+    {
+      "name": "Obuffer",
+      "role": "output"
+    }
+  ],
+  "queries": [
+    {
+      "id": "cur_demo",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT NAV_DATE, NAV_VALUE FROM DEMO_PRICE_HIST WHERE COMP_CD = :li_demo_comp ORDER BY NAV_DATE DESC",
+      "start_line": 15,
+      "end_line": 24,
+      "owning_function": "__fragment",
+      "cursor_name": "cur_demo",
+      "cursor_flattened": true,
+      "tables": [
+        "DEMO_PRICE_HIST"
+      ],
+      "binds": [
+        "li_demo_comp"
+      ],
+      "bind_arity": 1,
+      "row_shape": [
+        "sql_nav_date",
+        "sql_nav_nav"
+      ],
+      "order_by": "NAV_DATE DESC",
+      "sites": [
+        15
+      ],
+      "dedup_key": "SELECT NAV_DATE, NAV_VALUE FROM DEMO_PRICE_HIST WHERE COMP_CD = :li_demo_comp ORDER BY NAV_DATE DESC"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "c_flag",
+      "c_type": "char",
+      "go_hint": "string"
+    },
+    {
+      "name": "li_demo_comp",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "sql_nav_date",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true
+    },
+    {
+      "name": "sql_nav_nav",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true
+    }
+  ]
+}

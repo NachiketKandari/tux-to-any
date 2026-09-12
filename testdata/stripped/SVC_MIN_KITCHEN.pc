@@ -1,0 +1,97 @@
+/*******************************************************************************
+ * Name    : SVC_MIN_KITCHEN
+ * Purpose : stripped kitchen-sink demo — the common pattern signature only:
+ *           two conditions (if/else), one nested check inside branch 1,
+ *           SELECT_SINGLE + INSERT, one tpcall, fn_*/chk_* calls.
+ * Ver 1.0 added here: kitchen patterns
+ * Ver 1.0 comment ends
+ ******************************************************************************/
+
+#include <atmi.h>
+#include <fml32.h>
+#include <sqlca.h>
+#include <string.h>
+#include <fn_min_lib.h>
+
+#define BUF_LEN 1024
+
+char c_ServiceName[33];
+
+void SVC_MIN_KITCHEN(TPSVCINFO* rqst)
+{
+    FBFR32 *ptr_fml_Ibuffer;
+    FBFR32 *ptr_fml_Obuffer;
+    char c_flag;
+    char c_errmsg[256];
+    char c_user_id[9];
+    char c_active_flg;
+    long li_amt;
+    long li_id;
+    char *sbuffer;
+    char **rbuffer;
+    long llen;
+    EXEC SQL BEGIN DECLARE SECTION;
+        varchar sql_min_acc[12];
+        long    sql_min_amt;
+    EXEC SQL END DECLARE SECTION;
+
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data;
+    ptr_fml_Obuffer = (FBFR32*)NULL;
+    strcpy(c_ServiceName,rqst->name);
+
+    if(Fget32(ptr_fml_Ibuffer,FML_USER_ID,0,c_user_id,0) == -1)
+    {
+        tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0);
+    }
+    chk_session(c_ServiceName,c_user_id,c_errmsg);
+
+    Fget32(ptr_fml_Ibuffer,FML_MODE_FLG,0,(char*)&c_flag,0);
+    Fget32(ptr_fml_Ibuffer,FML_AMT,0,(char*)&li_amt,0);
+
+    if(c_flag == 'A')
+    {
+        if(li_amt > 0)
+        {
+            if(fn_min_check(c_ServiceName,c_user_id,&c_active_flg,c_errmsg) == -1)
+            {
+                Fadd32(ptr_fml_Obuffer,FML_ERR_MSG,c_errmsg,0);
+                tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0);
+            }
+        }
+        EXEC SQL
+        SELECT MIN_ACC_ID
+        INTO   :sql_min_acc
+        FROM   MIN_ACCOUNTS
+        WHERE  MIN_USER_ID = :c_user_id
+        AND    MIN_ACTIVE  = 'A';
+
+        if(SQLCODE)
+        {
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0);
+        }
+        Fadd32(ptr_fml_Obuffer,FML_ACC_ID,sql_min_acc,0);
+    }
+    else
+    {
+        sbuffer = (char *)tpalloc("FML32",NULL,BUF_LEN);
+        Fadd32((FBFR32*)sbuffer,FML_USER_ID,c_user_id,0);
+        Fadd32((FBFR32*)sbuffer,FML_AMT,(char*)&li_amt,0);
+        if(tpcall("SVC_MIN_DETAIL",sbuffer,0,&rbuffer,&llen,TPNOTRANS) == -1)
+        {
+            userlog("tpcall failed");
+        }
+        Fget32((FBFR32*)rbuffer,FML_ACC_ID,0,(char*)&li_id,0);
+
+        EXEC SQL
+        INSERT INTO MIN_LEDGER (USER_ID, ACC_ID, AMT)
+        VALUES (:c_user_id, :li_id, :li_amt);
+
+        if(SQLCODE)
+        {
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0);
+        }
+        Fadd32(ptr_fml_Obuffer,FML_ERR_MSG,"ok",0);
+    }
+
+    tpreturn(TPSUCCESS,0L,(char *)ptr_fml_Obuffer,0L,0);
+}

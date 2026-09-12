@@ -1,0 +1,47 @@
+{
+  "path": "testdata/adversarial/BAT_ADV_COMMIT.pc",
+  "functions": [
+    "main"
+  ],
+  "branch_count": 0,
+  "branching_factor": 0,
+  "queries": [
+    {
+      "id": "q1",
+      "type": "UPDATE",
+      "template_id": "db_method_update_tx",
+      "sql": "UPDATE MIN_BAT_Q SET BAT_ST = 'P' WHERE BAT_ST = 'N'",
+      "start_line": 11,
+      "end_line": 12,
+      "owning_function": "main",
+      "tables": [
+        "MIN_BAT_Q"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "sites": [
+        11
+      ],
+      "dedup_key": "UPDATE MIN_BAT_Q SET BAT_ST = 'P' WHERE BAT_ST = 'N'"
+    },
+    {
+      "id": "q2",
+      "type": "UPDATE",
+      "template_id": "db_method_update_tx",
+      "sql": "UPDATE MIN_BAT_Q SET BAT_ST = 'X' WHERE BAT_ST = 'P'",
+      "start_line": 16,
+      "end_line": 17,
+      "owning_function": "main",
+      "tables": [
+        "MIN_BAT_Q"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "sites": [
+        16
+      ],
+      "dedup_key": "UPDATE MIN_BAT_Q SET BAT_ST = 'X' WHERE BAT_ST = 'P'"
+    }
+  ],
+  "host_vars": []
+}

@@ -1,0 +1,17 @@
+/* ADV_SQL_NO_SEMI — an EXEC SQL block with no terminating semicolon. */
+#include <sqlca.h>
+
+void SVC_ADV_NOSEMI(TPSVCINFO* rqst)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        varchar sql_min_acc[12];
+    EXEC SQL END DECLARE SECTION;
+
+    EXEC SQL
+    SELECT MIN_ACC_ID
+    INTO   :sql_min_acc
+    FROM   MIN_ACCOUNTS
+    WHERE  MIN_ACTIVE = 'A'
+
+    tpreturn(TPSUCCESS,0L,0L,0L,0);
+}

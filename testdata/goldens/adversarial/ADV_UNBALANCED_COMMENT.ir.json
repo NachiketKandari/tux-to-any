@@ -1,0 +1,15 @@
+{
+  "path": "testdata/adversarial/ADV_UNBALANCED_COMMENT.pc",
+  "functions": null,
+  "branch_count": 0,
+  "branching_factor": 0,
+  "queries": null,
+  "host_vars": [],
+  "unbalanced": [
+    {
+      "kind": "block_comment",
+      "line": 1,
+      "col": 1
+    }
+  ]
+}

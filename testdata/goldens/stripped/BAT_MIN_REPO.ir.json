@@ -1,0 +1,120 @@
+{
+  "path": "testdata/stripped/BAT_MIN_REPO.pc",
+  "functions": [
+    "main"
+  ],
+  "branch_count": 3,
+  "branching_factor": 3,
+  "queries": [
+    {
+      "id": "q1",
+      "type": "INSERT",
+      "template_id": "db_method_insert_tx",
+      "sql": "INSERT INTO MIN_STAGE (ID, AMT, FLG) SELECT ID, AMT, 'N' FROM MIN_SRC WHERE ST = 'N'",
+      "start_line": 27,
+      "end_line": 31,
+      "owning_function": "main",
+      "tables": [
+        "MIN_STAGE"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "sites": [
+        27
+      ],
+      "dedup_key": "INSERT INTO MIN_STAGE (ID, AMT, FLG) SELECT ID, AMT, 'N' FROM MIN_SRC WHERE ST = 'N'"
+    },
+    {
+      "id": "cur_st",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT ID, AMT FROM MIN_STAGE WHERE FLG = 'N' ORDER BY ID",
+      "start_line": 33,
+      "end_line": 60,
+      "owning_function": "main",
+      "cursor_name": "cur_st",
+      "cursor_flattened": true,
+      "tables": [
+        "MIN_STAGE"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "v_id",
+        "l_amt"
+      ],
+      "order_by": "ID",
+      "sites": [
+        33
+      ],
+      "dedup_key": "SELECT ID, AMT FROM MIN_STAGE WHERE FLG = 'N' ORDER BY ID"
+    },
+    {
+      "id": "q3",
+      "type": "UPDATE",
+      "template_id": "db_method_update_tx",
+      "sql": "UPDATE MIN_TOT SET TOT = :l_total WHERE ID = :l_prev",
+      "start_line": 53,
+      "end_line": 53,
+      "owning_function": "main",
+      "tables": [
+        "MIN_TOT"
+      ],
+      "binds": [
+        "l_total",
+        "l_prev"
+      ],
+      "bind_arity": 2,
+      "sites": [
+        53
+      ],
+      "dedup_key": "UPDATE MIN_TOT SET TOT = :l_total WHERE ID = :l_prev"
+    },
+    {
+      "id": "q4",
+      "type": "UPDATE",
+      "template_id": "db_method_update_tx",
+      "sql": "UPDATE MIN_TOT SET TOT = :l_total WHERE ID = :l_prev",
+      "start_line": 64,
+      "end_line": 64,
+      "owning_function": "main",
+      "tables": [
+        "MIN_TOT"
+      ],
+      "binds": [
+        "l_total",
+        "l_prev"
+      ],
+      "bind_arity": 2,
+      "sites": [
+        64
+      ],
+      "dedup_key": "UPDATE MIN_TOT SET TOT = :l_total WHERE ID = :l_prev",
+      "duplicate_of": "q3"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "l_amt",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "l_prev",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "l_total",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "v_id",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true
+    }
+  ]
+}

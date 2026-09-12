@@ -1,0 +1,8 @@
+/* ADV_UNBALANCED_COMMENT — a /* that never closes mid-file. Everything
+after this line is comment territory: the entry below must NOT produce
+queries, and extract must record a loud unbalanced fact.
+
+void SVC_ADV_UNBALANCED(TPSVCINFO* rqst)
+{
+    EXEC SQL SELECT 1 INTO :x FROM MIN_ACCOUNTS;
+}

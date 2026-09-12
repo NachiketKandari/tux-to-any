@@ -1,0 +1,48 @@
+{
+  "path": "testdata/adversarial/BAT_ADV_NO_NAME.pc",
+  "functions": [
+    "main"
+  ],
+  "branch_count": 1,
+  "branching_factor": 1,
+  "queries": [
+    {
+      "id": "cur_nn",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT BAT_ID, BAT_AMT FROM MIN_BAT_Q WHERE BAT_ST = 'N'",
+      "start_line": 11,
+      "end_line": 23,
+      "owning_function": "main",
+      "cursor_name": "cur_nn",
+      "cursor_flattened": true,
+      "tables": [
+        "MIN_BAT_Q"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "v_id",
+        "l_amt"
+      ],
+      "sites": [
+        11
+      ],
+      "dedup_key": "SELECT BAT_ID, BAT_AMT FROM MIN_BAT_Q WHERE BAT_ST = 'N'"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "l_amt",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "v_id",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true
+    }
+  ]
+}

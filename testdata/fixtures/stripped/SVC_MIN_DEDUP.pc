@@ -1,0 +1,55 @@
+/*******************************************************************************
+ * Name    : SVC_MIN_DEDUP
+ * Purpose : stripped dedup demo — byte-identical SELECT in both branches;
+ *           the IR must link them (dedup_key/duplicate_of) so the plan
+ *           collapses to ONE db method.
+ ******************************************************************************/
+
+#include <atmi.h>
+#include <fml32.h>
+#include <sqlca.h>
+#include <string.h>
+
+char c_ServiceName[33];
+
+void SVC_MIN_DEDUP(TPSVCINFO* rqst)
+{
+    FBFR32 *ptr_fml_Ibuffer;
+    FBFR32 *ptr_fml_Obuffer;
+    char c_flag;
+    EXEC SQL BEGIN DECLARE SECTION;
+        varchar sql_min_acc[12];
+    EXEC SQL END DECLARE SECTION;
+
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data;
+    ptr_fml_Obuffer = (FBFR32*)NULL;
+    strcpy(c_ServiceName,rqst->name);
+
+    Fget32(ptr_fml_Ibuffer,FML_MODE_FLG,0,(char*)&c_flag,0);
+    Fget32(ptr_fml_Ibuffer,FML_USER_ID,0,(char*)&sql_min_acc,0);
+
+    if(c_flag == 'A')
+    {
+        EXEC SQL
+        SELECT MIN_ACC_ID
+        INTO   :sql_min_acc
+        FROM   MIN_ACCOUNTS
+        WHERE  MIN_USER_ID = :sql_min_acc
+        AND    MIN_ACTIVE  = 'A';
+
+        Fadd32(ptr_fml_Obuffer,FML_ACC_ID,sql_min_acc,0);
+    }
+    else
+    {
+        EXEC SQL
+        SELECT MIN_ACC_ID
+        INTO   :sql_min_acc
+        FROM   MIN_ACCOUNTS
+        WHERE  MIN_USER_ID = :sql_min_acc
+        AND    MIN_ACTIVE  = 'A';
+
+        Fadd32(ptr_fml_Obuffer,FML_ERR_MSG,"dup",0);
+    }
+
+    tpreturn(TPSUCCESS,0L,(char *)ptr_fml_Obuffer,0L,0);
+}

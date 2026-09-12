@@ -1,0 +1,82 @@
+{
+  "path": "testdata/adversarial/ADV_TPCALL_NOFML.pc",
+  "entry": "SVC_ADV_TPNOFML",
+  "functions": [
+    "SVC_ADV_TPNOFML"
+  ],
+  "branch_count": 2,
+  "branching_factor": 3,
+  "conditions": [
+    {
+      "index": 1,
+      "kind": "if",
+      "expr": "c_flag == 'T'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'T'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 21,
+      "end_line": 28
+    },
+    {
+      "index": 2,
+      "kind": "else",
+      "start_line": 29,
+      "end_line": 32,
+      "is_default": true
+    }
+  ],
+  "fml_ops": [
+    {
+      "kind": "get",
+      "field": "FML_MODE_FLG",
+      "target": "c_flag",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 19
+    }
+  ],
+  "buffers": [
+    {
+      "name": "ptr_fml_Ibuffer",
+      "role": "input"
+    },
+    {
+      "name": "rbuffer",
+      "role": "recv"
+    },
+    {
+      "name": "sbuffer",
+      "role": "send"
+    }
+  ],
+  "tpcalls": [
+    {
+      "service": "SVC_ADV_TARGET",
+      "send_buffer": "sbuffer",
+      "recv_buffer": "rbuffer",
+      "start_line": 24,
+      "end_line": 24,
+      "function": "SVC_ADV_TPNOFML",
+      "ambiguous": true
+    }
+  ],
+  "queries": null,
+  "host_vars": [
+    {
+      "name": "c_flag",
+      "c_type": "char",
+      "go_hint": "string"
+    }
+  ]
+}

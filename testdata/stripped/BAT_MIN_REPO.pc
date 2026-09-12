@@ -1,0 +1,68 @@
+/********************************************************************************************************************************
+*  Program Name:bat_min_repo.pc                                                                                                 *
+*  Description : stripped repo-shape batch — staging INSERT, a staging walk                                                     *
+*                with a per-basket accumulator, flush on boundary + tail                                                        *
+*                flush (repository rubric; service body is the LLM gap).                                                        *
+********************************************************************************************************************************/
+
+#include <stdio.h>
+#include <string.h>
+#include <sqlca.h>
+#include <atmi.h>
+#include <userlog.h>
+
+char  c_ServiceName [ 33 ];
+char  c_errmsg[100];
+
+void main(int argc,char *argv[])
+{
+  varchar   v_id[19];
+  long      l_amt;
+  long      l_total;
+  long      l_prev;
+
+  strcpy(c_ServiceName,"bat_min_repo");
+  INITBATDBGLVL(c_ServiceName);
+
+  EXEC SQL
+  INSERT INTO MIN_STAGE (ID, AMT, FLG)
+  SELECT ID, AMT, 'N'
+  FROM   MIN_SRC
+  WHERE  ST = 'N';
+
+  EXEC SQL DECLARE cur_st CURSOR FOR
+    SELECT ID, AMT
+    FROM   MIN_STAGE
+    WHERE  FLG = 'N'
+    ORDER BY ID;
+
+  EXEC SQL OPEN cur_st;
+
+  l_total = 0;
+  l_prev  = 0;
+
+  while(1)
+  {
+    EXEC SQL FETCH cur_st INTO :v_id, :l_amt;
+    if(sqlca.sqlcode != 0)
+    {
+      break;
+    }
+    if(l_prev != 0 && l_prev != v_id)
+    {
+      EXEC SQL UPDATE MIN_TOT SET TOT = :l_total WHERE ID = :l_prev;
+      l_total = 0;
+    }
+    l_total = l_total + l_amt;
+    l_prev  = v_id;
+  }
+
+  EXEC SQL CLOSE cur_st;
+
+  if(l_prev != 0)
+  {
+    EXEC SQL UPDATE MIN_TOT SET TOT = :l_total WHERE ID = :l_prev;
+  }
+
+  userlog("bat_min_repo done");
+}

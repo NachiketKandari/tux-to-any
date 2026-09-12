@@ -1,0 +1,97 @@
+{
+  "path": "testdata/adversarial/ADV_GHOST_CURSOR.pc",
+  "entry": "SVC_ADV_GHOST",
+  "functions": [
+    "SVC_ADV_GHOST"
+  ],
+  "branch_count": 1,
+  "branching_factor": 1,
+  "conditions": [
+    {
+      "index": 1,
+      "kind": "if",
+      "expr": "c_flag == 'G'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'G'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 20,
+      "end_line": 28,
+      "query_ids": [
+        "cur_ghost"
+      ]
+    },
+    {
+      "index": 2,
+      "kind": "else",
+      "start_line": 29,
+      "end_line": 32,
+      "fml_ops": [
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 31,
+          "code": "bad flag",
+          "dropped": true
+        }
+      ],
+      "is_default": true
+    }
+  ],
+  "fml_ops": [
+    {
+      "kind": "get",
+      "field": "FML_MODE_FLG",
+      "target": "c_flag",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 18
+    }
+  ],
+  "buffers": [
+    {
+      "name": "ptr_fml_Ibuffer",
+      "role": "input"
+    }
+  ],
+  "queries": [
+    {
+      "id": "cur_ghost",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT MIN_ACC_ID FROM MIN_ACCOUNTS WHERE MIN_ACTIVE = 'A'",
+      "start_line": 22,
+      "end_line": 26,
+      "owning_function": "SVC_ADV_GHOST",
+      "cursor_name": "cur_ghost",
+      "cursor_flattened": true,
+      "tables": [
+        "MIN_ACCOUNTS"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "sites": [
+        22
+      ],
+      "dedup_key": "SELECT MIN_ACC_ID FROM MIN_ACCOUNTS WHERE MIN_ACTIVE = 'A'"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "c_flag",
+      "c_type": "char",
+      "go_hint": "string"
+    }
+  ]
+}

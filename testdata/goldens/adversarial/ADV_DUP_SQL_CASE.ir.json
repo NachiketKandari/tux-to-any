@@ -1,0 +1,120 @@
+{
+  "path": "testdata/adversarial/ADV_DUP_SQL_CASE.pc",
+  "entry": "SVC_ADV_SQLCASE",
+  "functions": [
+    "SVC_ADV_SQLCASE"
+  ],
+  "branch_count": 1,
+  "branching_factor": 1,
+  "conditions": [
+    {
+      "index": 1,
+      "kind": "if",
+      "expr": "c_flag == 'A'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'A'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 25,
+      "end_line": 32,
+      "query_ids": [
+        "q1"
+      ]
+    },
+    {
+      "index": 2,
+      "kind": "else",
+      "start_line": 33,
+      "end_line": 40,
+      "query_ids": [
+        "q2"
+      ],
+      "is_default": true
+    }
+  ],
+  "fml_ops": [
+    {
+      "kind": "get",
+      "field": "FML_MODE_FLG",
+      "target": "c_flag",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 23
+    }
+  ],
+  "buffers": [
+    {
+      "name": "ptr_fml_Ibuffer",
+      "role": "input"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q1",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "SELECT MIN_ACC_ID INTO :sql_min_acc FROM MIN_ACCOUNTS WHERE MIN_ACTIVE = 'A'",
+      "start_line": 27,
+      "end_line": 31,
+      "owning_function": "SVC_ADV_SQLCASE",
+      "tables": [
+        "MIN_ACCOUNTS"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "sql_min_acc"
+      ],
+      "sites": [
+        27
+      ],
+      "dedup_key": "SELECT MIN_ACC_ID INTO :sql_min_acc FROM MIN_ACCOUNTS WHERE MIN_ACTIVE = 'A'"
+    },
+    {
+      "id": "q2",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "select MIN_ACC_ID into :sql_min_acc from min_accounts where MIN_ACTIVE = 'A'",
+      "start_line": 35,
+      "end_line": 39,
+      "owning_function": "SVC_ADV_SQLCASE",
+      "tables": [
+        "min_accounts"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "sql_min_acc"
+      ],
+      "sites": [
+        35
+      ],
+      "dedup_key": "select MIN_ACC_ID into :sql_min_acc from min_accounts where MIN_ACTIVE = 'A'"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "c_flag",
+      "c_type": "char",
+      "go_hint": "string"
+    },
+    {
+      "name": "sql_min_acc",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true,
+      "in_declare_section": true
+    }
+  ]
+}

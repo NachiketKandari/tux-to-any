@@ -1,0 +1,48 @@
+/*******************************************************************************
+ * Name    : SVC_TP_DEMO
+ * Purpose : synthetic tpcall fixture (PF-4 gate) — send block → tpcall →
+ *           recv block inside one branch of the entry function.
+ ******************************************************************************/
+
+#include <atmi.h>
+#include <fml32.h>
+
+#define BUF_LEN 6144
+
+void SVC_TP_DEMO(TPSVCINFO* rqst)
+{
+    FBFR32 *ptr_fml_Ibuffer;
+    FBFR32 *ptr_fml_Obuffer;
+    char c_flag;
+    char *sbuffer;
+    char **rbuffer;
+    long llen;
+    long ltpcnt;
+    varchar sql_nav_date[21];
+    long lnav;
+
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data;
+    if(Fget32(ptr_fml_Ibuffer,FML_MODE_FLG,0,(char*)&c_flag,0) == -1)
+    {
+        tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0);
+    }
+
+    if(c_flag == 'A')
+    {
+        sbuffer = (char *)tpalloc("FML32",NULL,BUF_LEN);
+        Fadd32((FBFR32*)sbuffer,FML_COMP_CD,"0001",0);
+        Fadd32((FBFR32*)sbuffer,FML_SCHEME_CD,"X1",0);
+        if(tpcall("SVC_DEMO_DETAIL",sbuffer,0,&rbuffer,&llen,TPNOTRANS) == -1)
+        {
+            userlog("tpcall failed");
+        }
+        Fget32((FBFR32*)rbuffer,FML_NAV_DATE,0,sql_nav_date,0);
+        Fget32((FBFR32*)rbuffer,FML_NAV_NAV,0,&lnav,0);
+        Fadd32(ptr_fml_Obuffer,FML_COMP_NAME,sql_nav_date,0);
+    }
+    else
+    {
+        EXEC SQL SELECT COUNT(*) INTO :ltpcnt FROM MF_TP_AUDIT WHERE SVC_NAME = 'SVC_DEMO_DETAIL';
+        Fadd32(ptr_fml_Obuffer,FML_ERR_MSG,"bad flag",0);
+    }
+}

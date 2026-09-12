@@ -1,0 +1,197 @@
+{
+  "path": "testdata/stripped/SVC_MIN_DML.pc",
+  "entry": "SVC_MIN_DML",
+  "functions": [
+    "SVC_MIN_DML"
+  ],
+  "branch_count": 5,
+  "branching_factor": 7,
+  "conditions": [
+    {
+      "index": 1,
+      "kind": "if",
+      "expr": "c_flag == 'U'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'U'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 32,
+      "end_line": 43,
+      "query_ids": [
+        "q1"
+      ]
+    },
+    {
+      "index": 2,
+      "kind": "elseif",
+      "expr": "c_flag == 'D'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'D'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 44,
+      "end_line": 54,
+      "query_ids": [
+        "q2"
+      ]
+    },
+    {
+      "index": 3,
+      "kind": "else",
+      "start_line": 55,
+      "end_line": 70,
+      "query_ids": [
+        "q3"
+      ],
+      "is_default": true
+    }
+  ],
+  "fml_ops": [
+    {
+      "kind": "get",
+      "field": "FML_MODE_FLG",
+      "target": "c_flag",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 28
+    },
+    {
+      "kind": "get",
+      "field": "FML_ACC_ID",
+      "target": "sql_min_acc",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 29
+    },
+    {
+      "kind": "get",
+      "field": "FML_AMT",
+      "target": "sql_min_amt",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 30
+    },
+    {
+      "kind": "add",
+      "field": "FML_ERR_MSG",
+      "buffer": "ptr_fml_Obuffer",
+      "line": 72,
+      "code": "ok",
+      "dropped": true
+    }
+  ],
+  "buffers": [
+    {
+      "name": "ptr_fml_Ibuffer",
+      "role": "input"
+    },
+    {
+      "name": "ptr_fml_Obuffer",
+      "role": "output"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q1",
+      "type": "UPDATE",
+      "template_id": "db_method_update_tx",
+      "sql": "UPDATE MIN_ACCOUNTS SET MIN_AMT = :sql_min_amt WHERE MIN_ACC_ID = :sql_min_acc",
+      "start_line": 34,
+      "end_line": 37,
+      "owning_function": "SVC_MIN_DML",
+      "tables": [
+        "MIN_ACCOUNTS"
+      ],
+      "binds": [
+        "sql_min_amt",
+        "sql_min_acc"
+      ],
+      "bind_arity": 2,
+      "sites": [
+        34
+      ],
+      "dedup_key": "UPDATE MIN_ACCOUNTS SET MIN_AMT = :sql_min_amt WHERE MIN_ACC_ID = :sql_min_acc"
+    },
+    {
+      "id": "q2",
+      "type": "DELETE",
+      "template_id": "db_method_delete_tx",
+      "sql": "DELETE FROM MIN_ACCOUNTS WHERE MIN_ACC_ID = :sql_min_acc",
+      "start_line": 46,
+      "end_line": 48,
+      "owning_function": "SVC_MIN_DML",
+      "tables": [
+        "MIN_ACCOUNTS"
+      ],
+      "binds": [
+        "sql_min_acc"
+      ],
+      "bind_arity": 1,
+      "sites": [
+        46
+      ],
+      "dedup_key": "DELETE FROM MIN_ACCOUNTS WHERE MIN_ACC_ID = :sql_min_acc"
+    },
+    {
+      "id": "q3",
+      "type": "MERGE",
+      "template_id": "db_method_merge",
+      "sql": "MERGE INTO MIN_ACCOUNTS a USING (SELECT :sql_min_acc AS \"ID\" FROM DUAL) s ON (a.MIN_ACC_ID = s.ID) WHEN MATCHED THEN UPDATE SET a.MIN_AMT = :sql_min_amt WHEN NOT MATCHED THEN INSERT (MIN_ACC_ID, MIN_AMT) VALUES (:sql_min_acc, :sql_min_amt)",
+      "start_line": 57,
+      "end_line": 64,
+      "owning_function": "SVC_MIN_DML",
+      "tables": [
+        "MIN_ACCOUNTS"
+      ],
+      "binds": [
+        "sql_min_acc",
+        "sql_min_amt"
+      ],
+      "bind_arity": 2,
+      "sites": [
+        57
+      ],
+      "dedup_key": "MERGE INTO MIN_ACCOUNTS a USING (SELECT :sql_min_acc AS \"ID\" FROM DUAL) s ON (a.MIN_ACC_ID = s.ID) WHEN MATCHED THEN UPDATE SET a.MIN_AMT = :sql_min_amt WHEN NOT MATCHED THEN INSERT (MIN_ACC_ID, MIN_AMT) VALUES (:sql_min_acc, :sql_min_amt)"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "c_flag",
+      "c_type": "char",
+      "go_hint": "string"
+    },
+    {
+      "name": "sql_min_acc",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true,
+      "in_declare_section": true
+    },
+    {
+      "name": "sql_min_amt",
+      "c_type": "long",
+      "go_hint": "int64",
+      "in_declare_section": true
+    }
+  ]
+}

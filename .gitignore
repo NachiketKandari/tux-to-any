@@ -1,0 +1,29 @@
+# runtime outputs (per-run artifacts, never committed)
+conversion_logs/
+python_out/
+mappings/
+scenarios/
+
+# build artifacts (anchored — the unanchored forms used to ignore the
+# whole cmd/tuxconv and cmd/xtux source trees)
+bin/
+/tuxconv
+/xtux
+
+# retired one-off harnesses (kept locally, not part of the repo)
+duel/
+/cmd/duel/
+
+# OS noise
+.DS_Store
+# local agent state
+.kilo/
+# local-only corpus + working config
+tux/
+tuxExamples/
+moreExamples/
+batchExamples/
+examples/
+# locally regenerated scenario goldens (derived from the corpus when present)
+testdata/scen/
+.tuxgo.yaml

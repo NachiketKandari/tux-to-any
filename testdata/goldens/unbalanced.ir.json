@@ -1,0 +1,23 @@
+{
+  "path": "testdata/pf/unbalanced.pc",
+  "entry": "SVC_BROKEN",
+  "functions": [
+    "SVC_BROKEN"
+  ],
+  "branch_count": 0,
+  "branching_factor": 0,
+  "queries": null,
+  "host_vars": [],
+  "unbalanced": [
+    {
+      "kind": "exec_sql",
+      "line": 6,
+      "col": 5
+    },
+    {
+      "kind": "braces",
+      "line": 4,
+      "col": 1
+    }
+  ]
+}

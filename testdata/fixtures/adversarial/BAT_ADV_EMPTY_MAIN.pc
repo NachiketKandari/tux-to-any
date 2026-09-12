@@ -1,0 +1,10 @@
+/* BAT_ADV_EMPTY_MAIN — main with nothing but the service-name strcpy. */
+#include <stdio.h>
+#include <string.h>
+
+char c_ServiceName[33];
+
+void main(int argc,char *argv[])
+{
+    strcpy(c_ServiceName,"bat_adv_empty");
+}

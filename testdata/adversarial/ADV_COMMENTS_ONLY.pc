@@ -1,0 +1,4 @@
+/* ADV_COMMENTS_ONLY — no code at all, just comments.
+ * Second line.
+*/
+/* A third block. */

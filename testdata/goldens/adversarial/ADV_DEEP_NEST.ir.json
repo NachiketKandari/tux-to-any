@@ -1,0 +1,110 @@
+{
+  "path": "testdata/adversarial/ADV_DEEP_NEST.pc",
+  "entry": "SVC_ADV_DEEP",
+  "functions": [
+    "SVC_ADV_DEEP"
+  ],
+  "branch_count": 9,
+  "branching_factor": 511,
+  "conditions": [
+    {
+      "index": 1,
+      "kind": "if",
+      "expr": "c_flag == 'D'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'D'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 25,
+      "end_line": 56,
+      "query_ids": [
+        "q1"
+      ]
+    },
+    {
+      "index": 2,
+      "kind": "else",
+      "start_line": 57,
+      "end_line": 60,
+      "fml_ops": [
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 59,
+          "code": "bad flag",
+          "dropped": true
+        }
+      ],
+      "is_default": true
+    }
+  ],
+  "fml_ops": [
+    {
+      "kind": "get",
+      "field": "FML_MODE_FLG",
+      "target": "c_flag",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 23
+    }
+  ],
+  "buffers": [
+    {
+      "name": "ptr_fml_Ibuffer",
+      "role": "input"
+    },
+    {
+      "name": "ptr_fml_Obuffer",
+      "role": "output"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q1",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "SELECT MIN_ACC_ID INTO :sql_min_acc FROM MIN_ACCOUNTS WHERE MIN_ACTIVE = 'A'",
+      "start_line": 43,
+      "end_line": 47,
+      "owning_function": "SVC_ADV_DEEP",
+      "tables": [
+        "MIN_ACCOUNTS"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "sql_min_acc"
+      ],
+      "sites": [
+        43
+      ],
+      "dedup_key": "SELECT MIN_ACC_ID INTO :sql_min_acc FROM MIN_ACCOUNTS WHERE MIN_ACTIVE = 'A'"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "c_flag",
+      "c_type": "char",
+      "go_hint": "string"
+    },
+    {
+      "name": "sql_min_acc",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true,
+      "in_declare_section": true
+    }
+  ]
+}

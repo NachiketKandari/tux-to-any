@@ -1,0 +1,14 @@
+/* BAT_ADV_HALF_CURSOR — DECLARE + OPEN, no FETCH, no CLOSE: a dangling
+ * cursor group. Flattening must handle the truncated extent visibly. */
+#include <stdio.h>
+#include <sqlca.h>
+
+void main(int argc,char *argv[])
+{
+    EXEC SQL DECLARE cur_half CURSOR FOR
+      SELECT BAT_ID FROM MIN_BAT_Q WHERE BAT_ST = 'N';
+
+    EXEC SQL OPEN cur_half;
+
+    /* nothing else */
+}

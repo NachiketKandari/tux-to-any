@@ -1,0 +1,31 @@
+{
+  "path": "testdata/adversarial/BAT_ADV_HALF_CURSOR.pc",
+  "functions": [
+    "main"
+  ],
+  "branch_count": 0,
+  "branching_factor": 0,
+  "queries": [
+    {
+      "id": "cur_half",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT BAT_ID FROM MIN_BAT_Q WHERE BAT_ST = 'N'",
+      "start_line": 8,
+      "end_line": 11,
+      "owning_function": "main",
+      "cursor_name": "cur_half",
+      "cursor_flattened": true,
+      "tables": [
+        "MIN_BAT_Q"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "sites": [
+        8
+      ],
+      "dedup_key": "SELECT BAT_ID FROM MIN_BAT_Q WHERE BAT_ST = 'N'"
+    }
+  ],
+  "host_vars": []
+}

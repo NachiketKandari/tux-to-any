@@ -1,0 +1,40 @@
+/* Synthetic demo stand-in for a production merge service (golden pins preserved).
+** Ver 1.0 added here: upsert flow — merge the demo account balance. */
+#include <sqlca.h>
+EXEC SQL INCLUDE atmi.h;
+EXEC SQL INCLUDE fml32.h;
+
+void SVC_DEMO_MERGE(TPSVCINFO *rqst)
+{
+    long account_id;
+    long balance;
+
+    Fget32(ptr_fml_Ibuffer, FML_ACC_ID, 0, &account_id, 0);
+
+    if (account_id <= 0)
+    {
+        Fadd32(ptr_fml_Obuffer, FML_ERR_MSG, c_errmsg, 0);
+        tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+    }
+    else
+    {
+        EXEC SQL
+            MERGE INTO DEMO_ACCOUNTS a
+            USING (SELECT :account_id AS "ID" FROM DUAL) s
+            ON (a.ACCOUNT_ID = s.ID)
+            WHEN MATCHED THEN
+                UPDATE SET a.BALANCE = :balance
+            WHEN NOT MATCHED THEN
+                INSERT (ACCOUNT_ID, BALANCE) VALUES (:account_id, :balance);
+
+        if (sqlca.sqlcode)
+        {
+            if (sqlca.sqlcode == -1)
+            {
+                errlog(c_ServiceName, "S31001", c_user_id);
+            }
+        }
+    }
+
+    tpreturn(TPSUCCESS, 0L, (char *)ptr_fml_Obuffer, 0L, 0);
+}

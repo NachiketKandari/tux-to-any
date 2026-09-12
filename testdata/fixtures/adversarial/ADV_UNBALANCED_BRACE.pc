@@ -1,0 +1,13 @@
+/* ADV_UNBALANCED_BRACE — the entry function's closing brace is missing. */
+#include <sqlca.h>
+
+void SVC_ADV_BRACE(TPSVCINFO* rqst)
+{
+    EXEC SQL
+    SELECT MIN_ACC_ID
+    INTO   :sql_min_acc
+    FROM   MIN_ACCOUNTS
+    WHERE  MIN_ACTIVE = 'A';
+
+    tpreturn(TPSUCCESS,0L,0L,0L,0);
+/* no closing brace below */

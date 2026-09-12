@@ -1,0 +1,20 @@
+/* Fragment fixture (stripped): raw branch slice — no SVC_* entry, no
+ * function definitions. One SELECT_SINGLE plus FML I/O; extract must wrap
+ * the whole file as the __fragment pseudo-entry (minChain 1). */
+char c_flag;
+varchar sql_min_acc[12];
+
+if(c_flag == 'A')
+{
+    EXEC SQL
+    SELECT MIN_ACC_ID
+    INTO   :sql_min_acc
+    FROM   MIN_ACCOUNTS
+    WHERE  MIN_ACTIVE = 'A';
+
+    Fadd32(Obuffer,FML_ACC_ID,(char*)sql_min_acc.arr,0);
+}
+else
+{
+    Fadd32(Obuffer,FML_ERR_MSG,"bad flag",0);
+}

@@ -1,0 +1,11 @@
+{
+  "path": "testdata/adversarial/ADV_SVC_BARE.pc",
+  "entry": "SVC_ADV_BARE",
+  "functions": [
+    "SVC_ADV_BARE"
+  ],
+  "branch_count": 0,
+  "branching_factor": 0,
+  "queries": null,
+  "host_vars": []
+}

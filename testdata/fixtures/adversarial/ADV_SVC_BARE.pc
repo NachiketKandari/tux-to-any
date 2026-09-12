@@ -1,0 +1,7 @@
+/* ADV_SVC_BARE — an entry function with no SQL, no conditions, no FML. */
+#include <atmi.h>
+
+void SVC_ADV_BARE(TPSVCINFO* rqst)
+{
+    tpreturn(TPSUCCESS,0L,0L,0L,0);
+}

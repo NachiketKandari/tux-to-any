@@ -1,0 +1,17 @@
+/* BAT_ADV_SVC_FILE — a Tuxedo SERVICE file (SVC_* entry) fed to the batch
+ * pipeline: wrong pipeline; must be handled gracefully, not converted into
+ * a bogus module. */
+#include <atmi.h>
+#include <fml32.h>
+#include <sqlca.h>
+
+void SVC_ADV_WRONGPIPE(TPSVCINFO* rqst)
+{
+    EXEC SQL
+    SELECT MIN_ACC_ID
+    INTO   :sql_min_acc
+    FROM   MIN_ACCOUNTS
+    WHERE  MIN_ACTIVE = 'A';
+
+    tpreturn(TPSUCCESS,0L,0L,0L,0);
+}

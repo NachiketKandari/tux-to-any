@@ -1,0 +1,45 @@
+/********************************************************************************************************************************
+*  Program Name:bat_min_simple.pc                                                                                               *
+*  Description : stripped simple-shape batch — one cursor loop + keyed                                                          *
+*                UPDATE per row (dissolves to fetchall + chunked executemany).                                                  *
+********************************************************************************************************************************/
+
+#include <stdio.h>
+#include <string.h>
+#include <sqlca.h>
+#include <atmi.h>
+#include <userlog.h>
+
+char  c_ServiceName [ 33 ];
+char  c_errmsg[100];
+
+void main(int argc,char *argv[])
+{
+  varchar   v_id[19];
+  long      l_amt;
+
+  strcpy(c_ServiceName,"bat_min_simple");
+  INITBATDBGLVL(c_ServiceName);
+
+  EXEC SQL DECLARE cur_bat CURSOR FOR
+    SELECT BAT_ID, BAT_AMT
+    FROM   MIN_BAT_Q
+    WHERE  BAT_ST = 'N'
+    ORDER BY BAT_ID;
+
+  EXEC SQL OPEN cur_bat;
+
+  while(1)
+  {
+    EXEC SQL FETCH cur_bat INTO :v_id, :l_amt;
+    if(sqlca.sqlcode != 0)
+    {
+      break;
+    }
+    EXEC SQL UPDATE MIN_BAT_Q SET BAT_ST = 'P' WHERE BAT_ID = :v_id;
+  }
+
+  EXEC SQL CLOSE cur_bat;
+
+  userlog("bat_min_simple done");
+}

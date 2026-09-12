@@ -1,0 +1,20 @@
+/* BAT_ADV_COMMIT — explicit EXEC SQL COMMIT / ROLLBACK in the source:
+ * generated code never emits commit/rollback (wrapper-owned, BP-5) — the
+ * construct must be dropped/migrated, not passed through. */
+#include <stdio.h>
+#include <sqlca.h>
+
+void main(int argc,char *argv[])
+{
+    varchar v_id[19];
+
+    EXEC SQL
+    UPDATE MIN_BAT_Q SET BAT_ST = 'P' WHERE BAT_ST = 'N';
+
+    EXEC SQL COMMIT;
+
+    EXEC SQL
+    UPDATE MIN_BAT_Q SET BAT_ST = 'X' WHERE BAT_ST = 'P';
+
+    EXEC SQL ROLLBACK;
+}

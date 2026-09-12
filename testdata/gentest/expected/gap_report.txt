@@ -1,0 +1,14 @@
+gentest gap report — ../../testdata/gentest/pkg/services/demo (mode service)
+service demo (../../testdata/gentest/pkg/services/demo)
+  db — 3 functions, 0 tested, 3 gaps
+    gap GetOrderDetails (no matching test name or call site)
+    gap GetOrderCount   (no matching test name or call site)
+    gap NewDemoStore    (no matching test name or call site)
+  controller — 3 functions, 0 tested, 3 gaps
+    gap OrderList         (no matching test name or call site)
+    gap OrderDirect       (no matching test name or call site)
+    gap NewDemoController (no matching test name or call site)
+  handler — 2 functions, 0 tested, 2 gaps
+    gap OrderList      (no matching test name or call site)
+    gap NewDemoHandler (no matching test name or call site)
+gentest: 8 functions, 0 tested, 8 gaps

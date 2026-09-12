@@ -1,0 +1,213 @@
+{
+  "path": "testdata/pf/SVC_TP_DEMO.pc",
+  "entry": "SVC_TP_DEMO",
+  "functions": [
+    "SVC_TP_DEMO"
+  ],
+  "defines": [
+    {
+      "name": "BUF_LEN",
+      "value": "6144",
+      "line": 10
+    }
+  ],
+  "branch_count": 3,
+  "branching_factor": 4,
+  "conditions": [
+    {
+      "index": 1,
+      "kind": "if",
+      "expr": "c_flag == 'A'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'A'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 30,
+      "end_line": 42,
+      "fml_ops": [
+        {
+          "kind": "add",
+          "field": "FML_COMP_CD",
+          "buffer": "sbuffer",
+          "line": 33,
+          "code": "0001"
+        },
+        {
+          "kind": "add",
+          "field": "FML_SCHEME_CD",
+          "buffer": "sbuffer",
+          "line": 34,
+          "code": "X1"
+        },
+        {
+          "kind": "get",
+          "field": "FML_NAV_DATE",
+          "target": "sql_nav_date",
+          "buffer": "rbuffer",
+          "line": 39
+        },
+        {
+          "kind": "get",
+          "field": "FML_NAV_NAV",
+          "target": "lnav",
+          "buffer": "rbuffer",
+          "line": 40
+        },
+        {
+          "kind": "add",
+          "field": "FML_COMP_NAME",
+          "target": "sql_nav_date",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 41
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "kind": "else",
+      "start_line": 43,
+      "end_line": 47,
+      "fml_ops": [
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 46,
+          "code": "bad flag",
+          "dropped": true
+        }
+      ],
+      "query_ids": [
+        "q1"
+      ],
+      "is_default": true
+    }
+  ],
+  "fml_ops": [
+    {
+      "kind": "get",
+      "field": "FML_MODE_FLG",
+      "target": "c_flag",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 25
+    }
+  ],
+  "buffers": [
+    {
+      "name": "ptr_fml_Ibuffer",
+      "role": "input"
+    },
+    {
+      "name": "ptr_fml_Obuffer",
+      "role": "output"
+    },
+    {
+      "name": "rbuffer",
+      "role": "recv"
+    },
+    {
+      "name": "sbuffer",
+      "role": "send"
+    }
+  ],
+  "tpcalls": [
+    {
+      "service": "SVC_DEMO_DETAIL",
+      "send_buffer": "sbuffer",
+      "recv_buffer": "rbuffer",
+      "send_fml": [
+        {
+          "kind": "add",
+          "field": "FML_COMP_CD",
+          "buffer": "sbuffer",
+          "line": 33,
+          "code": "0001"
+        },
+        {
+          "kind": "add",
+          "field": "FML_SCHEME_CD",
+          "buffer": "sbuffer",
+          "line": 34,
+          "code": "X1"
+        }
+      ],
+      "recv_fml": [
+        {
+          "kind": "get",
+          "field": "FML_NAV_DATE",
+          "target": "sql_nav_date",
+          "buffer": "rbuffer",
+          "line": 39
+        },
+        {
+          "kind": "get",
+          "field": "FML_NAV_NAV",
+          "target": "lnav",
+          "buffer": "rbuffer",
+          "line": 40
+        }
+      ],
+      "start_line": 35,
+      "end_line": 40,
+      "function": "SVC_TP_DEMO"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q1",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "SELECT COUNT(*) INTO :ltpcnt FROM MF_TP_AUDIT WHERE SVC_NAME = 'SVC_DEMO_DETAIL'",
+      "start_line": 45,
+      "end_line": 45,
+      "owning_function": "SVC_TP_DEMO",
+      "tables": [
+        "MF_TP_AUDIT"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "ltpcnt"
+      ],
+      "sites": [
+        45
+      ],
+      "dedup_key": "SELECT COUNT(*) INTO :ltpcnt FROM MF_TP_AUDIT WHERE SVC_NAME = 'SVC_DEMO_DETAIL'"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "c_flag",
+      "c_type": "char",
+      "go_hint": "string"
+    },
+    {
+      "name": "lnav",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "ltpcnt",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "sql_nav_date",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true
+    }
+  ]
+}

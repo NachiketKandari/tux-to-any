@@ -1,0 +1,44 @@
+{
+  "path": "testdata/stripped/MIN_FRAGMENT.pc",
+  "functions": null,
+  "branch_count": 1,
+  "branching_factor": 1,
+  "buffers": [
+    {
+      "name": "Obuffer",
+      "role": "output"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q1",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "SELECT MIN_ACC_ID INTO :sql_min_acc FROM MIN_ACCOUNTS WHERE MIN_ACTIVE = 'A'",
+      "start_line": 9,
+      "end_line": 13,
+      "owning_function": "",
+      "tables": [
+        "MIN_ACCOUNTS"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "sql_min_acc"
+      ],
+      "sites": [
+        9
+      ],
+      "dedup_key": "SELECT MIN_ACC_ID INTO :sql_min_acc FROM MIN_ACCOUNTS WHERE MIN_ACTIVE = 'A'"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "sql_min_acc",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true
+    }
+  ]
+}

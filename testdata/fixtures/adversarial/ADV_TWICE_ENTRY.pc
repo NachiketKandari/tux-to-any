@@ -1,0 +1,20 @@
+/* ADV_TWICE_ENTRY — two SVC_* functions in one file. Entry detection takes
+ * the first; the second must be visible as a function, not silently lost. */
+#include <atmi.h>
+#include <sqlca.h>
+
+void SVC_ADV_FIRST(TPSVCINFO* rqst)
+{
+    tpreturn(TPSUCCESS,0L,0L,0L,0);
+}
+
+void SVC_ADV_SECOND(TPSVCINFO* rqst)
+{
+    EXEC SQL
+    SELECT MIN_ACC_ID
+    INTO   :sql_min_acc
+    FROM   MIN_ACCOUNTS
+    WHERE  MIN_ACTIVE = 'A';
+
+    tpreturn(TPSUCCESS,0L,0L,0L,0);
+}

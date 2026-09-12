@@ -1,0 +1,7 @@
+/* Unbalanced fixture (PF-1.4 gate): the file ends inside a block comment
+ * and inside an EXEC SQL — both must surface as recorded facts. */
+void SVC_BROKEN(TPSVCINFO* rqst)
+{
+    int x;
+    EXEC SQL SELECT 1 INTO :x FROM DUAL
+}

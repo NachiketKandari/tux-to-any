@@ -1,0 +1,39 @@
+{
+  "path": "testdata/pf/comment_traps.pc",
+  "entry": "SVC_TRAPS",
+  "functions": [
+    "SVC_TRAPS"
+  ],
+  "branch_count": 2,
+  "branching_factor": 2,
+  "queries": [
+    {
+      "id": "q1",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "SELECT 2 INTO :c_flag FROM DUAL",
+      "start_line": 27,
+      "end_line": 27,
+      "owning_function": "SVC_TRAPS",
+      "tables": [
+        "DUAL"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "c_flag"
+      ],
+      "sites": [
+        27
+      ],
+      "dedup_key": "SELECT 2 INTO :c_flag FROM DUAL"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "c_flag",
+      "c_type": "char",
+      "go_hint": "string"
+    }
+  ]
+}

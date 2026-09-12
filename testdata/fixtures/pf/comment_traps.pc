@@ -1,0 +1,29 @@
+/* Adversarial comment fixture (PF-1 gate): braces, parens, quotes and
+ * nested-looking banners inside comments must never affect scanner
+ * accounting; banner-delimited regions stay live. */
+#include <atmi.h>
+
+/* header comment with { brace, ( paren, " quote, ' char */
+void SVC_TRAPS(TPSVCINFO* rqst)
+{
+    int x;
+    char c_flag;
+    /* comment block with { brace } and " quote ( paren */
+    // line comment with } brace and ( paren
+    x = 1; /* trailing { */ x = 2;
+
+    /**********Ver 1.5 added here for IBM**********/
+    if(dead_fn(x) == -1)
+    {
+        x = 9;
+    }
+    /*********Ver 1.5 comment ends here*****/
+
+    if(x == 1) /* cond comment { */
+    {
+        /*****Ver 1.5 commented****
+        if(dead == 2) { EXEC SQL SELECT 1 INTO :dead FROM DUAL; }
+        ****Ver 1.5 comment ends****/
+        EXEC SQL SELECT 2 INTO :c_flag FROM DUAL;
+    }
+}

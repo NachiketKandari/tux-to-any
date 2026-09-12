@@ -1,0 +1,106 @@
+{
+  "path": "testdata/adversarial/BAT_ADV_NESTED_LOOPS.pc",
+  "functions": [
+    "main"
+  ],
+  "branch_count": 2,
+  "branching_factor": 2,
+  "queries": [
+    {
+      "id": "cur_outer",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT BAT_ID FROM MIN_BAT_Q WHERE BAT_ST = 'N'",
+      "start_line": 13,
+      "end_line": 40,
+      "owning_function": "main",
+      "cursor_name": "cur_outer",
+      "cursor_flattened": true,
+      "tables": [
+        "MIN_BAT_Q"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "v_id"
+      ],
+      "sites": [
+        13
+      ],
+      "dedup_key": "SELECT BAT_ID FROM MIN_BAT_Q WHERE BAT_ST = 'N'"
+    },
+    {
+      "id": "cur_inner",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT SUB_ID, SUB_AMT FROM MIN_SUB WHERE ID = :v_id",
+      "start_line": 24,
+      "end_line": 37,
+      "owning_function": "main",
+      "cursor_name": "cur_inner",
+      "cursor_flattened": true,
+      "tables": [
+        "MIN_SUB"
+      ],
+      "binds": [
+        "v_id"
+      ],
+      "bind_arity": 1,
+      "row_shape": [
+        "v_sub",
+        "l_amt"
+      ],
+      "sites": [
+        24
+      ],
+      "dedup_key": "SELECT SUB_ID, SUB_AMT FROM MIN_SUB WHERE ID = :v_id"
+    },
+    {
+      "id": "q3",
+      "type": "UPDATE",
+      "template_id": "db_method_update_tx",
+      "sql": "UPDATE MIN_BAT_Q SET CNT = :i WHERE BAT_ID = :v_id",
+      "start_line": 38,
+      "end_line": 38,
+      "owning_function": "main",
+      "tables": [
+        "MIN_BAT_Q"
+      ],
+      "binds": [
+        "i",
+        "v_id"
+      ],
+      "bind_arity": 2,
+      "sites": [
+        38
+      ],
+      "dedup_key": "UPDATE MIN_BAT_Q SET CNT = :i WHERE BAT_ID = :v_id"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "i",
+      "c_type": "int",
+      "go_hint": "int"
+    },
+    {
+      "name": "l_amt",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "v_id",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true
+    },
+    {
+      "name": "v_sub",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true
+    }
+  ]
+}

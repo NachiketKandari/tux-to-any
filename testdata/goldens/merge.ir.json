@@ -1,0 +1,111 @@
+{
+  "path": "testdata/merge/SVC_DEMO_MERGE.pc",
+  "entry": "SVC_DEMO_MERGE",
+  "functions": [
+    "SVC_DEMO_MERGE"
+  ],
+  "branch_count": 3,
+  "branching_factor": 4,
+  "conditions": [
+    {
+      "index": 1,
+      "kind": "if",
+      "expr": "account_id \u003c= 0",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "account_id"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "0"
+        },
+        "op": "\u003c="
+      },
+      "flag_vars": [
+        "account_id"
+      ],
+      "start_line": 14,
+      "end_line": 18,
+      "fml_ops": [
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 16,
+          "dropped": true
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "kind": "else",
+      "start_line": 19,
+      "end_line": 37,
+      "query_ids": [
+        "q1"
+      ],
+      "is_default": true
+    }
+  ],
+  "fml_ops": [
+    {
+      "kind": "get",
+      "field": "FML_ACC_ID",
+      "target": "account_id",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 12
+    }
+  ],
+  "buffers": [
+    {
+      "name": "ptr_fml_Ibuffer",
+      "role": "input"
+    },
+    {
+      "name": "ptr_fml_Obuffer",
+      "role": "output"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q1",
+      "type": "MERGE",
+      "template_id": "db_method_merge",
+      "sql": "MERGE INTO DEMO_ACCOUNTS a USING (SELECT :account_id AS \"ID\" FROM DUAL) s ON (a.ACCOUNT_ID = s.ID) WHEN MATCHED THEN UPDATE SET a.BALANCE = :balance WHEN NOT MATCHED THEN INSERT (ACCOUNT_ID, BALANCE) VALUES (:account_id, :balance)",
+      "start_line": 21,
+      "end_line": 28,
+      "owning_function": "SVC_DEMO_MERGE",
+      "tables": [
+        "DEMO_ACCOUNTS"
+      ],
+      "binds": [
+        "account_id",
+        "balance"
+      ],
+      "bind_arity": 2,
+      "sites": [
+        21
+      ],
+      "dedup_key": "MERGE INTO DEMO_ACCOUNTS a USING (SELECT :account_id AS \"ID\" FROM DUAL) s ON (a.ACCOUNT_ID = s.ID) WHEN MATCHED THEN UPDATE SET a.BALANCE = :balance WHEN NOT MATCHED THEN INSERT (ACCOUNT_ID, BALANCE) VALUES (:account_id, :balance)"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "account_id",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "balance",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "c_errmsg",
+      "from_header": true
+    }
+  ]
+}

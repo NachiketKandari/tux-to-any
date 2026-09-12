@@ -1,0 +1,227 @@
+/* ************************************************************************* /
+/*  Program         : BAT_DEMO_REJECT                                       */
+/*                                                                         */
+/*  Description     : SYNTHETIC demo stand-in for a production batch       */
+/*                    (auto-reject stale transfer-in orders + expire stale  */
+/*                    consolidation requests). Golden fixture for the       */
+/*                    batchpy simple cursor-batch rubric (BP-9).            */
+/*  Log             :                                                      */
+/* ************************************************************************* /
+
+/* C Header File */
+#include <stdlib.h>
+#include <string.h>
+#include <sqlca.h>
+
+/* TUXEDO Header File */
+#include <atmi.h>
+#include <userlog.h>
+
+/**** Macros  ****/
+#define TOTAL_FML       10
+
+int main(int argc , char *argv[])
+{
+    char    c_ServiceName[ 33 ]; /* Name of called service */
+    char    c_errmsg[256];
+    char    c_tag[32];
+    int     rec_cnt;
+
+    EXEC SQL INCLUDE "table/demo_ti_orders.h";
+
+    userlog("***** BAT_DEMO_REJECT - starting *****");
+
+    strcpy(c_ServiceName,"bat_demo_reject");
+    INITBATDBGLVL(argv[0]);
+
+    if (tpbegin(TRAN_TIMEOUT,0)== -1)
+    {
+        userlog("tpbegin failed");
+        errlog(c_ServiceName,"D31035", TPMSG, DEF_USR, DEF_SSSN, c_errmsg);
+        tpclose();
+        tpterm();
+        exit(1);
+    }
+
+    // Step 1 : take form numbers
+    EXEC SQL
+    DECLARE demo_ti_reject CURSOR FOR
+        SELECT  DEMO_TI_FORM_NO
+        FROM    DEMO_TI_ORDERS
+        WHERE   DEMO_TI_STATUS='A'
+        AND     (trunc(SYSDATE) - trunc(DEMO_TI_ORDER_DATE)) > 60;
+
+    EXEC SQL
+        OPEN demo_ti_reject;
+
+    if (SQLCODE != 0)
+    {
+        errlog(c_ServiceName,"D31040",SQLMSG,DEF_USR,DEF_SSSN,c_errmsg);
+        tpabort(0);
+        tpterm();
+        exit(-1);
+    }
+
+    while(1)
+    { // Step 2: Row by row reads
+        sql_demo_ti_form_no=0;
+
+        EXEC SQL
+            FETCH  demo_ti_reject
+            INTO   :sql_demo_ti_form_no;
+
+        if ( SQLCODE != 0 && SQLCODE != NO_DATA_FOUND )
+        {
+            errlog(c_ServiceName, "D31050",SQLMSG,DEF_USR,DEF_SSSN,c_errmsg);
+            EXEC SQL CLOSE demo_ti_reject;
+            tpabort(0);
+            tpterm();
+            exit(-1);
+        }
+
+        if(SQLCODE == NO_DATA_FOUND)
+        {
+            userlog(" No Data found");
+            EXEC SQL CLOSE demo_ti_reject;
+            break;
+        }
+
+        if(DEBUG_MSG_LVL_3)
+        {
+            userlog("form no selected is <%d>",sql_demo_ti_form_no);
+        }
+
+        // Step 3: Update the table
+        EXEC SQL
+        UPDATE  DEMO_TI_ORDERS
+        SET     DEMO_TI_STATUS        = 'X',
+                DEMO_TI_REJ_REM       = 'Demo rejection remark for the synthetic corpus',
+                DEMO_TI_REJ_DATE      = sysdate,
+                DEMO_TI_STTS_CHG_DT   = sysdate,
+                DEMO_TI_UPDT_CNT      = 1
+        WHERE   DEMO_TI_FORM_NO       = :sql_demo_ti_form_no
+        AND     DEMO_TI_STATUS        = 'A';
+
+        if(SQLCODE != 0 && SQLCODE != NO_DATA_FOUND)
+        {
+            errlog(c_ServiceName, "D31055",SQLMSG,DEF_USR,DEF_SSSN,c_errmsg);
+            EXEC SQL CLOSE demo_ti_reject;
+            tpabort(0);
+            tpterm();
+            exit(1);
+        }
+    }
+
+    rec_cnt = 0;
+    userlog("in folio cons exp");
+    // Step 4: select stale consolidation requests
+    EXEC SQL
+        DECLARE demo_folio_exp CURSOR FOR
+        SELECT  a.dfc_match_acc,
+                a.dfc_comp_cd,
+                nvl(a.dfc_sch_cd, 'N'),
+                a.DFC_SOURCE_FOLIO,
+                a.DFC_TARGET_FOLIO
+        FROM    demo_folio_rqst a
+        WHERE   NOT EXISTS
+                (SELECT 'x'
+                FROM demo_folio_rqst_mkcrkr b
+                WHERE  a.DFC_MATCH_ACC=b.dfc_match_acc
+                AND    a.DFC_COMP_CD=b.dfc_comp_cd
+                AND    nvl(a.dfc_sch_cd,'N')=nvl(b.dfc_sch_cd,'N')
+                AND    a.DFC_SOURCE_FOLIO=b.DFC_SOURCE_FOLIO
+                AND    a.DFC_TARGET_FOLIO= b.DFC_TARGET_FOLIO
+                AND    a.DFC_PROCESS_FLAG  = 'N'
+                )
+        AND     a.DFC_PROCESS_FLAG  = 'N'
+        AND     (trunc(SYSDATE) - trunc(a.DFC_INSERT_DATE)) > 90;
+
+    EXEC SQL
+        OPEN demo_folio_exp;
+
+    if (SQLCODE != 0)
+    {
+        errlog(c_ServiceName, "D31065",SQLMSG,DEF_USR,DEF_SSSN,c_errmsg);
+        tpabort(0);
+        tpterm();
+        exit(-1);
+    }
+
+    while(1)
+    {
+        MEMSET(sql_dfc_match_acc);
+        MEMSET(sql_dfc_sch_cd);
+        // row by row fetch
+        EXEC SQL
+            FETCH  demo_folio_exp
+            INTO   :sql_dfc_match_acc,
+                   :sql_dfc_comp_cd,
+                   :sql_dfc_sch_cd,
+                   :sql_dfc_source_folio,
+                   :sql_dfc_target_folio;
+
+        if ( SQLCODE != 0 && SQLCODE != NO_DATA_FOUND )
+        {
+            errlog(c_ServiceName, "D31070",SQLMSG,DEF_USR,DEF_SSSN,c_errmsg);
+            EXEC SQL CLOSE demo_folio_exp;
+            tpabort(0);
+            tpterm();
+            exit(-1);
+        }
+
+        if(SQLCODE == NO_DATA_FOUND)
+        {
+            userlog(" No Data found");
+            EXEC SQL CLOSE demo_folio_exp;
+            break;
+        }
+
+        SETNULL(sql_dfc_match_acc);
+        SETNULL(sql_dfc_sch_cd);
+
+        rec_cnt ++;
+
+        if ((rec_cnt%1000)==0) // log every 1000 counts
+        {
+            userlog("number of recs processed is %d",rec_cnt);
+        }
+
+        // Step 6 : Update
+        EXEC SQL
+        UPDATE  demo_folio_rqst
+        SET     DFC_PROCESS_FLAG    = 'X',
+                DFC_UPDATE_DT       = sysdate
+        WHERE   DFC_MATCH_ACC       = :sql_dfc_match_acc
+        AND     DFC_COMP_CD         = :sql_dfc_comp_cd
+        AND     NVL(DFC_SCH_CD,'N') = :sql_dfc_sch_cd
+        AND     DFC_SOURCE_FOLIO    = :sql_dfc_source_folio
+        AND     DFC_TARGET_FOLIO    = :sql_dfc_target_folio
+        AND     DFC_PROCESS_FLAG    = 'N';
+
+        if(SQLCODE != 0 && SQLCODE != NO_DATA_FOUND)
+        {
+            errlog(c_ServiceName, "D31075",SQLMSG,DEF_USR,DEF_SSSN,c_errmsg);
+            EXEC SQL CLOSE demo_folio_exp;
+            tpabort(0);
+            tpterm();
+            exit(1);
+        }
+    } /*end of while*/
+
+    if( tpcommit(0) == -1)
+    {
+        errlog(c_ServiceName, "D31080",TPMSG,DEF_USR,DEF_SSSN,c_errmsg);
+        tpabort(0);
+        tpterm();
+        exit(1);
+    }
+
+    /** Unregister the batch process.**/
+    fn_rgstr_bat('U',c_ServiceName,"NA","B0");
+    userlog("***** bat_demo_reject - exiting *****");
+    printf("\n: BAT_DEMO_REJECT - exiting\n");
+    tpclose();
+    tpterm ();
+    exit(0);
+
+} /* End of main */

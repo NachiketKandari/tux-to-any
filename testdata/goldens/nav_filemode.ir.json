@@ -1,0 +1,1081 @@
+{
+  "path": "testdata/nav/SVC_DEMO_LIST.pc",
+  "entry": "SVC_DEMO_LIST",
+  "functions": [
+    "SVC_DEMO_LIST"
+  ],
+  "defines": [
+    {
+      "name": "DEMO_OUT_FML",
+      "value": "6",
+      "line": 67
+    },
+    {
+      "name": "BUF_LEN",
+      "value": "6144",
+      "line": 68
+    },
+    {
+      "name": "REC_LENGTH",
+      "value": "300",
+      "line": 69
+    }
+  ],
+  "branch_count": 75,
+  "branching_factor": 142,
+  "conditions": [
+    {
+      "index": 1,
+      "kind": "if",
+      "expr": "c_flag == 'H'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'H'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 180,
+      "end_line": 351,
+      "fml_ops": [
+        {
+          "kind": "get",
+          "field": "FML_COMP_CD",
+          "target": "sql_demo_comp_cd",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 183
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 186,
+          "code": "S31020",
+          "dropped": true
+        },
+        {
+          "kind": "get",
+          "field": "FML_SCHEME_CD",
+          "target": "sql_demo_scheme_cd",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 190
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 193,
+          "code": "S31025",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 207,
+          "code": "S31030",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 219,
+          "code": "S31035",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 257,
+          "code": "S31040",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 280,
+          "code": "S31045",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 312,
+          "code": "S31050",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_COMP_CD",
+          "target": "sql_demo_comp_cd",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 322
+        },
+        {
+          "kind": "add",
+          "field": "FML_COMP_NAME",
+          "target": "sql_demo_co_name",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 323
+        },
+        {
+          "kind": "add",
+          "field": "FML_SCHEME_CD",
+          "target": "sql_demo_scheme_cd",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 324
+        },
+        {
+          "kind": "add",
+          "field": "FML_SCHEME_DESC",
+          "target": "sql_demo_scheme_desc",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 325
+        },
+        {
+          "kind": "add",
+          "field": "FML_PRICE_DATE",
+          "target": "sql_demo_date",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 326
+        },
+        {
+          "kind": "add",
+          "field": "FML_PRICE",
+          "target": "sql_demo_price",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 327
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 336,
+          "code": "S31055",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 347,
+          "code": "S31060",
+          "dropped": true
+        }
+      ],
+      "query_ids": [
+        "q1",
+        "cur_demo_hist"
+      ]
+    },
+    {
+      "index": 2,
+      "kind": "elseif",
+      "expr": "c_flag == 'F'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'F'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 353,
+      "end_line": 578,
+      "fml_ops": [
+        {
+          "kind": "get",
+          "field": "FML_COMP_CD",
+          "target": "sql_demo_comp_cd",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 355,
+          "optional": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 364,
+          "code": "S31065",
+          "dropped": true
+        },
+        {
+          "kind": "get",
+          "field": "FML_ACCOUNT",
+          "target": "ls_demo_acc",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 372
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 375,
+          "code": "S31070",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 397,
+          "code": "S31075",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 423,
+          "code": "S31126",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 453,
+          "code": "S31085",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 483,
+          "code": "S31090",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 512,
+          "code": "S31095",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 538,
+          "code": "S31100",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_COMP_CD",
+          "target": "sql_demo_comp_cd",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 548
+        },
+        {
+          "kind": "add",
+          "field": "FML_SCHEME_CD",
+          "target": "sql_demo_scheme_cd",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 549
+        },
+        {
+          "kind": "add",
+          "field": "FML_SCHEME_DESC",
+          "target": "sql_demo_scheme_desc",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 550
+        },
+        {
+          "kind": "add",
+          "field": "FML_PRICE_DATE",
+          "target": "sql_demo_date",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 551
+        },
+        {
+          "kind": "add",
+          "field": "FML_PRICE",
+          "target": "sql_demo_price",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 552
+        },
+        {
+          "kind": "add",
+          "field": "FML_RATING",
+          "target": "sql_demo_rating",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 553
+        },
+        {
+          "kind": "add",
+          "field": "FML_LABEL",
+          "target": "str_desc",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 554
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 563,
+          "code": "S31105",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 574,
+          "code": "S31110",
+          "dropped": true
+        }
+      ],
+      "query_ids": [
+        "q3",
+        "cur_demo_featured"
+      ]
+    },
+    {
+      "index": 3,
+      "kind": "elseif",
+      "expr": "c_flag == 'I'",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "c_flag"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "'I'"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "c_flag"
+      ],
+      "start_line": 582,
+      "end_line": 808,
+      "fml_ops": [
+        {
+          "kind": "get",
+          "field": "FML_COMP_CD",
+          "target": "sql_demo_comp_cd",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 586,
+          "optional": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 595,
+          "code": "S31115",
+          "dropped": true
+        },
+        {
+          "kind": "get",
+          "field": "FML_ACCOUNT",
+          "target": "ls_demo_acc",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 605
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 608,
+          "code": "S31120",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 631,
+          "code": "S31125",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 658,
+          "code": "S31127",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 690,
+          "code": "S31135",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 719,
+          "code": "S31140",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 743,
+          "code": "S31145",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 769,
+          "code": "S31150",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_COMP_CD",
+          "target": "sql_demo_comp_cd",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 779
+        },
+        {
+          "kind": "add",
+          "field": "FML_SCHEME_CD",
+          "target": "sql_demo_scheme_cd",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 780
+        },
+        {
+          "kind": "add",
+          "field": "FML_SCHEME_DESC",
+          "target": "sql_demo_scheme_desc",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 781
+        },
+        {
+          "kind": "add",
+          "field": "FML_PRICE_DATE",
+          "target": "sql_demo_date",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 782
+        },
+        {
+          "kind": "add",
+          "field": "FML_PRICE",
+          "target": "sql_demo_price",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 783
+        },
+        {
+          "kind": "add",
+          "field": "FML_RATING",
+          "target": "sql_demo_rating",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 784
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 793,
+          "code": "S31155",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 804,
+          "code": "S31160",
+          "dropped": true
+        }
+      ],
+      "query_ids": [
+        "q5",
+        "cur_demo_insured"
+      ]
+    },
+    {
+      "index": 4,
+      "kind": "else",
+      "start_line": 811,
+      "end_line": 974,
+      "fml_ops": [
+        {
+          "kind": "get",
+          "field": "FML_COMP_CD",
+          "target": "li_demo_comp",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 816
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 819,
+          "code": "S31165",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 831,
+          "code": "S31170",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 864,
+          "code": "S31175",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 887,
+          "code": "S31180",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 918,
+          "code": "S31185",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 935,
+          "code": "S31190",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_COMP_CD",
+          "target": "sql_demo_comp_cd",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 944
+        },
+        {
+          "kind": "add",
+          "field": "FML_COMP_NAME",
+          "target": "sql_demo_co_name",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 945
+        },
+        {
+          "kind": "add",
+          "field": "FML_SCHEME_CD",
+          "target": "sql_demo_scheme_cd",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 946
+        },
+        {
+          "kind": "add",
+          "field": "FML_SCHEME_DESC",
+          "target": "sql_demo_scheme_desc",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 947
+        },
+        {
+          "kind": "add",
+          "field": "FML_PRICE_DATE",
+          "target": "sql_demo_date",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 948
+        },
+        {
+          "kind": "add",
+          "field": "FML_PRICE",
+          "target": "sql_demo_price",
+          "buffer": "ptr_fml_Obuffer",
+          "line": 949
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 957,
+          "code": "S31195",
+          "dropped": true
+        },
+        {
+          "kind": "add",
+          "field": "FML_ERR_MSG",
+          "target": "c_errmsg",
+          "buffer": "ptr_fml_Ibuffer",
+          "line": 970,
+          "code": "S31200",
+          "dropped": true
+        }
+      ],
+      "query_ids": [
+        "cur_demo_list"
+      ],
+      "is_default": true
+    }
+  ],
+  "fml_ops": [
+    {
+      "kind": "get",
+      "field": "FML_USER_ID",
+      "target": "c_user_id",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 121,
+      "dropped": true
+    },
+    {
+      "kind": "add",
+      "field": "FML_ERR_MSG",
+      "target": "c_errmsg",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 124,
+      "code": "S31005",
+      "dropped": true
+    },
+    {
+      "kind": "get",
+      "field": "FML_SESSION_ID",
+      "target": "li_session_id",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 132,
+      "dropped": true
+    },
+    {
+      "kind": "add",
+      "field": "FML_ERR_MSG",
+      "target": "c_errmsg",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 135,
+      "code": "S31010",
+      "dropped": true
+    },
+    {
+      "kind": "add",
+      "field": "FML_ERR_MSG",
+      "target": "c_errmsg",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 151,
+      "code": "S31010",
+      "dropped": true
+    },
+    {
+      "kind": "get",
+      "field": "FML_MODE_FLG",
+      "target": "c_flag",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 162,
+      "optional": true
+    },
+    {
+      "kind": "add",
+      "field": "FML_ERR_MSG",
+      "target": "c_errmsg",
+      "buffer": "ptr_fml_Ibuffer",
+      "line": 174,
+      "code": "S31015",
+      "dropped": true
+    }
+  ],
+  "buffers": [
+    {
+      "name": "ptr_fml_Ibuffer",
+      "role": "input"
+    },
+    {
+      "name": "ptr_fml_Obuffer",
+      "role": "output"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q1",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "select date('01-'||to_char(sysdate-90,'MM')||'-'||to_char(sysdate-90,'YYYY'),'dd-mm-yyyy'),sysdate into :c_from_date,:c_to_date from dual",
+      "start_line": 213,
+      "end_line": 215,
+      "owning_function": "SVC_DEMO_LIST",
+      "tables": [
+        "dual"
+      ],
+      "binds": null,
+      "bind_arity": 0,
+      "row_shape": [
+        "c_from_date",
+        "c_to_date"
+      ],
+      "sites": [
+        213
+      ],
+      "dedup_key": "select date('01-'||to_char(sysdate-90,'MM')||'-'||to_char(sysdate-90,'YYYY'),'dd-mm-yyyy'),sysdate into :c_from_date,:c_to_date from dual"
+    },
+    {
+      "id": "cur_demo_hist",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT DEMO_HIST_COMP_CD, DEMO_CO_NAME, DEMO_HIST_SCHEME_CD, DEMO_SCHEME_DESC, DEMO_HIST_PRICE, to_char(DEMO_HIST_DATE,'dd-Mon-yyyy') FROM DEMO_COMPANY, DEMO_SCHEME, DEMO_PRICE_HIST WHERE DEMO_CO_ID = DEMO_HIST_COMP_CD AND DEMO_SCHEME_CO_ID = DEMO_HIST_COMP_CD AND DEMO_SCHEME_ID = DEMO_HIST_SCHEME_CD AND DEMO_HIST_COMP_CD = :sql_demo_comp_cd AND DEMO_HIST_SCHEME_CD = :sql_demo_scheme_cd AND trunc(DEMO_HIST_DATE) between :c_from_date and :c_to_date ORDER BY DEMO_HIST_DATE desc",
+      "start_line": 232,
+      "end_line": 343,
+      "owning_function": "SVC_DEMO_LIST",
+      "cursor_name": "cur_demo_hist",
+      "cursor_flattened": true,
+      "tables": [
+        "DEMO_COMPANY",
+        "DEMO_SCHEME",
+        "DEMO_PRICE_HIST"
+      ],
+      "binds": [
+        "sql_demo_comp_cd",
+        "sql_demo_scheme_cd",
+        "c_from_date",
+        "c_to_date"
+      ],
+      "bind_arity": 4,
+      "row_shape": [
+        "sql_demo_comp_cd",
+        "sql_demo_co_name",
+        "sql_demo_scheme_cd",
+        "sql_demo_scheme_desc",
+        "sql_demo_price",
+        "sql_demo_date"
+      ],
+      "order_by": "DEMO_HIST_DATE desc",
+      "sites": [
+        232
+      ],
+      "dedup_key": "SELECT DEMO_HIST_COMP_CD, DEMO_CO_NAME, DEMO_HIST_SCHEME_CD, DEMO_SCHEME_DESC, DEMO_HIST_PRICE, to_char(DEMO_HIST_DATE,'dd-Mon-yyyy') FROM DEMO_COMPANY, DEMO_SCHEME, DEMO_PRICE_HIST WHERE DEMO_CO_ID = DEMO_HIST_COMP_CD AND DEMO_SCHEME_CO_ID = DEMO_HIST_COMP_CD AND DEMO_SCHEME_ID = DEMO_HIST_SCHEME_CD AND DEMO_HIST_COMP_CD = :sql_demo_comp_cd AND DEMO_HIST_SCHEME_CD = :sql_demo_scheme_cd AND trunc(DEMO_HIST_DATE) between :c_from_date and :c_to_date ORDER BY DEMO_HIST_DATE desc"
+    },
+    {
+      "id": "q3",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "SELECT COUNT(*) INTO :cnt_demo FROM DEMO_ACCOUNT_MAP WHERE DEMO_MATCH_ACC = :ls_demo_acc AND DEMO_END_DT is null",
+      "start_line": 387,
+      "end_line": 392,
+      "owning_function": "SVC_DEMO_LIST",
+      "tables": [
+        "DEMO_ACCOUNT_MAP"
+      ],
+      "binds": [
+        "ls_demo_acc"
+      ],
+      "bind_arity": 1,
+      "row_shape": [
+        "cnt_demo"
+      ],
+      "sites": [
+        387
+      ],
+      "dedup_key": "SELECT COUNT(*) INTO :cnt_demo FROM DEMO_ACCOUNT_MAP WHERE DEMO_MATCH_ACC = :ls_demo_acc AND DEMO_END_DT is null"
+    },
+    {
+      "id": "cur_demo_featured",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT DEMO_PRICE_COMP_CD, DEMO_PRICE_SCHEME_CD, DEMO_SCHEME_DESC, NVL(DEMO_PRICE_VAL,0), TO_CHAR(DEMO_PRICE_DATE,'dd-mm-yyyy'), NVL(DEMO_RATING,0), DECODE(NVL(DEMO_KIND,''),'A','ALPHA','B','BETA','C','ALPHA/BETA', '-') FROM DEMO_COMPANY, DEMO_SCHEME, DEMO_PRICE where DEMO_CO_ID = DEMO_PRICE_COMP_CD AND DEMO_SCHEME_CO_ID = DEMO_CO_ID AND DEMO_SCHEME_ID = DEMO_PRICE_SCHEME_CD AND DEMO_PRICE_COMP_CD = decode(:sql_demo_comp_cd,0,DEMO_PRICE_COMP_CD,:sql_demo_comp_cd) AND NVL(DEMO_FEATURED_FLG,'N') = 'Y' AND DEMO_DIRECT_FLG= decode(:c_demo_enable_flg,'Y', DEMO_DIRECT_FLG,'N') ORDER BY NVL(DEMO_RATING,0) DESC",
+      "start_line": 457,
+      "end_line": 570,
+      "owning_function": "SVC_DEMO_LIST",
+      "cursor_name": "cur_demo_featured",
+      "cursor_flattened": true,
+      "tables": [
+        "DEMO_COMPANY",
+        "DEMO_SCHEME",
+        "DEMO_PRICE"
+      ],
+      "binds": [
+        "sql_demo_comp_cd",
+        "c_demo_enable_flg"
+      ],
+      "bind_arity": 2,
+      "row_shape": [
+        "sql_demo_comp_cd",
+        "sql_demo_scheme_cd",
+        "sql_demo_scheme_desc",
+        "sql_demo_price",
+        "sql_demo_date",
+        "sql_demo_rating",
+        "str_desc"
+      ],
+      "order_by": "NVL(DEMO_RATING,0) DESC",
+      "sites": [
+        457
+      ],
+      "dedup_key": "SELECT DEMO_PRICE_COMP_CD, DEMO_PRICE_SCHEME_CD, DEMO_SCHEME_DESC, NVL(DEMO_PRICE_VAL,0), TO_CHAR(DEMO_PRICE_DATE,'dd-mm-yyyy'), NVL(DEMO_RATING,0), DECODE(NVL(DEMO_KIND,''),'A','ALPHA','B','BETA','C','ALPHA/BETA', '-') FROM DEMO_COMPANY, DEMO_SCHEME, DEMO_PRICE where DEMO_CO_ID = DEMO_PRICE_COMP_CD AND DEMO_SCHEME_CO_ID = DEMO_CO_ID AND DEMO_SCHEME_ID = DEMO_PRICE_SCHEME_CD AND DEMO_PRICE_COMP_CD = decode(:sql_demo_comp_cd,0,DEMO_PRICE_COMP_CD,:sql_demo_comp_cd) AND NVL(DEMO_FEATURED_FLG,'N') = 'Y' AND DEMO_DIRECT_FLG= decode(:c_demo_enable_flg,'Y', DEMO_DIRECT_FLG,'N') ORDER BY NVL(DEMO_RATING,0) DESC"
+    },
+    {
+      "id": "q5",
+      "type": "SELECT_SINGLE",
+      "template_id": "db_method_select_single",
+      "sql": "SELECT COUNT(*) INTO :cnt_demo FROM DEMO_ACCOUNT_MAP WHERE DEMO_MATCH_ACC = :ls_demo_acc AND DEMO_END_DT is null",
+      "start_line": 621,
+      "end_line": 626,
+      "owning_function": "SVC_DEMO_LIST",
+      "tables": [
+        "DEMO_ACCOUNT_MAP"
+      ],
+      "binds": [
+        "ls_demo_acc"
+      ],
+      "bind_arity": 1,
+      "row_shape": [
+        "cnt_demo"
+      ],
+      "sites": [
+        621
+      ],
+      "dedup_key": "SELECT COUNT(*) INTO :cnt_demo FROM DEMO_ACCOUNT_MAP WHERE DEMO_MATCH_ACC = :ls_demo_acc AND DEMO_END_DT is null",
+      "duplicate_of": "q3"
+    },
+    {
+      "id": "cur_demo_insured",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT DEMO_PRICE_COMP_CD, DEMO_PRICE_SCHEME_CD, DEMO_SCHEME_DESC, NVL(DEMO_PRICE_VAL,0), TO_CHAR(DEMO_PRICE_DATE,'dd-mm-yyyy'), NVL(DEMO_RATING,0) FROM DEMO_COMPANY, DEMO_SCHEME, DEMO_PRICE where DEMO_CO_ID = DEMO_PRICE_COMP_CD AND DEMO_SCHEME_CO_ID = DEMO_CO_ID AND DEMO_SCHEME_ID = DEMO_PRICE_SCHEME_CD AND DEMO_PRICE_COMP_CD = decode(:sql_demo_comp_cd,0,DEMO_PRICE_COMP_CD,:sql_demo_comp_cd) AND DEMO_INSURED_FLG = 'Y' AND DEMO_DIRECT_FLG= decode(:c_demo_enable_flg,'Y', DEMO_DIRECT_FLG,'N') ORDER BY NVL(DEMO_RATING,0) DESC",
+      "start_line": 694,
+      "end_line": 800,
+      "owning_function": "SVC_DEMO_LIST",
+      "cursor_name": "cur_demo_insured",
+      "cursor_flattened": true,
+      "tables": [
+        "DEMO_COMPANY",
+        "DEMO_SCHEME",
+        "DEMO_PRICE"
+      ],
+      "binds": [
+        "sql_demo_comp_cd",
+        "c_demo_enable_flg"
+      ],
+      "bind_arity": 2,
+      "row_shape": [
+        "sql_demo_comp_cd",
+        "sql_demo_scheme_cd",
+        "sql_demo_scheme_desc",
+        "sql_demo_price",
+        "sql_demo_date",
+        "sql_demo_rating"
+      ],
+      "order_by": "NVL(DEMO_RATING,0) DESC",
+      "sites": [
+        694
+      ],
+      "dedup_key": "SELECT DEMO_PRICE_COMP_CD, DEMO_PRICE_SCHEME_CD, DEMO_SCHEME_DESC, NVL(DEMO_PRICE_VAL,0), TO_CHAR(DEMO_PRICE_DATE,'dd-mm-yyyy'), NVL(DEMO_RATING,0) FROM DEMO_COMPANY, DEMO_SCHEME, DEMO_PRICE where DEMO_CO_ID = DEMO_PRICE_COMP_CD AND DEMO_SCHEME_CO_ID = DEMO_CO_ID AND DEMO_SCHEME_ID = DEMO_PRICE_SCHEME_CD AND DEMO_PRICE_COMP_CD = decode(:sql_demo_comp_cd,0,DEMO_PRICE_COMP_CD,:sql_demo_comp_cd) AND DEMO_INSURED_FLG = 'Y' AND DEMO_DIRECT_FLG= decode(:c_demo_enable_flg,'Y', DEMO_DIRECT_FLG,'N') ORDER BY NVL(DEMO_RATING,0) DESC"
+    },
+    {
+      "id": "cur_demo_list",
+      "type": "SELECT_MULTI",
+      "template_id": "db_method_select_multi",
+      "sql": "SELECT DEMO_PRICE_COMP_CD, DEMO_PRICE_SCHEME_CD, DEMO_PRICE_VAL, to_char(DEMO_PRICE_DATE,'dd-mm-yyyy') , DEMO_CO_NAME, DEMO_SCHEME_DESC FROM DEMO_COMPANY, DEMO_SCHEME, DEMO_PRICE where DEMO_CO_ID = DEMO_PRICE_COMP_CD AND DEMO_SCHEME_CO_ID = DEMO_CO_ID AND DEMO_SCHEME_ID = DEMO_PRICE_SCHEME_CD AND DEMO_CO_ID = :li_demo_comp AND (DEMO_FLG_1 = 'Y' OR DEMO_FLG_2 = 'Y' OR DEMO_FLG_3 = 'Y' OR DEMO_FLG_4 = 'Y' OR DEMO_FLG_5 = 'Y')",
+      "start_line": 836,
+      "end_line": 965,
+      "owning_function": "SVC_DEMO_LIST",
+      "cursor_name": "cur_demo_list",
+      "cursor_flattened": true,
+      "tables": [
+        "DEMO_COMPANY",
+        "DEMO_SCHEME",
+        "DEMO_PRICE"
+      ],
+      "binds": [
+        "li_demo_comp"
+      ],
+      "bind_arity": 1,
+      "row_shape": [
+        "sql_demo_comp_cd",
+        "sql_demo_scheme_cd",
+        "sql_demo_price",
+        "sql_demo_date",
+        "sql_demo_co_name",
+        "sql_demo_scheme_desc"
+      ],
+      "sites": [
+        836
+      ],
+      "dedup_key": "SELECT DEMO_PRICE_COMP_CD, DEMO_PRICE_SCHEME_CD, DEMO_PRICE_VAL, to_char(DEMO_PRICE_DATE,'dd-mm-yyyy') , DEMO_CO_NAME, DEMO_SCHEME_DESC FROM DEMO_COMPANY, DEMO_SCHEME, DEMO_PRICE where DEMO_CO_ID = DEMO_PRICE_COMP_CD AND DEMO_SCHEME_CO_ID = DEMO_CO_ID AND DEMO_SCHEME_ID = DEMO_PRICE_SCHEME_CD AND DEMO_CO_ID = :li_demo_comp AND (DEMO_FLG_1 = 'Y' OR DEMO_FLG_2 = 'Y' OR DEMO_FLG_3 = 'Y' OR DEMO_FLG_4 = 'Y' OR DEMO_FLG_5 = 'Y')"
+    }
+  ],
+  "host_vars": [
+    {
+      "name": "c_demo_enable_flg",
+      "c_type": "char",
+      "go_hint": "string"
+    },
+    {
+      "name": "c_errmsg",
+      "c_type": "char",
+      "go_hint": "string",
+      "array": true
+    },
+    {
+      "name": "c_flag",
+      "c_type": "char",
+      "go_hint": "string"
+    },
+    {
+      "name": "c_from_date",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true,
+      "in_declare_section": true
+    },
+    {
+      "name": "c_to_date",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true,
+      "in_declare_section": true
+    },
+    {
+      "name": "c_user_id",
+      "c_type": "char",
+      "go_hint": "string",
+      "array": true
+    },
+    {
+      "name": "cnt_demo",
+      "c_type": "int",
+      "go_hint": "int"
+    },
+    {
+      "name": "li_demo_comp",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "li_session_id",
+      "c_type": "long",
+      "go_hint": "int64"
+    },
+    {
+      "name": "ls_demo_acc",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true
+    },
+    {
+      "name": "sql_demo_co_name",
+      "from_header": true
+    },
+    {
+      "name": "sql_demo_comp_cd",
+      "from_header": true
+    },
+    {
+      "name": "sql_demo_date",
+      "from_header": true
+    },
+    {
+      "name": "sql_demo_price",
+      "from_header": true
+    },
+    {
+      "name": "sql_demo_rating",
+      "from_header": true
+    },
+    {
+      "name": "sql_demo_scheme_cd",
+      "from_header": true
+    },
+    {
+      "name": "sql_demo_scheme_desc",
+      "from_header": true
+    },
+    {
+      "name": "str_desc",
+      "c_type": "varchar",
+      "go_hint": "string",
+      "array": true,
+      "nullable": true
+    }
+  ],
+  "external_fns": [
+    {
+      "name": "chk_session",
+      "callsites": [
+        147
+      ]
+    },
+    {
+      "name": "fn_is_demo_active",
+      "callsites": [
+        419,
+        654
+      ]
+    },
+    {
+      "name": "fn_long_to_int",
+      "callsites": [
+        931
+      ]
+    }
+  ]
+}

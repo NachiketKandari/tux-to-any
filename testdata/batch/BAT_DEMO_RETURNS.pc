@@ -1,0 +1,285 @@
+/********************************************************************************************************************************
+*  Program Name:bat_demo_returns.pc                                                                                             *
+*  Description : SYNTHETIC demo stand-in for a production stateful batch                                                       *
+*                (rebuild a staging table, walk it row by row, accumulate                                                       *
+*                weighted returns per basket, flush at basket boundaries).                                                      *
+*                Golden fixture for the batchpy stateful/repository rubric (BP-9).                                              *
+********************************************************************************************************************************/
+
+/* Standards include files */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sqlca.h>
+#include <atmi.h>
+#include <userlog.h>
+
+/* Global Variable Declaration */
+char  c_ServiceName [ 33 ];
+char  c_errmsg[100];
+
+void  fn_close_bat(char *);
+
+void main(int argc,char *argv[])
+{
+  EXEC SQL INCLUDE "table/demo_ret_mstr.h";
+  EXEC SQL INCLUDE "table/demo_ret_tmp.h";
+
+  TPINIT  *ptr_st_tpinfo;
+
+  int   i_count_row;
+  int   fst_time;
+  int   i;
+
+  long  l_prev_bskt_id;
+
+  double  d_final;
+  double  d_final_num;
+  double  d_final_den;
+
+  varchar   v_rowid[19];
+
+  i_count_row = 0;
+  fst_time = 0;
+  i = 0;
+
+  l_prev_bskt_id = 0;
+
+  d_final = 0;
+  d_final_num = 0;
+  d_final_den = 0;
+
+  MEMSET(v_rowid);
+
+  strcpy(c_ServiceName,"bat_demo_returns");
+  INITBATDBGLVL(c_ServiceName);
+
+  /******************** Initialize the batch process ********************/
+
+  ptr_st_tpinfo = (TPINIT *) tpalloc ( "TPINIT", NULL, TPINITNEED ( 0 ) );
+  if ( ptr_st_tpinfo == NULL )
+  {
+    errlog(c_ServiceName,"S31005", TPMSG, DEF_USR, DEF_SSSN, c_errmsg);
+    tpclose();
+    tpterm();
+    exit (1);
+  }
+
+  i_count_row = sqlca.sqlerrd[2];
+
+  if (tpopen() == -1)
+  {
+    errlog(c_ServiceName,"S31020", TPMSG, DEF_USR, DEF_SSSN, c_errmsg);
+    fn_close_bat(c_ServiceName);
+    exit(1);
+  }
+
+  if(DEBUG_MSG_LVL_3)
+  {
+    userlog("bat_demo_returns starts .... ");
+  }
+
+  /** Start **/
+
+  EXEC SQL TRUNCATE TABLE DEMO_RET_TMP;
+  if(SQLCODE!=0)
+  {
+    userlog("Error While Deleting the Data ");
+    errlog(c_ServiceName,"S31025", SQLMSG, DEF_USR, DEF_SSSN, c_errmsg);
+    fn_close_bat(c_ServiceName);
+    exit(-1);
+  }
+
+   EXEC SQL
+      INSERT INTO DEMO_RET_TMP
+      (
+        DEMO_RET_TMP_BSKT_ID,
+        DEMO_RET_TMP_WEIGHT,
+        DEMO_RET_TMP_RETURN,
+        DEMO_RET_TMP_AMFI_CD
+      )
+      (
+        SELECT  MBM_DEMO_BSKT_ID,
+                NVL(MBD_DEMO_WEIGHT,0),
+                NVL(ROUND(DEMO_RET,2),0),
+                DEMO_NAV_AMFI_CD
+        FROM    DEMO_RET_MSTR,
+                DEMO_RET_DTL,
+                DEMO_CONTENT@CONTENT_DB P2P
+        WHERE   MBM_DEMO_BSKT_ID = MBD_DEMO_BSKT_ID
+        AND     MBD_DEMO_ACTV_FLG = 'Y'
+        AND     P2P.DEMOCODE(+) = DEMO_NAV_AMFI_CD
+      );
+
+   if(SQLCODE != 0)
+   {
+     EXEC SQL ROLLBACK;
+     errlog(c_ServiceName,"S31030",SQLMSG,DEF_USR, DEF_SSSN, c_errmsg);
+     fn_close_bat(c_ServiceName);
+     exit(-1);
+   }
+
+   EXEC SQL COMMIT;
+
+   i_count_row = sqlca.sqlerrd[2];
+
+   if(DEBUG_MSG_LVL_3)
+   {
+     userlog(" Count of Row Inserted -|%d|",i_count_row);
+   }
+
+   while(1)
+   {
+     sql_demo_ret_tmp_bskt_id = 0;
+     sql_demo_ret_tmp_weight = 0;
+     sql_demo_ret_tmp_return = 0;
+     MEMSET(sql_demo_ret_tmp_amfi_cd);
+
+     EXEC SQL
+       SELECT  DEMO_RET_TMP_BSKT_ID,
+               DEMO_RET_TMP_WEIGHT,
+               DEMO_RET_TMP_RETURN,
+               DEMO_RET_TMP_AMFI_CD,
+               ROWID
+       INTO
+               :sql_demo_ret_tmp_bskt_id,
+               :sql_demo_ret_tmp_weight,
+               :sql_demo_ret_tmp_return,
+               :sql_demo_ret_tmp_amfi_cd,
+               :v_rowid
+       FROM    DEMO_RET_TMP
+       WHERE   DEMO_RET_TMP_PROCESS_FLG = 'N'
+       AND     ROWNUM<2
+       ORDER BY DEMO_RET_TMP_BSKT_ID;
+
+     if(SQLCODE != 0)
+     {
+       if(SQLCODE == NO_DATA_FOUND)
+       {
+         d_final = (d_final_num/d_final_den);
+
+         EXEC SQL
+           SELECT ROUND(:d_final,2)
+           INTO :d_final
+           FROM DUAL;
+
+         if(SQLCODE != 0)
+         {
+           errlog(c_ServiceName,"S31040",SQLMSG,DEF_USR, DEF_SSSN, c_errmsg);
+           fn_close_bat(c_ServiceName);
+           exit(-1);
+         }
+
+         if(tpbegin (BAT_TRAN_TIMEOUT_4H, 0 ) == -1)
+         {
+           errlog(c_ServiceName,"S31045",TPMSG,DEF_USR, DEF_SSSN, c_errmsg);
+           fn_close_bat(c_ServiceName);
+           exit(-1);
+         }
+
+         EXEC SQL
+           UPDATE DEMO_RET_MSTR
+           SET    DEMO_MSTR_FINAL_RET = :d_final
+           WHERE  MBM_DEMO_BSKT_ID = :l_prev_bskt_id;
+
+         if(SQLCODE != 0)
+         {
+           tpabort(0);
+           errlog(c_ServiceName,"S31050",SQLMSG,DEF_USR, DEF_SSSN, c_errmsg);
+           fn_close_bat(c_ServiceName);
+           exit(-1);
+         }
+
+         if(tpcommit(0) == -1)
+         {
+           tpabort(0);
+           errlog(c_ServiceName,"S31055",TPMSG,DEF_USR, DEF_SSSN, c_errmsg);
+           fn_close_bat(c_ServiceName);
+           exit(-1);
+         }
+
+         if(DEBUG_MSG_LVL_3)
+         {
+           userlog("Final Return Updated Successfully.....");
+         }
+         break;
+       }
+       else
+       {
+         errlog(c_ServiceName,"S31060",SQLMSG,DEF_USR, DEF_SSSN, c_errmsg);
+         fn_close_bat(c_ServiceName);
+         exit(-1);
+       }
+     }
+
+     EXEC SQL
+       UPDATE DEMO_RET_TMP
+       SET    DEMO_RET_TMP_PROCESS_FLG = 'Y'
+       WHERE  ROWID =:v_rowid;
+
+     if(SQLCODE != 0)
+     {
+       tpabort(0);
+       errlog(c_ServiceName,"S31070",SQLMSG,DEF_USR, DEF_SSSN, c_errmsg);
+       fn_close_bat(c_ServiceName);
+       exit(-1);
+     }
+
+     if(DEBUG_MSG_LVL_3)
+     {
+       userlog("Row Id is %s",v_rowid.arr);
+       userlog("Final return so far is %lf",d_final);
+     }
+
+     fst_time++;
+
+     if (fst_time == 1)
+     {
+         l_prev_bskt_id = sql_demo_ret_tmp_bskt_id;
+     }
+
+     if (l_prev_bskt_id != sql_demo_ret_tmp_bskt_id)
+     {
+       d_final = (d_final_num/d_final_den);
+
+       EXEC SQL
+         UPDATE DEMO_RET_MSTR
+         SET    DEMO_MSTR_FINAL_RET = :d_final
+         WHERE  MBM_DEMO_BSKT_ID = :l_prev_bskt_id;
+
+       if(SQLCODE != 0)
+       {
+         tpabort(0);
+         errlog(c_ServiceName,"S31105",SQLMSG,DEF_USR, DEF_SSSN, c_errmsg);
+         fn_close_bat(c_ServiceName);
+         exit(-1);
+       }
+
+       l_prev_bskt_id = sql_demo_ret_tmp_bskt_id;
+       d_final = 0;
+       d_final_num = 0;
+       d_final_den = 0;
+     }
+
+     d_final_num = d_final_num + (sql_demo_ret_tmp_weight * sql_demo_ret_tmp_return);
+     d_final_den = d_final_den + sql_demo_ret_tmp_weight;
+
+     i++;
+     if(DEBUG_MSG_LVL_3)
+     {
+       userlog("Count of Row -|%d|",i);
+     }
+   }  /* End of While*/
+
+  /** End **/
+
+  fn_close_bat(c_ServiceName);
+  exit(0);
+}
+
+void fn_close_bat(char *c_srvc_nm)
+{
+  fn_rgstr_bat('U', c_srvc_nm, "NA", "BO");
+  tpclose();
+  tpterm();
+}

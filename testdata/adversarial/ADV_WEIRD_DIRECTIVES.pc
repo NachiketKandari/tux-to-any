@@ -1,0 +1,19 @@
+/* ADV_WEIRD_DIRECTIVES — bogus includes/defines and an unknown EXEC SQL
+ * INCLUDE target: scanner must survive and record, not crash. */
+#include <totally_made_up_header.h>
+#include <another_fake.h>
+#define FAKE_MACRO(x) ((x) * 2 + "string in macro")
+#define UNBALANCED_PAREN( (x
+
+EXEC SQL INCLUDE "table/does_not_exist.h" ;
+
+void SVC_ADV_WEIRD(TPSVCINFO* rqst)
+{
+    EXEC SQL
+    SELECT MIN_ACC_ID
+    INTO   :sql_min_acc
+    FROM   MIN_ACCOUNTS
+    WHERE  MIN_ACTIVE = 'A';
+
+    tpreturn(TPSUCCESS,0L,0L,0L,0);
+}

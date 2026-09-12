@@ -1,0 +1,43 @@
+/* ADV_DUP_SQL_CASE — same SQL across branches differing only in case and
+ * whitespace: dedup is exact (byte-identical SQL links; these are two
+ * distinct units). Case-normalizing dedup would be a deliberate rubric
+ * change, not silent behavior. */
+#include <atmi.h>
+#include <fml32.h>
+#include <sqlca.h>
+
+char c_ServiceName[33];
+
+void SVC_ADV_SQLCASE(TPSVCINFO* rqst)
+{
+    FBFR32 *ptr_fml_Ibuffer;
+    FBFR32 *ptr_fml_Obuffer;
+    char c_flag;
+    EXEC SQL BEGIN DECLARE SECTION;
+        varchar sql_min_acc[12];
+    EXEC SQL END DECLARE SECTION;
+
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data;
+    ptr_fml_Obuffer = (FBFR32*)NULL;
+    strcpy(c_ServiceName,rqst->name);
+    Fget32(ptr_fml_Ibuffer,FML_MODE_FLG,0,(char*)&c_flag,0);
+
+    if(c_flag == 'A')
+    {
+        EXEC SQL
+        SELECT MIN_ACC_ID
+        INTO   :sql_min_acc
+        FROM   MIN_ACCOUNTS
+        WHERE  MIN_ACTIVE = 'A';
+    }
+    else
+    {
+        exec sql
+        select   MIN_ACC_ID
+        into     :sql_min_acc
+        from     min_accounts
+        where    MIN_ACTIVE = 'A' ;
+    }
+
+    tpreturn(TPSUCCESS,0L,0L,0L,0);
+}

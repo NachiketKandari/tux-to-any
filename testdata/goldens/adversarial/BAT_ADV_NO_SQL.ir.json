@@ -1,0 +1,10 @@
+{
+  "path": "testdata/adversarial/BAT_ADV_NO_SQL.pc",
+  "functions": [
+    "main"
+  ],
+  "branch_count": 0,
+  "branching_factor": 0,
+  "queries": null,
+  "host_vars": []
+}

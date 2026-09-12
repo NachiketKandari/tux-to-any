@@ -1,0 +1,982 @@
+/*******************************************************************************
+ * Name          : SVC_DEMO_LIST
+ *
+ * Version       : 1.0
+ *
+ * Author        : tuxgo demo corpus
+ *
+ * Tables Accessed :
+ *                 1. DEMO_COMPANY
+ *                 2. DEMO_SCHEME
+ *                 3. DEMO_PRICE
+ *
+ * Input Parameters :
+ *                 1. User Id.
+ *                 2. Session Id.
+ *
+ * Output Parameters :
+ *                 1. Company Code
+ *                 2. Company Name
+ *                 3. Scheme Code
+ *                 4. Scheme Name
+ *                 5. Price Date
+ *                 6. Price Value
+ *
+ * Description   :
+ *                 Synthetic demo service: returns the company, scheme,
+ *                 price and price date for each scheme.
+ *
+ * Log :
+ * 1.0   18/01/2001   New service
+ * 1.1   29/08/2001   demo: company wise display of price
+ * 1.2   09/08/2002   demo: disabled scheme is not retrieved
+ * 1.3   23/12/2003   demo: non-resident eligibility display
+ * 1.4   27/09/2006   demo: session check
+ * 1.5   13/12/2007   demo: buffer sizing helper
+ * 1.6   15/03/2010   demo: price history in list option
+ *                    (demo CR-100) by demo author
+ * 1.7   26/06/2019   demo: insured branch (demo CR-200)
+ *                    by demo author
+ * 1.8   23/10/2019   demo: disabling demo plans for customers
+ *                    not enabled by demo author
+ * 1.9   19/11/2019   demo: account eligibility refinement
+ * 2.0   08-Jan-2020  demo: featured branch
+ * 2.1   11-Sep-2020  demo: subscription based eligibility
+ * 2.2   14-Feb-2022  demo: eligibility helper library
+ * Reviewed By : demo reviewer
+ *******************************************************************************/
+
+/* Standard include files */
+#include <atmi.h>
+#include <userlog.h>
+#include <fml32.h>
+#include <string.h>
+#include <sqlca.h>
+#include <fn_read_debug_lvl.h> /*Ver 1.5 for demo*/
+
+/* User defined header files */
+#include <demo_fml_mf.h>
+#include <demo_fml_def.h>
+#include <demo_eba.h>
+#include <fn_demo_lib.h> /* Ver 2.2 */
+
+/* Global variables */
+char c_ServiceName[33] ;
+
+/* Program specific Macros */
+#define DEMO_OUT_FML 6
+#define BUF_LEN 6144
+#define REC_LENGTH 300
+
+void SVC_DEMO_LIST(TPSVCINFO* rqst)
+{
+    /* Local variables */
+    int i;                  /* Loop counter */
+    int i_err_op[DEMO_OUT_FML+1] ; /* Error code array for o/p FMLs */
+    char c_user_id[9] ;
+    long li_session_id ;
+    long li_demo_comp;
+    char c_flag;            /* Added for Ver 1.6 */
+    int cnt_demo;            /* ver 1.8 */
+    char c_demo_enable_flg;  /* ver 1.8 */
+    varchar ls_demo_acc[12]; /* ver 1.8 */
+    int i_cnt_demos;         /*Ver 2.1*/
+    char c_demo_active_flg = 'N' ; /* Ver 2.2 */
+    /*****Ver 1.5 commented****
+    long l_sizeof=0; ver 1.5
+    int i_out=0; Ver 1.5
+    ****Ver 1.5 comment ends****/
+    varchar str_desc[100]; /*2.0*/
+    /* Added for Ver 1.6 */
+    EXEC SQL BEGIN DECLARE SECTION;
+        varchar c_from_date[12];
+        varchar c_to_date[12];
+    EXEC SQL END DECLARE SECTION;
+
+    i_cnt_demos = 0;          /*2.1*/
+
+    /* Include all the header files for variables corresponding to table fields */
+    EXEC SQL include "table/demo_price.h" ;
+    EXEC SQL include "table/demo_company.h" ;
+    EXEC SQL include "table/demo_scheme.h" ;
+
+    /* Tuxedo specific variables */
+    FBFR32 *ptr_fml_Ibuffer ;  /* Input Buffer */
+    FBFR32 *ptr_fml_Obuffer ;  /* Output Buffer */
+    char c_errmsg[256] ;
+    long l_space_avl;
+    int i_error;           /*1.4*/
+    long l_space_rqd;
+    long l_bufferlength;
+    FBFR32 *ptr_fml_temp_buffer;
+
+    /* Initializations */
+    l_space_rqd = Fneeded32(1,REC_LENGTH);
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data ;
+    ptr_fml_Obuffer = (FBFR32*)NULL ;
+    strcpy(c_ServiceName,rqst->name) ;
+    INITDBGLVL(c_ServiceName); /*Ver 1.5 for demo*/
+
+    /* Retrive User Id and Session id */
+    if(Fget32(ptr_fml_Ibuffer,FML_USER_ID,0,c_user_id,0) == -1)
+    {
+        errlog(c_ServiceName,"S31005",FMLMSG,DEF_USR,DEF_SSSN,c_errmsg) ;
+        Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+        tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+    }
+    if(DEBUG_MSG_LVL_3)
+    {
+        userlog("User id :%s ",c_user_id) ;
+    }
+
+    if(Fget32(ptr_fml_Ibuffer,FML_SESSION_ID,0,(char*)&li_session_id,0) == -1)
+    {
+        errlog(c_ServiceName,"S31010",FMLMSG,c_user_id,DEF_SSSN,c_errmsg) ;
+        Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+        tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+    }
+    if(DEBUG_MSG_LVL_3)
+    {
+        userlog("Session id :%d ",li_session_id) ;
+    }
+
+    /***********1.4 added session check**************/
+
+    if(li_session_id != 0)
+    {
+        i_error = chk_session(c_ServiceName,(char *)c_user_id,
+                           li_session_id,(char *)c_errmsg);
+        if(i_error == -1)
+        {
+            Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG,c_errmsg,0);
+            tpreturn(TPFAIL, 0, (char *)ptr_fml_Ibuffer, 0L, 0);
+        }
+    }
+
+    userlog("Passed Chk Session Check");
+
+    /***********1.4 session check ends here *********/
+
+    /*** Added for Ver 1.6 - START ***/
+    c_flag='\0';
+    if(Fget32(ptr_fml_Ibuffer,FML_MODE_FLG,0,(char*)&c_flag,0) == -1)
+    {
+        if(Ferror32 == FNOTPRES)
+        {
+            if(DEBUG_MSG_LVL_3)
+            {
+                userlog("Service is called to display Scheme details.");
+            }
+        }
+        else
+        {
+            errlog(c_ServiceName, "S31015", SQLMSG, (char *)c_user_id, li_session_id, c_errmsg);
+            Fadd32( ptr_fml_Ibuffer,FML_ERR_MSG, c_errmsg, 0 );
+            tpreturn(TPFAIL,0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+        }
+    }
+    userlog("c_flag is : [%c]",c_flag);
+
+    if(c_flag == 'H')        /* To display NAV history */
+    {
+        userlog("Service is called for history : [%c]",c_flag);
+        if(Fget32(ptr_fml_Ibuffer,FML_COMP_CD,0,(char*)&sql_demo_comp_cd,0) == -1)
+        {
+            errlog(c_ServiceName,"S31020",FMLMSG,c_user_id,DEF_SSSN,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+
+        if(Fget32(ptr_fml_Ibuffer,FML_SCHEME_CD,0,(char*)sql_demo_scheme_cd.arr,0) == -1)
+        {
+            errlog(c_ServiceName,"S31025",FMLMSG,c_user_id,DEF_SSSN,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+        SETLEN(sql_demo_scheme_cd);
+
+        if(DEBUG_MSG_LVL_3)
+        {
+            userlog("Company code is :%d:",sql_demo_comp_cd);
+            userlog("Scheme code is :%s:",sql_demo_scheme_cd.arr);
+        }
+        /* Allocate memory for output buffer */
+        if((ptr_fml_Obuffer=(FBFR32*)tpalloc("FML32",NULL,BUF_LEN*3))==NULL)
+        {
+            errlog(c_ServiceName,"S31030",TPMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+
+        MEMSET(c_from_date);
+        MEMSET(c_to_date);
+        EXEC SQL select date('01-'||to_char(sysdate-90,'MM')||'-'||to_char(sysdate-90,'YYYY'),'dd-mm-yyyy'),sysdate
+                 into :c_from_date,:c_to_date
+                 from dual;
+        if(SQLCODE != 0)
+        {
+            errlog(c_ServiceName,"S31035",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpfree((char *)ptr_fml_Obuffer) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+        SETLEN(c_from_date);
+        SETLEN(c_to_date);
+
+        if(DEBUG_MSG_LVL_3)
+        {
+            userlog("From date is : [%s]",c_from_date.arr);
+            userlog("To date is : [%s]",c_to_date.arr);
+        }
+
+        EXEC SQL
+        DECLARE cur_demo_hist CURSOR FOR
+        SELECT DEMO_HIST_COMP_CD,
+               DEMO_CO_NAME,
+               DEMO_HIST_SCHEME_CD,
+               DEMO_SCHEME_DESC,
+               DEMO_HIST_PRICE,
+               to_char(DEMO_HIST_DATE,'dd-Mon-yyyy')
+        FROM   DEMO_COMPANY,
+               DEMO_SCHEME,
+               DEMO_PRICE_HIST
+        WHERE  DEMO_CO_ID         = DEMO_HIST_COMP_CD
+        AND    DEMO_SCHEME_CO_ID    = DEMO_HIST_COMP_CD
+        AND    DEMO_SCHEME_ID         = DEMO_HIST_SCHEME_CD
+        AND    DEMO_HIST_COMP_CD = :sql_demo_comp_cd
+        AND    DEMO_HIST_SCHEME_CD  = :sql_demo_scheme_cd
+        AND    trunc(DEMO_HIST_DATE) between :c_from_date and :c_to_date
+        ORDER BY DEMO_HIST_DATE desc;
+
+        /* Open the cursor */
+        EXEC SQL OPEN cur_demo_hist ;
+
+        if(SQLCODE)
+        {
+            errlog(c_ServiceName,"S31040",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpfree((char *)ptr_fml_Obuffer) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+
+        /* Fetch the cursor, store data in variables and populate out buffer */
+        while(1)
+        {
+            EXEC SQL FETCH cur_demo_hist
+                     into :sql_demo_comp_cd,
+                          :sql_demo_co_name,
+                          :sql_demo_scheme_cd,
+                          :sql_demo_scheme_desc,
+                          :sql_demo_price,
+                          :sql_demo_date;
+
+            if(SQLCODE == NO_DATA_FOUND)
+                break ;
+
+            if(SQLCODE)
+            {
+                errlog(c_ServiceName,"S31045",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+                EXEC SQL CLOSE cur_demo_hist;
+                Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+                tpfree((char *)ptr_fml_Obuffer) ;
+                tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+                break ;
+            }
+
+            SETNULL(sql_demo_scheme_cd);
+            SETNULL(sql_demo_date);
+            SETNULL(sql_demo_co_name);
+            SETNULL(sql_demo_scheme_desc);
+
+            if(DEBUG_MSG_LVL_3)
+            {
+                userlog("Details from DEMO_PRICE_HIST");
+                userlog("Company code is <%d>",sql_demo_comp_cd);
+                userlog("Company name is <%s>",sql_demo_co_name.arr);
+                userlog("Scheme code is <%s>",sql_demo_scheme_cd.arr);
+                userlog("Scheme name is <%s>",sql_demo_scheme_desc.arr);
+                userlog("NAV value is <%lf>",sql_demo_price);
+                userlog("NAV date is <%s>",sql_demo_date.arr);
+            }
+            l_space_avl = Funused32(ptr_fml_Obuffer);
+
+            if (l_space_avl < l_space_rqd)
+            {
+                /* Reallocate a output buffer */
+                l_bufferlength = Fsizeof32(ptr_fml_Obuffer) + MIN_FML_BUF_LEN * 3;
+                ptr_fml_temp_buffer=(FBFR32 *)tprealloc((char *)ptr_fml_Obuffer,l_bufferlength);
+                if (ptr_fml_temp_buffer == NULL)
+                {
+                    errlog(c_ServiceName,"S31050",FMLMSG,c_user_id,li_session_id,c_errmsg) ;
+                    EXEC SQL CLOSE cur_demo_hist;
+                    Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG, c_errmsg, 0 ) ;
+                    tpfree((char *)ptr_fml_Obuffer) ;
+                    tpreturn(TPFAIL,0L, (char *)ptr_fml_Ibuffer, 0L, 0) ;
+                }
+                else
+                {
+                    ptr_fml_Obuffer = ptr_fml_temp_buffer;
+                }
+            }
+
+            i_err_op[0] = Fadd32(ptr_fml_Obuffer,FML_COMP_CD,(char*)&sql_demo_comp_cd,0);
+            i_err_op[1] = Fadd32(ptr_fml_Obuffer,FML_COMP_NAME,(char*)sql_demo_co_name.arr,0);
+            i_err_op[2] = Fadd32(ptr_fml_Obuffer,FML_SCHEME_CD,(char*)sql_demo_scheme_cd.arr,0);
+            i_err_op[3] = Fadd32(ptr_fml_Obuffer,FML_SCHEME_DESC,(char*)sql_demo_scheme_desc.arr,0);
+            i_err_op[4] = Fadd32(ptr_fml_Obuffer,FML_PRICE_DATE,(char*)sql_demo_date.arr,0);
+            i_err_op[5] = Fadd32(ptr_fml_Obuffer,FML_PRICE,(char*)&sql_demo_price,0);
+
+            for(i=0;i<DEMO_OUT_FML;i++)
+            {
+                if(i_err_op[i]==-1)
+                {
+                    userlog("the value of i is %d",i);
+                    EXEC SQL CLOSE cur_demo_hist;
+                    errlog(c_ServiceName,"S31055",FMLMSG,c_user_id,li_session_id,c_errmsg) ;
+                    Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+                    tpfree((char *)ptr_fml_Obuffer) ;
+                    tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+                }
+            }
+        }
+
+        EXEC SQL CLOSE cur_demo_hist ;
+        if(SQLCODE != 0)
+        {
+            errlog(c_ServiceName,"S31060",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpfree((char *)ptr_fml_Obuffer) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+    }
+    /********2.0 added*********/
+    else if (c_flag == 'F')
+    {
+        if(Fget32(ptr_fml_Ibuffer,FML_COMP_CD,0,(char*)&sql_demo_comp_cd,0) == -1)
+        {
+            if(Ferror32 == FNOTPRES)
+            {
+                sql_demo_comp_cd=0;
+            }
+            else
+            {
+                errlog(c_ServiceName, "S31065", SQLMSG, (char *)c_user_id, li_session_id, c_errmsg);
+                Fadd32( ptr_fml_Ibuffer,FML_ERR_MSG, c_errmsg, 0 );
+                tpreturn(TPFAIL,0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+            }
+        }
+
+        c_demo_enable_flg = ' ';
+        MEMSET(ls_demo_acc);
+
+        if(Fget32(ptr_fml_Ibuffer,FML_ACCOUNT,0,(char *)ls_demo_acc.arr,0) == -1)
+        {
+            errlog(c_ServiceName, "S31070",FMLMSG,c_user_id,li_session_id,c_errmsg);
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0);
+            tpreturn(TPFAIL,0L,(char*)ptr_fml_Ibuffer,0L,0);
+        }
+
+        SETLEN(ls_demo_acc);
+        if(DEBUG_MSG_LVL_3)
+        {
+            userlog("match account in featured branch is %s",(char *)ls_demo_acc.arr);
+        }
+
+        cnt_demo=0;
+
+        EXEC SQL
+            SELECT COUNT(*)
+            INTO   :cnt_demo
+            FROM   DEMO_ACCOUNT_MAP
+            WHERE  DEMO_MATCH_ACC   = :ls_demo_acc
+            AND    DEMO_END_DT is null;
+
+        if (SQLCODE != 0)
+        {
+            errlog(c_ServiceName,"S31075",SQLMSG,c_user_id,li_session_id,c_errmsg ) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+
+        /*Added in Ver 2.1*/
+        /* ver 2.2 **
+        EXEC SQL
+            SELECT COUNT(*)
+            INTO   :i_cnt_demos
+            FROM   DEMO_SUBSCRIPTION
+            WHERE  DEMO_MATCH_ACC = :ls_demo_acc
+            AND    DEMO_STATUS = 'A';
+
+        if(SQLCODE != 0)
+        {
+            errlog(c_ServiceName,"S31080",SQLMSG,c_user_id,li_session_id,c_errmsg ) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        } **/
+
+        /* Ver 2.2 Start */
+
+        if( fn_is_demo_active(c_ServiceName, ls_demo_acc.arr, &c_demo_active_flg, c_errmsg) == -1)
+        {
+            userlog("Error in selecting demo status");
+            errlog(c_ServiceName,"S31126",LIBMSG,DEF_USR,DEF_SSSN,c_errmsg);
+            Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_errmsg, 0);
+            tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0, 0);
+        }
+
+        i_cnt_demos = 0;
+
+        if(c_demo_active_flg == 'Y')
+        {
+            i_cnt_demos = 1 ;
+        }
+
+        /* Ver 2.2 End */
+
+        if(DEBUG_MSG_LVL_3)
+            userlog("cnt_demo - %d|, i_cnt_demos - %d|", cnt_demo,i_cnt_demos);
+        /*Ver 2.1 ends here*/
+
+        if (cnt_demo > 0 || i_cnt_demos > 0)    /*i_cnt_demos added in Ver 2.1*/
+        {
+            c_demo_enable_flg='Y';
+        }
+        else
+        {
+            c_demo_enable_flg='N';
+        }
+
+        /* Allocate memory for output buffer */
+        if((ptr_fml_Obuffer=(FBFR32*)tpalloc("FML32",NULL,BUF_LEN*3))==NULL)
+        {
+            errlog(c_ServiceName,"S31085",TPMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+
+        EXEC SQL
+        DECLARE cur_demo_featured CURSOR FOR
+        SELECT DEMO_PRICE_COMP_CD,
+               DEMO_PRICE_SCHEME_CD,
+               DEMO_SCHEME_DESC,
+               NVL(DEMO_PRICE_VAL,0),
+               TO_CHAR(DEMO_PRICE_DATE,'dd-mm-yyyy'),
+               NVL(DEMO_RATING,0),
+               DECODE(NVL(DEMO_KIND,''),'A','ALPHA','B','BETA','C','ALPHA/BETA',
+               '-')
+        FROM   DEMO_COMPANY,
+               DEMO_SCHEME,
+               DEMO_PRICE
+        where  DEMO_CO_ID         = DEMO_PRICE_COMP_CD
+        AND    DEMO_SCHEME_CO_ID    = DEMO_CO_ID
+        AND    DEMO_SCHEME_ID         = DEMO_PRICE_SCHEME_CD
+        AND    DEMO_PRICE_COMP_CD    = decode(:sql_demo_comp_cd,0,DEMO_PRICE_COMP_CD,:sql_demo_comp_cd)
+        AND    NVL(DEMO_FEATURED_FLG,'N') = 'Y'
+        AND DEMO_DIRECT_FLG= decode(:c_demo_enable_flg,'Y', DEMO_DIRECT_FLG,'N')
+        ORDER BY NVL(DEMO_RATING,0) DESC ;
+
+        EXEC SQL OPEN cur_demo_featured;
+
+        if(SQLCODE != 0)
+        {
+            errlog(c_ServiceName,"S31090",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpfree((char *)ptr_fml_Obuffer) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+        while(1)
+        {
+            MEMSET(str_desc);
+            MEMSET(sql_demo_date);
+            MEMSET(sql_demo_scheme_cd);
+            MEMSET(sql_demo_scheme_desc);
+
+            EXEC SQL FETCH cur_demo_featured
+            into :sql_demo_comp_cd,
+                 :sql_demo_scheme_cd,
+                 :sql_demo_scheme_desc,
+                 :sql_demo_price,
+                 :sql_demo_date,
+                 :sql_demo_rating,
+                 :str_desc;
+
+            if(SQLCODE == NO_DATA_FOUND)
+            {
+                break ;
+            }
+
+            if(SQLCODE != 0)
+            {
+                errlog(c_ServiceName,"S31095",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+                EXEC SQL CLOSE cur_demo_featured;
+                Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+                tpfree((char *)ptr_fml_Obuffer) ;
+                tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+            }
+            SETNULL(sql_demo_scheme_cd);
+            SETNULL(sql_demo_date);
+            SETNULL(sql_demo_scheme_desc);
+            SETNULL(str_desc);
+
+            if(DEBUG_MSG_LVL_3)
+            {
+                userlog("Details from DEMO_PRICE");
+                userlog("Company code is <%d>, Scheme code is <%s>, Scheme name is <%s>, NAV value is <%lf>, NAV date is <%s>, Rating is <%d>",sql_demo_comp_cd,sql_demo_scheme_cd.arr,sql_demo_scheme_desc.arr,sql_demo_price,sql_demo_date.arr,sql_demo_rating);
+            }
+
+            l_space_avl = Funused32(ptr_fml_Obuffer);
+
+            if (l_space_avl < l_space_rqd)
+            {
+                /* Reallocate a output buffer */
+                l_bufferlength = Fsizeof32(ptr_fml_Obuffer) + MIN_FML_BUF_LEN * 3;
+                ptr_fml_temp_buffer=(FBFR32 *)tprealloc((char *)ptr_fml_Obuffer,l_bufferlength);
+                if (ptr_fml_temp_buffer == NULL)
+                {
+                    errlog(c_ServiceName,"S31100",FMLMSG,c_user_id,li_session_id,c_errmsg) ;
+                    EXEC SQL CLOSE cur_demo_featured;
+                    Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG, c_errmsg, 0 ) ;
+                    tpfree((char *)ptr_fml_Obuffer) ;
+                    tpreturn(TPFAIL,0L, (char *)ptr_fml_Ibuffer, 0L, 0) ;
+                }
+                else
+                {
+                    ptr_fml_Obuffer = ptr_fml_temp_buffer;
+                }
+            }
+
+            i_err_op[0] = Fadd32(ptr_fml_Obuffer,FML_COMP_CD,(char*)&sql_demo_comp_cd,0);
+            i_err_op[1] = Fadd32(ptr_fml_Obuffer,FML_SCHEME_CD,(char*)sql_demo_scheme_cd.arr,0);
+            i_err_op[2] = Fadd32(ptr_fml_Obuffer,FML_SCHEME_DESC,(char*)sql_demo_scheme_desc.arr,0);
+            i_err_op[3] = Fadd32(ptr_fml_Obuffer,FML_PRICE_DATE,(char*)sql_demo_date.arr,0);
+            i_err_op[4] = Fadd32(ptr_fml_Obuffer,FML_PRICE,(char*)&sql_demo_price,0);
+            i_err_op[5] = Fadd32(ptr_fml_Obuffer,FML_RATING,(char*)&sql_demo_rating,0);
+            i_err_op[6] = Fadd32(ptr_fml_Obuffer,FML_LABEL,(char*)str_desc.arr,0);
+
+            for(i=0;i<DEMO_OUT_FML;i++)
+            {
+                if(i_err_op[i]==-1)
+                {
+                    userlog("the value of i is %d",i);
+                    EXEC SQL CLOSE cur_demo_featured;
+                    errlog(c_ServiceName,"S31105",FMLMSG,c_user_id,li_session_id,c_errmsg) ;
+                    Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+                    tpfree((char *)ptr_fml_Obuffer) ;
+                    tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+                }
+            }
+        }
+
+        EXEC SQL CLOSE cur_demo_featured ;
+        if(SQLCODE != 0)
+        {
+            errlog(c_ServiceName,"S31110",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpfree((char *)ptr_fml_Obuffer) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+    }
+    /*2.0 ends here ******/
+
+    /************* ver 1.7 *************/
+    else if (c_flag == 'I')   /* To display data for SIP Insurance flag */
+    {
+
+        /***********1.9 changed************/
+        if(Fget32(ptr_fml_Ibuffer,FML_COMP_CD,0,(char*)&sql_demo_comp_cd,0) == -1)
+        {
+            if(Ferror32 == FNOTPRES)
+            {
+                sql_demo_comp_cd=0;
+            }
+            else
+            {
+                errlog(c_ServiceName, "S31115", SQLMSG, (char *)c_user_id, li_session_id, c_errmsg);
+                Fadd32( ptr_fml_Ibuffer,FML_ERR_MSG, c_errmsg, 0 );
+                tpreturn(TPFAIL,0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+            }
+        }
+        /***********1.9 changes ends here ***********/
+
+        /*********** ver 1.8 ********/
+        c_demo_enable_flg = ' ';
+        MEMSET(ls_demo_acc);
+
+        if(Fget32(ptr_fml_Ibuffer,FML_ACCOUNT,0,(char *)ls_demo_acc.arr,0) == -1)
+        {
+            errlog(c_ServiceName,"S31120",FMLMSG,c_user_id,li_session_id,c_errmsg);
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0);
+            tpreturn(TPFAIL,0L,(char*)ptr_fml_Ibuffer,0L,0);
+        }
+
+        SETLEN(ls_demo_acc);
+
+        if(DEBUG_MSG_LVL_3)
+        {
+            userlog("match account in insured branch is %s",(char *)ls_demo_acc.arr);
+        }
+
+        cnt_demo=0;
+
+        EXEC SQL
+            SELECT COUNT(*)
+            INTO   :cnt_demo
+            FROM   DEMO_ACCOUNT_MAP
+            WHERE  DEMO_MATCH_ACC   = :ls_demo_acc
+            AND    DEMO_END_DT is null;
+
+        if (SQLCODE != 0)
+        {
+            errlog(c_ServiceName,"S31125",SQLMSG,c_user_id,li_session_id,c_errmsg ) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+
+        /*Added in Ver 2.1*/
+        /* Ver 2.2 *
+        EXEC SQL
+            SELECT COUNT(*)
+            INTO   :i_cnt_demos
+            FROM   DEMO_SUBSCRIPTION
+            WHERE  DEMO_MATCH_ACC = :ls_demo_acc
+            AND    DEMO_STATUS = 'A';
+
+        if(SQLCODE != 0)
+        {
+            errlog(c_ServiceName,"S31130",SQLMSG,c_user_id,li_session_id,c_errmsg ) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+        * */
+
+        /* Ver 2.2 Start */
+
+        if( fn_is_demo_active(c_ServiceName, ls_demo_acc.arr, &c_demo_active_flg, c_errmsg) == -1)
+        {
+            userlog("Error in selecting demo status");
+            errlog(c_ServiceName,"S31127",LIBMSG,DEF_USR,DEF_SSSN,c_errmsg);
+            Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_errmsg, 0);
+            tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0, 0);
+        }
+
+        i_cnt_demos = 0;
+
+        if(c_demo_active_flg == 'Y')
+        {
+            i_cnt_demos = 1 ;
+        }
+
+        /* Ver 2.2 End */
+
+        if(DEBUG_MSG_LVL_3)
+            userlog("cnt_demo - %d|, i_cnt_demos - %d|", cnt_demo,i_cnt_demos);
+        /*Ver 2.1 ends here*/
+
+        if (cnt_demo > 0 || i_cnt_demos > 0)    /*i_cnt_demos added in Ver 2.1*/
+        {
+            c_demo_enable_flg='Y';
+        }
+        else
+        {
+            c_demo_enable_flg='N';
+        }
+
+        /********* ver 1.8 end *********/
+
+        /* Allocate memory for output buffer */
+        if((ptr_fml_Obuffer=(FBFR32*)tpalloc("FML32",NULL,BUF_LEN*3))==NULL)
+        {
+            errlog(c_ServiceName,"S31135",TPMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+
+        EXEC SQL
+        DECLARE cur_demo_insured CURSOR FOR
+        SELECT DEMO_PRICE_COMP_CD,
+               DEMO_PRICE_SCHEME_CD,
+               DEMO_SCHEME_DESC,
+               NVL(DEMO_PRICE_VAL,0),
+               TO_CHAR(DEMO_PRICE_DATE,'dd-mm-yyyy'),
+               NVL(DEMO_RATING,0)
+        FROM   DEMO_COMPANY,
+               DEMO_SCHEME,
+               DEMO_PRICE
+        where  DEMO_CO_ID         = DEMO_PRICE_COMP_CD
+        AND    DEMO_SCHEME_CO_ID    = DEMO_CO_ID
+        AND    DEMO_SCHEME_ID         = DEMO_PRICE_SCHEME_CD
+        AND    DEMO_PRICE_COMP_CD    = decode(:sql_demo_comp_cd,0,DEMO_PRICE_COMP_CD,:sql_demo_comp_cd) /*1.9*/
+        AND    DEMO_INSURED_FLG = 'Y'
+        AND DEMO_DIRECT_FLG= decode(:c_demo_enable_flg,'Y', DEMO_DIRECT_FLG,'N')/*Ver 1.8 */
+        /*ORDER BY DEMO_PRICE_DATE DESC;  *//*ver 1.9 COMMENTED*/
+        ORDER BY NVL(DEMO_RATING,0) DESC ; /*1.9*/
+
+        EXEC SQL OPEN cur_demo_insured;
+
+        if(SQLCODE != 0)
+        {
+            errlog(c_ServiceName,"S31140",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpfree((char *)ptr_fml_Obuffer) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+
+        while(1)
+        {
+            EXEC SQL FETCH cur_demo_insured
+            into :sql_demo_comp_cd,
+                 :sql_demo_scheme_cd,
+                 :sql_demo_scheme_desc,
+                 :sql_demo_price,
+                 :sql_demo_date,
+                 :sql_demo_rating;
+
+            if(SQLCODE == NO_DATA_FOUND)
+            {
+                break ;
+            }
+
+            if(SQLCODE != 0)
+            {
+                errlog(c_ServiceName,"S31145",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+                EXEC SQL CLOSE cur_demo_insured;
+                Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+                tpfree((char *)ptr_fml_Obuffer) ;
+                tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+            }
+
+            SETNULL(sql_demo_scheme_cd);
+            SETNULL(sql_demo_date);
+            SETNULL(sql_demo_scheme_desc);
+
+            if(DEBUG_MSG_LVL_3)
+            {
+                userlog("Details from DEMO_PRICE");
+                userlog("Company code is <%d>, Scheme code is <%s>, Scheme name is <%s>, NAV value is <%lf>, NAV date is <%s>, Rating is <%d>",sql_demo_comp_cd,sql_demo_scheme_cd.arr,sql_demo_scheme_desc.arr,sql_demo_price,sql_demo_date.arr,sql_demo_rating);
+            }
+
+            l_space_avl = Funused32(ptr_fml_Obuffer);
+
+            if (l_space_avl < l_space_rqd)
+            {
+                /* Reallocate a output buffer */
+                l_bufferlength = Fsizeof32(ptr_fml_Obuffer) + MIN_FML_BUF_LEN * 3;
+                ptr_fml_temp_buffer=(FBFR32 *)tprealloc((char *)ptr_fml_Obuffer,l_bufferlength);
+                if (ptr_fml_temp_buffer == NULL)
+                {
+                    errlog(c_ServiceName,"S31150",FMLMSG,c_user_id,li_session_id,c_errmsg) ;
+                    EXEC SQL CLOSE cur_demo_insured;
+                    Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG, c_errmsg, 0 ) ;
+                    tpfree((char *)ptr_fml_Obuffer) ;
+                    tpreturn(TPFAIL,0L, (char *)ptr_fml_Ibuffer, 0L, 0) ;
+                }
+                else
+                {
+                    ptr_fml_Obuffer = ptr_fml_temp_buffer;
+                }
+            }
+
+            i_err_op[0] = Fadd32(ptr_fml_Obuffer,FML_COMP_CD,(char*)&sql_demo_comp_cd,0);
+            i_err_op[1] = Fadd32(ptr_fml_Obuffer,FML_SCHEME_CD,(char*)sql_demo_scheme_cd.arr,0);
+            i_err_op[2] = Fadd32(ptr_fml_Obuffer,FML_SCHEME_DESC,(char*)sql_demo_scheme_desc.arr,0);
+            i_err_op[3] = Fadd32(ptr_fml_Obuffer,FML_PRICE_DATE,(char*)sql_demo_date.arr,0);
+            i_err_op[4] = Fadd32(ptr_fml_Obuffer,FML_PRICE,(char*)&sql_demo_price,0);
+            i_err_op[5] = Fadd32(ptr_fml_Obuffer,FML_RATING,(char*)&sql_demo_rating,0);
+
+            for(i=0;i<DEMO_OUT_FML;i++)
+            {
+                if(i_err_op[i]==-1)
+                {
+                    userlog("the value of i is %d",i);
+                    EXEC SQL CLOSE cur_demo_insured;
+                    errlog(c_ServiceName,"S31155",FMLMSG,c_user_id,li_session_id,c_errmsg) ;
+                    Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+                    tpfree((char *)ptr_fml_Obuffer) ;
+                    tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+                }
+            }
+        }
+
+        EXEC SQL CLOSE cur_demo_insured ;
+        if(SQLCODE != 0)
+        {
+            errlog(c_ServiceName,"S31160",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpfree((char *)ptr_fml_Obuffer) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+    }
+    /********************* ver 1.7 end *********************/
+
+    else
+    {
+        /*** Added for Ver 1.6 - END ***/
+
+        /* demo: company-wise price display */
+        if(Fget32(ptr_fml_Ibuffer,FML_COMP_CD,0,(char*)&li_demo_comp) == -1)
+        {
+            errlog(c_ServiceName,"S31165",FMLMSG,c_user_id,DEF_SSSN,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+        if(DEBUG_MSG_LVL_3) {
+            userlog("company code is :%lf",li_demo_comp);
+        }
+        /* demo changes over */
+
+        /* Allocate memory for output buffer */
+        if((ptr_fml_Obuffer=(FBFR32*)tpalloc("FML32",NULL,BUF_LEN*3))==NULL)
+        {
+            errlog(c_ServiceName,"S31170",TPMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+
+        /* Oracle cursor declaration for fetching transactions */
+        EXEC SQL
+        DECLARE cur_demo_list CURSOR FOR
+            SELECT DEMO_PRICE_COMP_CD,
+                   DEMO_PRICE_SCHEME_CD,
+                   DEMO_PRICE_VAL,
+                   to_char(DEMO_PRICE_DATE,'dd-mm-yyyy') ,
+                   DEMO_CO_NAME,
+                   DEMO_SCHEME_DESC
+            FROM   DEMO_COMPANY,
+                   DEMO_SCHEME,
+                   DEMO_PRICE
+            where  DEMO_CO_ID     = DEMO_PRICE_COMP_CD
+            AND    DEMO_SCHEME_CO_ID = DEMO_CO_ID
+            AND    DEMO_SCHEME_ID      = DEMO_PRICE_SCHEME_CD
+            AND    DEMO_CO_ID     = :li_demo_comp /* demo: comp-wise price display */
+            AND   (DEMO_FLG_1      = 'Y' OR
+                   DEMO_FLG_2     = 'Y' OR
+                   DEMO_FLG_3   = 'Y' OR
+                   DEMO_FLG_4     = 'Y' OR
+                   DEMO_FLG_5   = 'Y') ;               /* 1.3 */
+
+        /* Open the cursor */
+        EXEC SQL
+        OPEN cur_demo_list ;
+
+        if(SQLCODE)
+        {
+            errlog(c_ServiceName,"S31175",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpfree((char *)ptr_fml_Obuffer) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+
+        /* Fetch the cursor, store data in variables and populate out buffer */
+        for(;;)
+        {
+            EXEC SQL
+            fetch cur_demo_list
+            into  :sql_demo_comp_cd,
+                  :sql_demo_scheme_cd,
+                  :sql_demo_price,
+                  :sql_demo_date,
+                  :sql_demo_co_name,
+                  :sql_demo_scheme_desc;
+
+            if(SQLCODE==NO_DATA_FOUND)
+                break ;
+
+            if(SQLCODE)
+            {
+                errlog(c_ServiceName,"S31180",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+                Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+                tpfree((char *)ptr_fml_Obuffer) ;
+                tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+                break ;
+            }
+
+            SETNULL(sql_demo_scheme_cd);
+            SETNULL(sql_demo_date);
+            SETNULL(sql_demo_co_name);
+            SETNULL(sql_demo_scheme_desc);
+
+            if(DEBUG_MSG_LVL_3)
+            {
+                userlog("the company code is %d",sql_demo_comp_cd);
+                userlog("the scheme code is %s",sql_demo_scheme_cd.arr);
+                userlog("the nav value is %lf",sql_demo_price);
+                userlog("the nav date is %s",sql_demo_date.arr);
+                userlog("the company name is %s",sql_demo_co_name.arr);
+                userlog("the scheme name is %s",sql_demo_scheme_desc.arr);
+            }
+
+            l_space_avl = Funused32(ptr_fml_Obuffer);
+
+            if (l_space_avl < l_space_rqd)
+            {
+                /* Reallocate a output buffer */
+                l_bufferlength = Fsizeof32(ptr_fml_Obuffer) + MIN_FML_BUF_LEN * 3;
+                ptr_fml_temp_buffer=(FBFR32 *)tprealloc((char *)ptr_fml_Obuffer,l_bufferlength);
+                if (ptr_fml_temp_buffer == NULL)
+                {
+                    errlog(c_ServiceName,"S31185",FMLMSG,c_user_id,li_session_id,c_errmsg) ;
+                    Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG, c_errmsg, 0 );
+                    tpfree((char *)ptr_fml_Obuffer);
+                    tpreturn(TPFAIL,0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+                }
+                else
+                {
+                    ptr_fml_Obuffer = ptr_fml_temp_buffer;
+                }
+
+                /*Finit32(ptr_fml_temp_buffer, Fsizeof32(ptr_fml_temp_buffer));*//*Ver 1.5 commented for demo*//*Ver 1.5 cmnt rmvd*/
+                /**********Ver 1.5 added here for demo**********/
+                l_sizeof = Fsizeof32(ptr_fml_temp_buffer);
+
+                if(fn_long_to_int(l_sizeof,&i_out,c_errmsg) == -1)
+                {
+                    errlog(c_ServiceName, "S31190","Error while calling the function fn_long_to_int--1" ,
+                                                      c_user_id,li_session_id,c_errmsg);
+                    Fadd32( ptr_fml_Ibuffer,FML_ERR_MSG, c_errmsg, 0 );
+                    tpfree((char *)ptr_fml_Obuffer) ;
+                    tpreturn(TPFAIL,0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+                }
+                Finit32(ptr_fml_temp_buffer, i_out);
+                /*********Ver 1.5 ends here ******/
+                /*********Ver 1.5 comment ends here*****/
+            }
+
+            i_err_op[0] = Fadd32(ptr_fml_Obuffer,FML_COMP_CD,(char*)&sql_demo_comp_cd,0);
+            i_err_op[1] = Fadd32(ptr_fml_Obuffer,FML_COMP_NAME,(char*)sql_demo_co_name.arr,0);
+            i_err_op[2] = Fadd32(ptr_fml_Obuffer,FML_SCHEME_CD,(char*)sql_demo_scheme_cd.arr,0);
+            i_err_op[3] = Fadd32(ptr_fml_Obuffer,FML_SCHEME_DESC,(char*)sql_demo_scheme_desc.arr,0);
+            i_err_op[4] = Fadd32(ptr_fml_Obuffer,FML_PRICE_DATE,(char*)sql_demo_date.arr,0);
+            i_err_op[5] = Fadd32(ptr_fml_Obuffer,FML_PRICE,(char*)&sql_demo_price,0);
+
+            for(i=0;i<DEMO_OUT_FML;i++)
+            {
+                if(i_err_op[i]==-1)
+                {
+                    userlog("the value of i is %d",i);
+                    errlog(c_ServiceName,"S31195",FMLMSG,c_user_id,li_session_id,c_errmsg) ;
+                    Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+                    tpfree((char *)ptr_fml_Obuffer) ;
+                    tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+                }
+            }
+        }
+
+        EXEC SQL
+        CLOSE cur_demo_list ;
+
+        if(SQLCODE)
+        {
+            errlog(c_ServiceName,"S31200",SQLMSG,c_user_id,li_session_id,c_errmsg) ;
+            Fadd32(ptr_fml_Ibuffer,FML_ERR_MSG,c_errmsg,0) ;
+            tpfree((char *)ptr_fml_Obuffer) ;
+            tpreturn(TPFAIL,0L,(char *)ptr_fml_Ibuffer,0L,0) ;
+        }
+    }
+    /* Added for Ver 1.6 */
+
+    if(DEBUG_MSG_LVL_3)
+    {
+        userlog("Out of NAV LIST service");
+    }
+    tpreturn(TPSUCCESS,0,(char *)ptr_fml_Obuffer,0L,0) ;
+}
