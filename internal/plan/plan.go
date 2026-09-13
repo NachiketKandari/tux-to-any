@@ -405,22 +405,7 @@ func Build(opts Options) (*Plan, error) {
 		if pinName != "" {
 			name = pinName
 		}
-		if dbNames[name] {
-			var sb strings.Builder
-			for _, r := range id {
-				switch {
-				case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-					sb.WriteRune(r)
-				}
-			}
-			cand := name + sb.String()
-			for dbNames[cand] {
-				cand += "X"
-			}
-			name = cand
-		}
-		dbNames[name] = true
-		return name
+		return uniqueName(name, id, dbNames)
 	}
 
 	add(Unit{
@@ -615,6 +600,47 @@ func methodName(m *Mapping, q *ir.Query) string {
 	default:
 		return "Get" + common.CamelGo(table)
 	}
+}
+
+// uniqueName keeps a db method name unique the way Build does: a colliding
+// name gains its query id (traceable, loader-legal), further collisions
+// grow X suffixes. Pins and fallbacks go through the same rule.
+func uniqueName(name, id string, taken map[string]bool) string {
+	if !taken[name] {
+		taken[name] = true
+		return name
+	}
+	var sb strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			sb.WriteRune(r)
+		}
+	}
+	cand := name + sb.String()
+	for taken[cand] {
+		cand += "X"
+	}
+	taken[cand] = true
+	return cand
+}
+
+// DefaultMethodNames resolves the db method names a query list gets when
+// the mapping pins nothing: the deterministic fallback (cursor/table
+// derived), collisions resolved exactly as Build resolves them. The
+// discover drafts pre-fill their dbMethods block from here, so the names
+// a reviewer sees in the draft are the names conversion produces — the
+// draft and the plan cannot drift.
+func DefaultMethodNames(queries []*ir.Query) map[string]string {
+	taken := map[string]bool{}
+	out := make(map[string]string, len(queries))
+	for _, q := range queries {
+		if q.DuplicateOf != "" {
+			continue // pins key canonical ids only
+		}
+		out[q.ID] = uniqueName(methodName(&Mapping{}, q), q.ID, taken)
+	}
+	return out
 }
 
 // tableName renders a query's first table as an identifier-safe token: the

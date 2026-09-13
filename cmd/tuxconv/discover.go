@@ -16,6 +16,7 @@ import (
 	"tux-to-any/internal/flow"
 	"tux-to-any/internal/ir"
 	"tux-to-any/internal/llm"
+	"tux-to-any/internal/plan"
 	"tux-to-any/internal/telemetry"
 )
 
@@ -325,8 +326,9 @@ func renderDraft(f *ir.File, candidates []flow.Candidate, dirMode bool, aiNames 
 				idx, cond.StartLine, cond.EndLine, fieldsOrDash(gets), fieldsOrDash(adds))
 		}
 	}
-	// dbMethods: AI-proposed pins emit as real (editable) yaml; without
-	// them the commented skeleton lists the query IDs for manual pins.
+	// dbMethods: every unique query's method name pre-filled — the exact
+	// name the plan derives when the mapping leaves it unpinned. AI-proposed
+	// pins override where the AI proposed them; a user edit wins over both.
 	pins := map[string]methodPinSuggestion{}
 	for _, sug := range aiNames {
 		for id, m := range sug.Methods {
@@ -335,37 +337,38 @@ func renderDraft(f *ir.File, candidates []flow.Candidate, dirMode bool, aiNames 
 			}
 		}
 	}
-	if len(pins) > 0 {
-		sb.WriteString("\ndbMethods:                     # ai-suggested — edit freely; params stay\n")
-		sb.WriteString("                               # deterministic (derived from the query binds)\n")
-		ids := make([]string, 0, len(pins))
-		for id := range pins {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			p := pins[id]
-			if p.Row != "" {
-				fmt.Fprintf(&sb, "  %s: {name: %s, row: %s}\n", id, p.Name, p.Row)
-			} else {
-				fmt.Fprintf(&sb, "  %s: {name: %s}\n", id, p.Name)
-			}
-		}
-		sb.WriteString("# `fn_<name>:<qid>` keys pin queries inside an external fn library file.\n")
-		return sb.String()
-	}
-	var qids []string
-	for _, q := range f.Queries {
-		qids = append(qids, q.ID)
-	}
-	if len(qids) > 0 {
-		sb.WriteString("\n# dbMethods:                   # OPTIONAL per-query method pins (uncomment\n")
-		for _, id := range qids {
-			fmt.Fprintf(&sb, "#   %-24s  # name: GetThing / params: [b:string] / row: ThingRow\n", id+":")
-		}
-		sb.WriteString("# `fn_<name>:<qid>` keys pin queries inside an external fn library file.\n")
-	}
+	writeDBMethods(&sb, f, pins)
 	return sb.String()
+}
+
+// writeDBMethods emits the draft's dbMethods block with every unique
+// query's method name pre-filled (plan.DefaultMethodNames — the draft and
+// the plan's fallback cannot drift). AI-proposed pins override where the
+// AI proposed them; params/row stay derived from the query binds.
+func writeDBMethods(sb *strings.Builder, f *ir.File, aiPins map[string]methodPinSuggestion) {
+	names := plan.DefaultMethodNames(f.Queries)
+	if len(names) == 0 {
+		return
+	}
+	sb.WriteString("\ndbMethods:                     # deterministic — edit freely; params stay\n")
+	sb.WriteString("                               # derived from the query binds\n")
+	ids := make([]string, 0, len(names))
+	for id := range names {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		p, ai := aiPins[id]
+		switch {
+		case ai && p.Name != "" && p.Row != "":
+			fmt.Fprintf(sb, "  %s: {name: %s, row: %s}   # ai-suggested — edit freely\n", id, p.Name, p.Row)
+		case ai && p.Name != "":
+			fmt.Fprintf(sb, "  %s: {name: %s}   # ai-suggested — edit freely\n", id, p.Name)
+		default:
+			fmt.Fprintf(sb, "  %-26s # deterministic — edit freely\n", id+": {name: "+names[id]+"}")
+		}
+	}
+	sb.WriteString("# `fn_<name>:<qid>` keys pin queries inside an external fn library file.\n")
 }
 
 // renderScenarioDraft emits the mapping draft for an axis entry (SCEN-5):
@@ -425,7 +428,17 @@ func renderScenarioDraft(f *ir.File, axis *flow.DispatchAxis, scens []*flow.Scen
 				scenarioRefValue(sc), fieldsOrDash(sc.Gets), fieldsOrDash(sc.Adds), len(scenarioQueryIDs(sc)))
 		}
 	}
-	writeDBMethodSkeleton(&sb, f)
+	// dbMethods: the same pre-filled block as the candidate draft — AI
+	// proposals override where the AI offered them.
+	pins := map[string]methodPinSuggestion{}
+	for _, sug := range aiNames {
+		for id, m := range sug.Methods {
+			if _, dup := pins[id]; !dup {
+				pins[id] = m
+			}
+		}
+	}
+	writeDBMethods(&sb, f, pins)
 	return sb.String()
 }
 
@@ -464,23 +477,6 @@ func writeSuggestion(sb *strings.Builder, sug aiSuggestion) {
 		fmt.Fprintf(sb, "    route: %-15s # deterministic — edit freely\n", strconv.Quote(sug.Route))
 	default:
 		fmt.Fprintf(sb, "    route: %-15s # ai-suggested — edit freely\n", strconv.Quote(sug.Route))
-	}
-}
-
-// writeDBMethodSkeleton emits the draft's dbMethods tail: AI-proposed pins
-// as real (editable) yaml, else the commented skeleton listing the query
-// IDs for manual pins.
-func writeDBMethodSkeleton(sb *strings.Builder, f *ir.File) {
-	var qids []string
-	for _, q := range f.Queries {
-		qids = append(qids, q.ID)
-	}
-	if len(qids) > 0 {
-		sb.WriteString("\n# dbMethods:                   # OPTIONAL per-query method pins (uncomment\n")
-		for _, id := range qids {
-			fmt.Fprintf(sb, "#   %-24s  # name: GetThing / params: [b:string] / row: ThingRow\n", id+":")
-		}
-		sb.WriteString("# `fn_<name>:<qid>` keys pin queries inside an external fn library file.\n")
 	}
 }
 

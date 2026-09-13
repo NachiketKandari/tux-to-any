@@ -243,3 +243,37 @@ func osReadFile(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	return string(b), err
 }
+
+// TestDefaultMethodNames pins the draft pre-fill contract: unpinned queries
+// name cursor/table-derived (Get<Cursor> / Get<Table>), duplicates skip
+// (pins key canonical ids), and collisions gain the query id exactly as
+// Build's dbMethodName resolves them — the discover drafts pin these names,
+// so the draft and the plan cannot drift.
+func TestDefaultMethodNames(t *testing.T) {
+	queries := []*ir.Query{
+		{ID: "q1", Type: ir.QuerySelectSingle, Tables: []string{"(SELECT X FROM Y"}},
+		{ID: "q2", Type: ir.QuerySelectSingle, CursorName: "cur_mf_nav_hist", CursorFlattened: true, Tables: []string{"MF_NAV_HIST"}},
+		{ID: "q3", Type: ir.QuerySelectSingle, Tables: []string{"MF_NAV_HIST"}}, // collides with q2? no — cursor wins q2; q3 derives from the same table as a third below
+		{ID: "q4", Type: ir.QueryUpdate, Tables: []string{"SCH_MSTR"}},
+		{ID: "q5", Type: ir.QuerySelectSingle, Tables: []string{"MF_NAV_HIST"}, DuplicateOf: "q3"},
+	}
+	names := DefaultMethodNames(queries)
+	if got, ok := names["q2"]; !ok || got != "GetMfNavHist" {
+		t.Errorf("q2 = %q, want GetMfNavHist (cursor-derived)", got)
+	}
+	if got := names["q4"]; got != "UpdateSchMstr" {
+		t.Errorf("q4 = %q, want UpdateSchMstr", got)
+	}
+	if _, ok := names["q5"]; ok {
+		t.Error("q5 is a duplicate — pins key canonical ids only")
+	}
+	// q1's inline-view table collapses to a symbol-free "Row" fallback; q3
+	// derives GetMfNavHist from MF_NAV_HIST... q2 took that name first, so
+	// q3's name gains its id (the Build collision rule).
+	if got := names["q3"]; got == "GetMfNavHist" {
+		t.Errorf("q3 must not duplicate q2's name (collision rule), got %q", got)
+	}
+	if names["q3"] == "" {
+		t.Error("q3 missing from the resolved names")
+	}
+}
