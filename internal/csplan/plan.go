@@ -32,7 +32,10 @@ type Prop struct {
 
 // QueryPlan is one database unit's C# shape: the NamedQueries const, the
 // repo method kind, the ordered named parameters, and the DTO row
-// properties for SELECTs.
+// properties for SELECTs. Line is the query's source span — the cursor
+// units' span covers the whole DECLARE→CLOSE choreography — and anchors
+// the LLM seam's arm view (SQL regions replaced by the deterministic
+// repo calls).
 type QueryPlan struct {
 	ID       string  `json:"id"`
 	Kind     string  `json:"kind"` // select-single | select-multi | dml | merge
@@ -41,6 +44,7 @@ type QueryPlan struct {
 	Params   []Param `json:"params"`
 	RowProps []Prop  `json:"row_props,omitempty"`
 	DML      bool    `json:"dml,omitempty"`
+	Line     [2]int  `json:"line,omitempty"`
 }
 
 // EndpointPlan is one action's C# shape: the controller action, its
@@ -77,6 +81,11 @@ type Plan struct {
 
 	Endpoints []EndpointPlan `json:"endpoints"`
 	Queries   []QueryPlan    `json:"queries"`
+
+	// Warnings are the arm-coverage advisories (D4): every condition the
+	// inventory carries that no endpoint covers — the tool never invents
+	// endpoints, and it never stays silent about a reachable dispatch arm.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Options carries the plan inputs: the entry IR, the source text, and the
@@ -151,6 +160,12 @@ func Build(opts Options) (*Plan, error) {
 
 	canonical := map[string]bool{}
 	seenEp := map[string]bool{}
+	// Per-endpoint coverage evidence for the arm-coverage advisory (D4).
+	type epCover struct {
+		scen *flow.Scenario
+		cond *ir.Condition
+	}
+	var covers []epCover
 	for _, e := range m.Endpoints {
 		ep := EndpointPlan{
 			Name:    e.Name,
@@ -158,6 +173,7 @@ func Build(opts Options) (*Plan, error) {
 			DTOName: e.Name + "Response",
 		}
 		var cond *ir.Condition
+		var scen *flow.Scenario
 		switch {
 		case e.ScenarioRef != "":
 			t, err := treeFor()
@@ -167,13 +183,17 @@ func Build(opts Options) (*Plan, error) {
 			axis := t.DispatchAxisFor([]byte(opts.Source))
 			key, value, err := plan.ParseScenarioRef(e.ScenarioRef)
 			if err != nil {
-				return nil, fmt.Errorf("csplan: endpoint %s: %w", e.Name, err)
+				// A malformed ref is a mapping bug — the error names the
+				// axis the file actually dispatches on (the fix needs
+				// both facts).
+				return nil, fmt.Errorf("csplan: endpoint %s: %w (the file dispatches on %s)",
+					e.Name, err, axisRefSummary(t, opts.Source))
 			}
 			if axis == nil || axis.Key() != key {
 				return nil, fmt.Errorf("csplan: endpoint %s references scenario axis %q — the file dispatches on %s",
 					e.Name, key, axisRefSummary(t, opts.Source))
 			}
-			scen := flow.ScenarioFor(t, axis, value)
+			scen = flow.ScenarioFor(t, axis, value)
 			if scen == nil {
 				return nil, fmt.Errorf("csplan: endpoint %s: no scenario slice for %s", e.Name, e.ScenarioRef)
 			}
@@ -248,7 +268,87 @@ func Build(opts Options) (*Plan, error) {
 			return nil, fmt.Errorf("csplan: endpoint %s mapped twice", e.Name)
 		}
 		seenEp[e.Name] = true
+		covers = append(covers, epCover{scen: scen, cond: cond})
 		p.Endpoints = append(p.Endpoints, ep)
+	}
+
+	// Arm-coverage advisory (D4): every reachable dispatch arm no endpoint
+	// covers gets a warning — the same style convertgo prints. The tool
+	// never invents endpoints, but it never stays silent about a reachable
+	// arm either. Dispatch-axis files (the corpus's separate-if and chain
+	// shapes) are covered through the axis domain; files without an axis
+	// fall back to the condition-inventory pass. Coverage is line-level:
+	// scenario endpoints own their slice key; condition/conditionRef
+	// endpoints cover by span over the arm's condition anchor.
+	var flowTree *flow.Tree
+	if t, err := treeFor(); err == nil {
+		flowTree = t
+	}
+	if flowTree != nil {
+		if axis := flowTree.DispatchAxisFor([]byte(opts.Source)); axis != nil {
+			values := append([]string(nil), axis.Domain...)
+			if axis.HasDefault {
+				values = append(values, axis.DefaultKey())
+			}
+			for _, v := range values {
+				scen := flow.ScenarioFor(flowTree, axis, v)
+				covered := false
+				for _, cov := range covers {
+					if cov.scen != nil && cov.scen.Key == scen.Key {
+						covered = true
+						break
+					}
+				}
+				if !covered {
+					start := scen.BodyExtent()[0]
+					for _, cov := range covers {
+						if cov.scen != nil {
+							// Scenario coverage is key-exact: a slice's kept
+							// span encloses dropped sibling arms (the chain
+							// sits between kept top-level nodes), so the span
+							// fallback must never judge a scenario endpoint.
+							continue
+						}
+						if cov.cond != nil && cov.cond.StartLine <= start && start <= cov.cond.EndLine {
+							covered = true
+							break
+						}
+					}
+				}
+				if covered {
+					continue
+				}
+				ext := scen.BodyExtent()
+				p.Warnings = append(p.Warnings, fmt.Sprintf(
+					"dispatch arm %s=%s (lines %d-%d) has no endpoint — map it (scenarioRef: %s) or it stays logic-only",
+					axis.Key(), v, ext[0], ext[1], scen.Key))
+			}
+		}
+	} else {
+		for i := range opts.Main.Conditions {
+			c := &opts.Main.Conditions[i]
+			check := c.StartLine
+			if i > 0 && opts.Main.Conditions[i-1].EndLine >= c.StartLine && c.StartLine < c.EndLine {
+				check = c.StartLine + 1 // shared brace line — probe the body
+			}
+			covered := false
+			for _, cov := range covers {
+				if cov.cond != nil && cov.cond.StartLine <= check && check <= cov.cond.EndLine {
+					covered = true
+					break
+				}
+			}
+			if covered {
+				continue
+			}
+			arm := "condition"
+			if c.IsDefault {
+				arm = "else arm"
+			}
+			p.Warnings = append(p.Warnings, fmt.Sprintf(
+				"%s %d (lines %d-%d) has no endpoint — map it (condition: %d) or it stays logic-only",
+				arm, c.Index, c.StartLine, c.EndLine, c.Index))
+		}
 	}
 	return p, nil
 }
@@ -258,7 +358,7 @@ func Build(opts Options) (*Plan, error) {
 // format-literal leak like `:mi` never reaches the repo signature), and
 // DTO row props for SELECTs.
 func buildQueryPlan(q *ir.Query, m *Mapping, hostVars map[string]bool) (QueryPlan, error) {
-	qp := QueryPlan{ID: q.ID, SQL: cleanSQL(q.SQL)}
+	qp := QueryPlan{ID: q.ID, SQL: cleanSQL(q.SQL), Line: [2]int{q.StartLine, q.EndLine}}
 	switch q.Type {
 	case ir.QuerySelectSingle:
 		qp.Kind = "select-single"
@@ -276,7 +376,7 @@ func buildQueryPlan(q *ir.Query, m *Mapping, hostVars map[string]bool) (QueryPla
 	if pin, ok := m.DBMethods[q.ID]; ok && pin.Name != "" {
 		qp.Name = pin.Name
 	} else {
-		qp.Name = defaultQueryName(q, qp.DML)
+		qp.Name = DefaultQueryName(q, qp.DML)
 	}
 
 	// Params: first-seen bind order, host-var filtered, deduped.
@@ -367,9 +467,16 @@ func pascalOf(bind string) string {
 	return out
 }
 
-// defaultQueryName derives the NamedQueries const when unpinned:
-// <Verb><Table>Query (GetCstMblAccopnRqstQuery / Update…Query).
-func defaultQueryName(q *ir.Query, dml bool) string {
+// SuggestRequestProp is the draft-time view of pascalOf: the request
+// property the discover -target cs drafts suggest for a bind host var —
+// exactly the name the plan derives when the mapping leaves it unset.
+func SuggestRequestProp(bind string) string { return pascalOf(bind) }
+
+// DefaultQueryName derives the NamedQueries const when unpinned:
+// <Verb><Table>Query (GetCstMblAccopnRqstQuery / Update…Query). Exported
+// because the discover -target cs drafts pin exactly these names — the
+// draft's dbMethods and the plan's unpinned fallback cannot drift.
+func DefaultQueryName(q *ir.Query, dml bool) string {
 	verb := "Get"
 	switch q.Type {
 	case ir.QueryInsert:

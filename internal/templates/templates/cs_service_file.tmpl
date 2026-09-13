@@ -32,8 +32,7 @@ namespace {{.Namespace}}
 {{end}}                    });
                 }
                 _logger.LogInformation({{.LogLine}});
-{{end}}{{end}}{{if .Todo}}                // tuxgo:TODO residual arm logic (source lines {{.Span}}) — fill here or re-run with the LLM seam enabled
-{{end}}                return {{.ReturnExpr}};
+{{end}}{{end}}{{.TodoSlot}}                return {{.ReturnExpr}};
             }
             catch (Exception ex) { throw new Exception("Error while executing {{ $action }} - " + ex.Message); }
         }

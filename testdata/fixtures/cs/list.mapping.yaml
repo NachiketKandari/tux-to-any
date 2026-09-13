@@ -1,0 +1,29 @@
+# list.mapping.yaml — the endpoint mapping for the cursor-arm convertcs
+# fixture (DECLARE→FETCH cursor → List<DTO> shape).
+#
+#   go run ./cmd/tuxconv convertcs testdata/fixtures/cs/SVC_CUST_LIST_DTL.pc \
+#       -mapping testdata/fixtures/cs/list.mapping.yaml -no-llm
+
+source: SVC_CUST_LIST_DTL.pc
+
+namespace: OaoBackendApi
+area: OAOApplication.CustomerAuthenticate
+component: CustList
+
+apiVersion: "1.0"
+requestDTO: CommonMobileRequest
+
+endpoints:
+  - scenarioRef: "c_arm_flg=L"
+    name: ListEvent
+    route: list_event_L
+
+requestFields:
+  sql_cst_pan_no: MobileNo
+
+paramNames:
+  sql_cst_pan_no: MobileNo
+
+dbMethods:
+  q1:
+    name: GetCUSTLeadQuery

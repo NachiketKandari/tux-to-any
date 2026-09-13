@@ -12,6 +12,7 @@ import (
 
 	"tux-to-any/internal/budget"
 	"tux-to-any/internal/config"
+	"tux-to-any/internal/csdraft"
 	"tux-to-any/internal/flow"
 	"tux-to-any/internal/ir"
 	"tux-to-any/internal/llm"
@@ -32,10 +33,14 @@ func runDiscover(ctx context.Context, args []string) error {
 	stdout := fs.Bool("stdout", false, "Print the draft(s) instead of writing files")
 	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: skip AI naming (overrides run.llm)")
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
+	target := fs.String("target", "", "Draft dialect: go (default) or cs — the .NET Core mapping schema")
 
 	flagArgs, positional := reorderArgs(args)
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
+	}
+	if *target != "" && *target != "go" && *target != "cs" {
+		return fmt.Errorf("-target: got %q, want one of [go cs]", *target)
 	}
 	// The config always routes (defaults when the file is absent) — the
 	// target falls back to convert.input so a bare `tuxgo discover` works.
@@ -45,14 +50,23 @@ func runDiscover(ctx context.Context, args []string) error {
 	}
 	logConfigRouting(ctx, cfg, cfgSource)
 
-	var target string
+	var path string
 	if len(positional) > 0 {
-		target = positional[0]
+		path = positional[0]
 	} else {
-		target = cfg.Convert.Input
+		path = cfg.Convert.Input
 	}
-	if target == "" {
+	if path == "" {
 		return fmt.Errorf("must provide a .pc/.pcf file or directory, or set convert.input in .tuxgo.yaml")
+	}
+
+	if *target == "cs" {
+		// The cs drafts are deterministic (B1/B2): no AI naming pass —
+		// every suggestion derives from the flow IR and the config
+		// namespace/area defaults.
+		_, err = discoverCsCore(ctx, path, discoverOutDir(*outDir), *stdout,
+			csdraft.Options{Namespace: cfg.Convertcs.Namespace, Area: cfg.Convertcs.Area})
+		return err
 	}
 
 	client := resolveLLMClient(ctx, cfg, *noLLM, "endpoint naming")
@@ -63,7 +77,7 @@ func runDiscover(ctx context.Context, args []string) error {
 	}
 	bd := newWiring(ctx, cfg).budget
 
-	_, err = discoverCore(ctx, target, discoverOutDir(*outDir), *stdout, client, bd)
+	_, err = discoverCore(ctx, path, discoverOutDir(*outDir), *stdout, client, bd)
 	return err
 }
 
@@ -160,28 +174,12 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, client l
 			continue
 		}
 		base := strings.TrimSuffix(filepath.Base(f.Path), filepath.Ext(f.Path))
-		path := filepath.Join(out, base+".mapping.yaml")
-		if _, err := os.Stat(path); err == nil {
-			// A tagged draft is user work — never clobber it. The fresh
-			// draft lands alongside as "<base> (1).mapping.yaml", first
-			// free number.
-			var alt string
-			for i := 1; ; i++ {
-				cand := filepath.Join(out, fmt.Sprintf("%s (%d).mapping.yaml", base, i))
-				if _, err := os.Stat(cand); os.IsNotExist(err) {
-					alt = cand
-					break
-				}
-			}
-			fmt.Printf("  note: %s kept — writing a fresh draft alongside\n", path)
-			existing++
-			path = alt
-		}
-		if err := os.MkdirAll(out, 0o755); err != nil {
+		path, kept, err := writeDraft(out, base+".mapping.yaml", draft)
+		if err != nil {
 			return written, err
 		}
-		if err := os.WriteFile(path, []byte(draft), 0o644); err != nil {
-			return written, fmt.Errorf("discover: write %s: %w", path, err)
+		if kept {
+			existing++
 		}
 		written++
 		log.Info("draft written", "path", path)
@@ -193,6 +191,33 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, client l
 	fmt.Printf("\n%d draft(s) written to %s (%d existing kept) — review name/route, fill module/readDBs if you generate into an existing repo, then: tuxgo convert %s\n",
 		written, out, existing, target)
 	return written, nil
+}
+
+// writeDraft persists one draft yaml, never clobbering an existing draft —
+// a tagged draft is user work, so the fresh draft lands alongside as a
+// numbered sibling ("<name> (1).mapping.yaml", first free number). Returns
+// the written path and whether an existing draft was kept.
+func writeDraft(out, name, draft string) (string, bool, error) {
+	path := filepath.Join(out, name)
+	kept := false
+	if _, err := os.Stat(path); err == nil {
+		kept = true
+		fmt.Printf("  note: %s kept — writing a fresh draft alongside\n", path)
+		for i := 1; ; i++ {
+			cand := filepath.Join(out, strings.Replace(name, ".mapping.yaml", fmt.Sprintf(" (%d).mapping.yaml", i), 1))
+			if _, err := os.Stat(cand); os.IsNotExist(err) {
+				path = cand
+				break
+			}
+		}
+	}
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return path, kept, err
+	}
+	if err := os.WriteFile(path, []byte(draft), 0o644); err != nil {
+		return path, kept, fmt.Errorf("discover: write %s: %w", path, err)
+	}
+	return path, kept, nil
 }
 
 // discoverOutDir resolves the draft directory: the -out override, else the

@@ -178,7 +178,11 @@ Available Commands:
                (Controller / DTO / NamedQueries / Repository / Service; -mapping
                yaml required, -no-llm keeps tuxgo:TODO service seams)
   discover     Endpoint scan-then-tag: write a mapping draft per entry to
-               mappings/ (default; -out overrides, -stdout prints)
+               mappings/ (default; -out overrides, -stdout prints).
+               -target cs drafts the .NET Core mapping schema
+               (<name>.cs.mapping.yaml: namespace/area/component
+               placeholders, scenario endpoints, requestFields/paramNames,
+               dbMethods pins)
   analyze      Analyze Pro*C/Tuxedo complexity (+1/+5/+10/+20 rubric) and export CSV
                (selectors: analyze folder/file.pc, analyze folder file.pc,
                analyze folder "a.pc, b.pc" / a b c, or a .txt file list)
@@ -249,6 +253,7 @@ func deriveValueFlags() map[string]bool {
 			fs.Bool("stdout", false, "")
 			fs.Bool("no-llm", false, "")
 			fs.String("config", "", "")
+			fs.String("target", "", "")
 		},
 		"convertbatchpy": func(fs *flag.FlagSet) {
 			fs.String("out", "", "")
@@ -261,6 +266,7 @@ func deriveValueFlags() map[string]bool {
 			fs.String("out", "", "")
 			fs.String("mapping", "", "")
 			fs.Bool("no-llm", false, "")
+			fs.String("config", "", "")
 		},
 		"analyze": func(fs *flag.FlagSet) {
 			fs.String("csv", "", "")

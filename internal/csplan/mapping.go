@@ -14,8 +14,6 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
-
-	"tux-to-any/internal/plan"
 )
 
 // MethodPin is the user's optional pin for one NamedQueries const name.
@@ -122,9 +120,10 @@ func (m *Mapping) Validate() error {
 			}
 			refs[e.ConditionRef] = true
 		case e.ScenarioRef != "":
-			if _, _, err := plan.ParseScenarioRef(e.ScenarioRef); err != nil {
-				return fmt.Errorf("endpoints[%d]: %w", i, err)
-			}
+			// Format validation deliberately lives in csplan.Build (D4):
+			// a malformed scenarioRef error must name the axis the file
+			// actually dispatches on — a fact only Build has. The load
+			// pass keeps the twice-mapped check.
 			if scens[e.ScenarioRef] {
 				return fmt.Errorf("endpoints[%d]: scenario %s mapped twice", i, e.ScenarioRef)
 			}

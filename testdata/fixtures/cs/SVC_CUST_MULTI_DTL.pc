@@ -1,0 +1,153 @@
+/*******************************************************************************
+ * Name          : SVC_CUST_MULTI_DTL
+ *
+ * Version       : 1.0
+ *
+ * Author        : tuxgo demo corpus
+ *
+ * Tables Accessed :
+ *                 1. CST_MBL_ACCOPN_RQST
+ *
+ * Input Parameters :
+ *                 1. Call Flag.
+ *                 2. Mobile No.
+ *
+ * Output Parameters :
+ *                 1. Form No
+ *                 2. Stage
+ *
+ * Description   :
+ *                 Synthetic demo service (multi-query arm variant): one
+ *                 dispatch arm carries a SELECT then an UPDATE — the
+ *                 generated repo methods carry the endpoint-name suffixes.
+ *
+ * Log :
+ * 1.0   14/09/2026   New service
+ * Reviewed By : demo reviewer
+ *******************************************************************************/
+
+/* Standard include files */
+#include <atmi.h>
+#include <userlog.h>
+#include <fml32.h>
+#include <string.h>
+#include <sqlca.h>
+#include <ctype.h>
+#include <fn_read_debug_lvl.h>
+
+/* User defined header files */
+#include <demo_fml_def.h>
+#include <demo_eba.h>
+
+/* Global variables */
+char c_ServiceName[33] ;
+
+void SVC_CUST_MULTI_DTL(TPSVCINFO *rqst)
+{
+    /* Local variables */
+    int i;                       /* Loop counter */
+    int i_err[2];                /* Fget/Fadd error codes */
+    char c_call_flg[5];          /* dispatch flag */
+    char c_arm_flg;              /* normalized dispatch arm */
+    char c_err_msg[256];
+    FBFR32 *ptr_fml_Ibuffer;     /* Input Buffer */
+    FBFR32 *ptr_fml_Obuffer;     /* Output Buffer */
+    short ind_cst_form;
+
+    /* Include all the header files for variables corresponding to table fields */
+    EXEC SQL include "table/cst_mbl_accopn_rqst.h" ;
+
+    EXEC SQL BEGIN DECLARE SECTION;
+        varchar sql_cst_form_no[11];
+        varchar vc_cst_stage[10];
+        varchar sql_cst_pan_no[21];
+    EXEC SQL END DECLARE SECTION;
+
+    /* Initializations */
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data ;
+    ptr_fml_Obuffer = (FBFR32*)NULL ;
+    strcpy(c_ServiceName, rqst->name) ;
+    INITDBGLVL(c_ServiceName);
+
+    userlog("Service :%s: called", c_ServiceName);
+
+    i_err[0] = Fget32(ptr_fml_Ibuffer, FML_FLG, 0, (char *)c_call_flg, 0);
+    i_err[1] = Fget32(ptr_fml_Ibuffer, FML_MOBILE_NO, 0, (char *)sql_cst_pan_no.arr, 0);
+    for(i = 0; i < 2; i++)
+    {
+        if(i_err[i] == -1)
+        {
+            errlog(c_ServiceName, "S31005", FMLMSG, DEF_USR, DEF_SSSN, c_err_msg);
+            Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_err_msg, 0);
+            tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+        }
+    }
+
+    SETLEN(sql_cst_pan_no);
+
+    userlog("Call Flag :%s:, Mobile No :%s:", c_call_flg, sql_cst_pan_no.arr);
+
+    /* normalize the dispatch flag into a scalar arm selector */
+    if(!(strcmp(c_call_flg, "M")))
+        c_arm_flg = 'M';
+    if(!(strcmp(c_call_flg, "P")))
+        c_arm_flg = 'P';
+
+    if((ptr_fml_Obuffer = (FBFR32 *)tpalloc("FML32", NULL, Fneeded32(1, 2048))) == (FBFR32 *)NULL)
+    {
+        errlog(c_ServiceName, "S31020", TPMSG, DEF_USR, DEF_SSSN, c_err_msg);
+        Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_err_msg, 0);
+        tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+    }
+
+    if(c_arm_flg == 'M')
+    {
+        MEMSET(sql_cst_form_no);
+        MEMSET(vc_cst_stage);
+
+        EXEC SQL
+          SELECT  CST_FORM_NO,
+                  CST_OLN_STAGE
+          INTO    :sql_cst_form_no:ind_cst_form,
+                  :vc_cst_stage
+          FROM    CST_MBL_ACCOPN_RQST
+          WHERE   CST_OLN_MOB = :sql_cst_pan_no
+          AND     CST_ACCOPN_SRC = 'E';
+
+        if(SQLCODE != 0 && SQLCODE != NO_DATA_FOUND)
+        {
+            errlog(c_ServiceName, "S32055", SQLMSG, DEF_USR, DEF_SSSN, c_err_msg);
+            Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_err_msg, 0);
+            tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+        }
+
+        userlog("fetched form |%s| stage |%s|", sql_cst_form_no.arr, vc_cst_stage.arr);
+
+        EXEC SQL
+          UPDATE CST_MBL_ACCOPN_RQST
+          SET    CST_OLN_STAGE = 'Z'
+          WHERE  CST_FORM_NO = :sql_cst_form_no;
+
+        if(SQLCODE != 0)
+        {
+            EXEC SQL ROLLBACK WORK;
+            errlog(c_ServiceName, "S32061", SQLMSG, DEF_USR, DEF_SSSN, c_err_msg);
+            Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_err_msg, 0);
+            tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+        }
+
+        EXEC SQL COMMIT WORK;
+
+        userlog("MULTI staged rows :%d:", sqlca.sqlerrd[2]);
+        Fadd32(ptr_fml_Obuffer, FML_STCK_FRM_ALLWD, sql_cst_form_no.arr, 0);
+        Fadd32(ptr_fml_Obuffer, FML_RSTRCT_LST_ID, vc_cst_stage.arr, 0);
+    }
+
+    if(c_arm_flg == 'P')
+    {
+        userlog("PORT arm: portal flow handled by the portal service");
+    }
+
+    userlog("SVC_CUST_MULTI_DTL completed");
+    tpreturn(TPSUCCESS, 0L, (char *)ptr_fml_Obuffer, 0L, 0);
+}

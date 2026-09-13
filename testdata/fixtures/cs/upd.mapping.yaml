@@ -1,0 +1,31 @@
+# upd.mapping.yaml — the endpoint mapping for the DML-arm convertcs
+# fixture (UPDATE + commit → Task<int> shape).
+#
+#   go run ./cmd/tuxconv convertcs testdata/fixtures/cs/SVC_CUST_UPD_DTL.pc \
+#       -mapping testdata/fixtures/cs/upd.mapping.yaml -no-llm
+
+source: SVC_CUST_UPD_DTL.pc
+
+namespace: OaoBackendApi
+area: OAOApplication.CustomerAuthenticate
+component: CustUpd
+
+apiVersion: "1.0"
+requestDTO: CommonMobileRequest
+
+endpoints:
+  - scenarioRef: "c_arm_flg=U"
+    name: UpdateEvent
+    route: upd_event_U
+
+requestFields:
+  sql_cst_pan_no: MobileNo
+  vc_cst_stage: Stage
+
+paramNames:
+  sql_cst_pan_no: MobileNo
+  vc_cst_stage: Stage
+
+dbMethods:
+  q1:
+    name: UpdateCUSTStageQuery

@@ -108,7 +108,8 @@ go run ./cmd/xtux ir <dir>    # IR NDJSON (corpus mode: no fragmenting, cross-fi
 The tux→Go conversion pipeline runs **on this stack**: parse → IR → plan →
 gen → convert, with the supporting packages (`common config telemetry audit
 ledger profile goast validate templates budget llm sqlchk flow batchflow
-pyplan pygen pychk analyzer testscan testgen`) under `internal/`. Every
+pyplan pygen pychk analyzer testscan testgen csplan csgen cschk csdraft
+corpusguard`) under `internal/`. Every
 downstream stage consumes the tree-sitter facts.
 
 Commands (`cmd/tuxconv`):
@@ -116,10 +117,10 @@ Commands (`cmd/tuxconv`):
 ```
 go run ./cmd/tuxconv extract <file|dir>     # IR JSON; archived per run
 go run ./cmd/tuxconv plan <file> -mapping <yaml>
-go run ./cmd/tuxconv discover <file|dir> [-stdout]
+go run ./cmd/tuxconv discover <file|dir> [-stdout] [-target go|cs]
 go run ./cmd/tuxconv convertgo <file|dir> [-mapping <yaml|dir>] [-no-llm] [-base dir]
 go run ./cmd/tuxconv convertbatchpy <file|dir> [-no-llm] [-shape auto|repo] [-dml-loop batch|rowbyrow] [-out dir]
-go run ./cmd/tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir]
+go run ./cmd/tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir] [-config path]
 go run ./cmd/tuxconv analyze <file|dir> [-csv out.csv] [-weights csv] [-pattern mf_]
 go run ./cmd/tuxconv gentest <converted tree> [-check-only] [-no-llm] [-layers db,controller,handler] [-base dir]
 ```
@@ -152,8 +153,7 @@ class per action, properties named from the query's row shape),
 `ExecuteNonQueryAsync` + named `OracleParameter`s whose names stay the
 source's own host binds), and `Service/I<C>Service.cs` + `<C>Service.cs`
 (deterministic repo calls, row mapping via `DataReaderHelper.GetStr`, and
-structured logging; the arm's residual logic stays a `tuxgo:TODO` seam
-that the LLM fills on an LLM-enabled run).
+structured logging).
 
 The pipeline is `csplan` → `csgen` → `cschk`: the mapping yaml carries the
 namespace identity (`namespace` / `area` / `component`) and the endpoints
@@ -161,14 +161,81 @@ namespace identity (`namespace` / `area` / `component`) and the endpoints
 the Go mapping — a dispatch arm becomes one action). Gates: brace/type
 structure, no raw SQL outside NamedQueries, and a normalized SQL-fidelity
 comparison of every const against the source (comment-stripped,
-whitespace-collapsed, bind names wildcarded). The golden pins the full
-pipeline over `testdata/fixtures/cs` (regenerate with
-`CS_UPDATE_GOLDENS=1`).
+whitespace-collapsed, bind names wildcarded). The goldens pin the full
+pipeline over `testdata/fixtures/cs` — the CUSE fixture plus the
+broad-arm-coverage variants: a DML arm (`UPDATE` + commit → `Task<int>`),
+a cursor arm (`DECLARE`→`FETCH` choreography → `List<DTO>`), and a
+multi-query arm (SELECT then UPDATE in one arm → `Action1`/`Action2`
+repo-method suffixes) (regenerate with `CS_UPDATE_GOLDENS=1`).
+
+### The convertcs LLM seam
+
+Deterministic-first bodies: repo calls, row→DTO mapping, and structured
+logging render deterministically; only the arm's **residual logic** — the
+block between the prologue and the `return` — rides the LLM seam. The
+prompt carries the query-replaced arm view (every `EXEC SQL` span already
+presented as its deterministic repo call — the model never sees raw SQL),
+the endpoint contract (action, DTO properties, params, return type), and
+the rendered prologue; the model emits only the TODO block, never
+signatures or SQL. Body gates: fixed signature and return statement,
+every required repo call present, no raw SQL / `EXEC SQL`, brace balance
+— gate errors feed the bounded retry loop, exhaustion degrades to the
+`tuxgo:TODO` placeholder with a note, never a silent invention. Every
+attempt is archived in the audit trail
+(`convertcs-<endpoint>-attempt<n>.json`).
+
+Filled bodies persist in the run's ledger
+(`conversion_logs/ledger/convertcs-<component>.json`): a re-run re-gates
+and reuses them — **filled bodies are never re-generated** — while TODO
+seams retry the seam on the next LLM-enabled run.
 
 ```
 go run ./cmd/tuxconv convertcs testdata/fixtures/cs/SVC_CUST_GET_DTL.pc \
     -mapping testdata/fixtures/cs/cust.mapping.yaml -no-llm
 ```
+
+### discover -target cs: zero hand-written yaml
+
+`discover -target cs <file|dir>` drafts `<name>.cs.mapping.yaml` — the
+same scan-then-tag contract as the Go drafts, rendered for the convertcs
+schema: namespace/area/component placeholders (filled from the
+`convertcs` config defaults when set), one endpoint per qualifying
+scenario slice with action/route suggestions, `requestFields`/`paramNames`
+drafted from the FML read targets, and `dbMethods` const-name pins using
+the exact names the plan derives — a new file's first pass needs no
+hand-written yaml. Drafts never clobber; a fresh draft lands alongside a
+kept one as a numbered sibling.
+
+```
+go run ./cmd/tuxconv discover testdata/fixtures/cs -target cs
+```
+
+### convertcs config
+
+The `convertcs.*` section carries the run defaults (flag > config >
+default precedence):
+
+```yaml
+convertcs:
+  input: examples/SVC_CUST_GET_DTL.pc   # target when the CLI passes none
+  mapping: mappings/cust.mapping.yaml   # mapping used when -mapping is absent
+  out: conversion_logs/_staged          # output root for the component tree
+  noLLM: false                          # deterministic-only kill switch
+  namespace: OaoBackendApi              # draft-time namespace default
+  area: OAOApplication.CustomerAuthenticate   # draft-time area default
+```
+
+Coverage advisories: every reachable dispatch arm the mapping leaves
+unmapped prints the same style of `coverage:` line `convertgo` prints —
+omission is a choice, silence about an arm is not — and a malformed
+`scenarioRef` error names the axis the file actually dispatches on.
+
+Real-corpus smoke: the env-guarded `TUX_CS_CORPUS` test (the same pattern
+as `TUX_CORPUS`) runs the full deterministic path — draft → strict
+mapping load → plan → generate → gates — against the local-only corpus
+when the operator points it there; absent the variable everything skips,
+and the corpus is never named in tracked content (the corpusguard keeps
+it that way).
 
 ### Modes: LLM vs deterministic-only
 
@@ -192,8 +259,9 @@ exactly one template-shaped gap per unit — and only in LLM mode:
 |---|---|---|
 | `convert` | controller body per endpoint (from the query-replaced branch view + flow draft — never raw SQL) | body marked `skipped` in the ledger; an LLM-enabled re-run resumes exactly those |
 | `batchpy` | stateful-batch service body | `# tuxgo:TODO service body` placeholder (simple shape is 100% deterministic either way) |
+| `convertcs` | residual arm logic per endpoint (from the query-replaced arm view — never raw SQL); ledger resume never re-generates filled bodies | `tuxgo:TODO` residual-block placeholder, kept on seam exhaustion |
 | `gentest` | field-mapping controller tests | `llm-required` notes (db/handler/passthrough are template-deterministic) |
-| `discover` | endpoint name/route proposals | deterministic names from cursor/FML tokens, marked `# deterministic — edit freely` |
+| `discover` | endpoint name/route proposals | deterministic names from cursor/FML tokens, marked `# deterministic — edit freely` (`-target cs` is deterministic-only throughout) |
 
 Dispatch-arm coverage: `discover` folds a dispatch-axis entry into one
 scenario slice per detected value **plus the default arm** when the

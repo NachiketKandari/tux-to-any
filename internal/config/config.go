@@ -140,6 +140,31 @@ type Config struct {
 	Buffers     Buffers     `yaml:"buffers"`
 	Paths       Paths       `yaml:"paths"`
 	Batchpy     Batchpy     `yaml:"batchpy"`
+	Convertcs   Convertcs   `yaml:"convertcs"`
+}
+
+// Convertcs carries the convertcs (.NET Core) run defaults: the output
+// root, the deterministic-only kill switch, and the namespace/area
+// defaults the discover -target cs drafts fill their placeholders from.
+type Convertcs struct {
+	// Input is the .pc/.pcf file converted when the CLI passes no
+	// positional target (same seam as convert.input).
+	Input string `yaml:"input"`
+	// Mapping is the convertcs mapping YAML used when -mapping is absent.
+	Mapping string `yaml:"mapping"`
+	// Out is the default output root for the generated component tree
+	// (the -out flag overrides; the fallback is paths.staged's convention).
+	Out string `yaml:"out"`
+	// NoLLM forces the deterministic-only run: service bodies keep their
+	// tuxgo:TODO seams. The -no-llm flag ORs on top of it (flag > config).
+	NoLLM bool `yaml:"noLLM"`
+	// Namespace is the draft-time root-namespace default: discover
+	// -target cs fills the draft's namespace placeholder from here when
+	// set (empty keeps the editable TODO placeholder).
+	Namespace string `yaml:"namespace"`
+	// Area is the draft-time dotted-area default under the root
+	// (convertcs.area: OAOApplication.CustomerAuthenticate).
+	Area string `yaml:"area"`
 }
 
 // Batchpy carries the batch→Python conventions (PRD-2026-09-08 BP-7):

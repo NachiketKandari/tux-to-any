@@ -15,7 +15,10 @@ import (
 	"sort"
 	"strings"
 
+	"tux-to-any/internal/audit"
+	"tux-to-any/internal/budget"
 	"tux-to-any/internal/csplan"
+	"tux-to-any/internal/llm"
 	"tux-to-any/internal/templates"
 )
 
@@ -23,6 +26,20 @@ import (
 type Options struct {
 	Plan  *csplan.Plan
 	NoLLM bool
+	// Source is the full .pc source — the arm view's input for the LLM
+	// seam (SQL regions replaced by their deterministic repo calls).
+	Source string
+	// Client is the LLM seam (nil or NoLLM keeps the TODO placeholders).
+	Client     llm.Client
+	Budget     budget.Budget
+	MaxRetries int
+	// Audit archives each LLM attempt (prompt + raw response + gate errors)
+	// when set; nil skips the archive — never the generation itself.
+	Audit *audit.Recorder
+	// Resumed carries bodies restored from the ledger (A4 resume): filled
+	// bodies are never re-generated — each one is re-gated and reused or
+	// loudly degraded. Keyed by endpoint name.
+	Resumed map[string]string
 }
 
 // Result is one generated tree: relative file paths → content, in
@@ -31,7 +48,13 @@ type Result struct {
 	Files    map[string]string
 	Order    []string
 	LLMCalls int
-	Notes    []string
+	// Filled lists the endpoints whose residual block the seam accepted
+	// (LLM fill or ledger resume).
+	Filled []string
+	// Bodies carries each filled endpoint's residual block (endpoint name
+	// → the 16-space-indented block) — the ledger-resume payload (A4).
+	Bodies map[string]string
+	Notes  []string
 }
 
 // EpData is one endpoint's controller/service/DTO view.
@@ -45,10 +68,15 @@ type EpData struct {
 	ReturnExpr string
 	Todo       bool
 	Span       string
+	// TodoSlot is the block between the deterministic prologue and the
+	// return statement: the tuxgo:TODO placeholder, or the seam's filled
+	// residual logic (16-space indent, trailing newline included).
+	TodoSlot string
 }
 
 // QData is one query's repo/service view.
 type QData struct {
+	QueryID    string // csplan query ID (the arm view's SQL-span anchor)
 	Name       string // NamedQueries const
 	MethodName string // repo method
 	SQL        string
@@ -87,7 +115,7 @@ type fileData struct {
 // -no-llm mode (and milestone-one overall): identical plans produce
 // byte-identical files.
 func Generate(ctx context.Context, opts Options) (Result, error) {
-	res := Result{Files: map[string]string{}}
+	res := Result{Files: map[string]string{}, Bodies: map[string]string{}}
 	p := opts.Plan
 	tz := templates.NewEmbeddedProvider()
 
@@ -153,6 +181,49 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 		RequestDTO: p.RequestDTO, Endpoints: epDatas,
 	}
 
+	// The LLM seam (A1-A3): each endpoint's residual block fills when a
+	// client is supplied and NoLLM is false; gate rejections retry within
+	// the bound, exhaustion degrades to the TODO placeholder with a note —
+	// never a silent invention. Ledger-resumed bodies re-gate and reuse,
+	// never re-generate (resume needs no client — that is its point).
+	seamEnabled := !opts.NoLLM && opts.Client != nil
+	for i := range epDatas {
+		if body, ok := opts.Resumed[epDatas[i].Name]; ok {
+			normalized := normalizeBody(body, bodyIndent)
+			if errs := armGates(p, epDatas[i], svc, i, normalized); len(errs) == 0 {
+				epDatas[i].Todo = false
+				epDatas[i].TodoSlot = normalized
+				res.Filled = append(res.Filled, epDatas[i].Name)
+				res.Bodies[epDatas[i].Name] = normalized
+				res.Notes = append(res.Notes, "resume: "+epDatas[i].Name+" body reused from the ledger")
+			} else {
+				res.Notes = append(res.Notes, "resume: "+epDatas[i].Name+" body failed the gates ("+
+					strings.Join(errs, "; ")+") — TODO placeholder kept")
+			}
+			continue
+		}
+		if !seamEnabled {
+			continue
+		}
+		filled, calls, notes, err := fillArmBody(ctx, opts, p, epDatas[i], svc, i)
+		res.LLMCalls += calls
+		if err == nil {
+			epDatas[i].Todo = false
+			epDatas[i].TodoSlot = filled
+			res.Filled = append(res.Filled, epDatas[i].Name)
+			res.Bodies[epDatas[i].Name] = filled
+			continue
+		}
+		// Rejected-attempt notes are failure context, not findings —
+		// on success the audit trail already archives every attempt.
+		res.Notes = append(res.Notes, notes...)
+		res.Notes = append(res.Notes, "llm fill failed for "+epDatas[i].Name+": "+err.Error()+" — TODO placeholder kept")
+	}
+	if !seamEnabled && len(opts.Resumed) == 0 && !opts.NoLLM {
+		res.Notes = append(res.Notes, "no llm client available — TODO seams kept")
+	}
+
+	serviceRel := "Service/" + p.Service + ".cs"
 	files := []struct {
 		rel  string
 		id   templates.ID
@@ -164,7 +235,7 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 		{"Repository/I" + p.Repo + ".cs", templates.CsRepoInterfaceFile, repoIface},
 		{"Repository/" + p.Repo + ".cs", templates.CsRepoFile, repo},
 		{"Service/I" + p.Service + ".cs", templates.CsServiceInterfaceFile, svcIface},
-		{"Service/" + p.Service + ".cs", templates.CsServiceFile, svc},
+		{serviceRel, templates.CsServiceFile, svc},
 	}
 	for _, f := range files {
 		out, err := tz.Render(f.id, f.data)
@@ -175,7 +246,16 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 		res.Order = append(res.Order, f.rel)
 	}
 	sort.Strings(res.Notes)
+	sort.Strings(res.Filled)
 	return res, nil
+}
+
+// renderServiceFile renders the service implementation for one fileData —
+// the exact bytes Generate writes for the Service/<Service>.cs file. The
+// seam gate re-renders it per attempt so the structural gates always see
+// the assembled truth, never the raw block alone.
+func renderServiceFile(svc fileData) (string, error) {
+	return templates.NewEmbeddedProvider().Render(templates.CsServiceFile, svc)
 }
 
 // buildEndpoints prepares the template view of every endpoint and the
@@ -202,7 +282,7 @@ func buildEndpoints(p *csplan.Plan) ([]EpData, []QData) {
 				continue
 			}
 			q := QData{
-				Name: qp.Name, SQL: qp.SQL, Params: qp.Params, DML: qp.DML,
+				QueryID: qp.ID, Name: qp.Name, SQL: qp.SQL, Params: qp.Params, DML: qp.DML,
 			}
 			methodSfx++
 			q.MethodName = ep.Name
@@ -261,9 +341,20 @@ func buildEndpoints(p *csplan.Plan) ([]EpData, []QData) {
 			data.ReturnExpr = "response"
 			data.RetType = "int"
 		}
+		data.TodoSlot = todoPlaceholder(data.Span)
 		eps = append(eps, data)
 	}
 	return eps, flat
+}
+
+// bodyIndent is the residual block's indent inside the rendered service
+// method (class 4 · method 8 · try 12 · statements 16).
+const bodyIndent = 16
+
+// todoPlaceholder is the -no-llm residual block (a loud, resumable gap).
+func todoPlaceholder(span string) string {
+	return strings.Repeat(" ", bodyIndent) +
+		"// tuxgo:TODO residual arm logic (source lines " + span + ") — fill here or re-run with the LLM seam enabled\n"
 }
 
 // sigArgs renders the repo method's parameter list: "string MobileNo, "

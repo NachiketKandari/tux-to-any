@@ -1,0 +1,33 @@
+# multi.mapping.yaml — the endpoint mapping for the multi-query-arm
+# convertcs fixture (SELECT then UPDATE in one arm → method-name suffixes).
+#
+#   go run ./cmd/tuxconv convertcs testdata/fixtures/cs/SVC_CUST_MULTI_DTL.pc \
+#       -mapping testdata/fixtures/cs/multi.mapping.yaml -no-llm
+
+source: SVC_CUST_MULTI_DTL.pc
+
+namespace: OaoBackendApi
+area: OAOApplication.CustomerAuthenticate
+component: CustMulti
+
+apiVersion: "1.0"
+requestDTO: CommonMobileRequest
+
+endpoints:
+  - scenarioRef: "c_arm_flg=M"
+    name: MultiEvent
+    route: multi_event_M
+
+requestFields:
+  sql_cst_pan_no: MobileNo
+  sql_cst_form_no: FormNo
+
+paramNames:
+  sql_cst_pan_no: MobileNo
+  sql_cst_form_no: FormNo
+
+dbMethods:
+  q1:
+    name: GetCUSTDetailsQuery
+  q2:
+    name: UpdateCUSTStageQuery

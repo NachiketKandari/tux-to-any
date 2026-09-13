@@ -1,0 +1,141 @@
+/*******************************************************************************
+ * Name          : SVC_CUST_LIST_DTL
+ *
+ * Version       : 1.0
+ *
+ * Author        : tuxgo demo corpus
+ *
+ * Tables Accessed :
+ *                 1. CLF_LEAD_ACC_OPNG_FEE
+ *
+ * Input Parameters :
+ *                 1. Call Flag.
+ *                 2. Mobile No.
+ *
+ * Output Parameters :
+ *                 1. Lead Id
+ *                 2. Form No
+ *
+ * Description   :
+ *                 Synthetic demo service (cursor arm variant): dispatches
+ *                 on the call flag; the LIST arm walks an opening-fee lead
+ *                 cursor for a mobile number and carries every row back.
+ *
+ * Log :
+ * 1.0   14/09/2026   New service
+ * Reviewed By : demo reviewer
+ *******************************************************************************/
+
+/* Standard include files */
+#include <atmi.h>
+#include <userlog.h>
+#include <fml32.h>
+#include <string.h>
+#include <sqlca.h>
+#include <ctype.h>
+#include <fn_read_debug_lvl.h>
+
+/* User defined header files */
+#include <demo_fml_def.h>
+#include <demo_eba.h>
+
+/* Global variables */
+char c_ServiceName[33] ;
+
+void SVC_CUST_LIST_DTL(TPSVCINFO *rqst)
+{
+    /* Local variables */
+    int i;                       /* Loop counter */
+    int i_err[2];                /* Fget/Fadd error codes */
+    char c_call_flg[5];          /* dispatch flag */
+    char c_arm_flg;              /* normalized dispatch arm */
+    char c_last_form_no[11];     /* last seen form no */
+    char c_err_msg[256];
+    FBFR32 *ptr_fml_Ibuffer;     /* Input Buffer */
+    FBFR32 *ptr_fml_Obuffer;     /* Output Buffer */
+    short ind_cst_form;
+
+    /* Include all the header files for variables corresponding to table fields */
+    EXEC SQL include "table/clf_lead_acc_opng_fee.h" ;
+
+    EXEC SQL BEGIN DECLARE SECTION;
+        varchar vc_cst_lead_id[16];
+        varchar sql_cst_form_no[11];
+        varchar sql_cst_pan_no[21];
+    EXEC SQL END DECLARE SECTION;
+
+    /* Initializations */
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data ;
+    ptr_fml_Obuffer = (FBFR32*)NULL ;
+    strcpy(c_ServiceName, rqst->name) ;
+    INITDBGLVL(c_ServiceName);
+
+    userlog("Service :%s: called", c_ServiceName);
+
+    i_err[0] = Fget32(ptr_fml_Ibuffer, FML_FLG, 0, (char *)c_call_flg, 0);
+    i_err[1] = Fget32(ptr_fml_Ibuffer, FML_MOBILE_NO, 0, (char *)sql_cst_pan_no.arr, 0);
+    for(i = 0; i < 2; i++)
+    {
+        if(i_err[i] == -1)
+        {
+            errlog(c_ServiceName, "S31005", FMLMSG, DEF_USR, DEF_SSSN, c_err_msg);
+            Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_err_msg, 0);
+            tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+        }
+    }
+
+    SETLEN(sql_cst_pan_no);
+
+    userlog("Call Flag :%s:, Mobile No :%s:", c_call_flg, sql_cst_pan_no.arr);
+
+    /* normalize the dispatch flag into a scalar arm selector */
+    if(!(strcmp(c_call_flg, "L")))
+        c_arm_flg = 'L';
+    if(!(strcmp(c_call_flg, "P")))
+        c_arm_flg = 'P';
+
+    if((ptr_fml_Obuffer = (FBFR32 *)tpalloc("FML32", NULL, Fneeded32(1, 2048))) == (FBFR32 *)NULL)
+    {
+        errlog(c_ServiceName, "S31020", TPMSG, DEF_USR, DEF_SSSN, c_err_msg);
+        Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_err_msg, 0);
+        tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+    }
+
+    if(c_arm_flg == 'L')
+    {
+        MEMSET(c_last_form_no);
+
+        EXEC SQL
+          DECLARE cur_lead CURSOR FOR
+          SELECT  CST_OBOR_LEAD_ID,
+                  CST_FORM_NO
+          FROM    CLF_LEAD_ACC_OPNG_FEE
+          WHERE   CST_OLN_MOB = :sql_cst_pan_no
+          AND     CLF_LEAD_CLOSED(+) = 'N';
+
+        EXEC SQL OPEN cur_lead;
+
+        for(;;)
+        {
+            EXEC SQL FETCH cur_lead INTO :vc_cst_lead_id, :sql_cst_form_no:ind_cst_form;
+            if(SQLCODE != 0)
+            {
+                break;
+            }
+            userlog("lead |%s| form |%s|", vc_cst_lead_id.arr, sql_cst_form_no.arr);
+            strcpy(c_last_form_no, sql_cst_form_no.arr);
+        }
+
+        EXEC SQL CLOSE cur_lead;
+
+        userlog("LIST last form |%s|", c_last_form_no);
+    }
+
+    if(c_arm_flg == 'P')
+    {
+        userlog("PORT arm: portal flow handled by the portal service");
+    }
+
+    userlog("SVC_CUST_LIST_DTL completed");
+    tpreturn(TPSUCCESS, 0L, (char *)ptr_fml_Obuffer, 0L, 0);
+}
