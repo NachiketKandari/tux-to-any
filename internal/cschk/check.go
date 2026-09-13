@@ -102,8 +102,6 @@ func OracleParams(p *csplan.Plan, files map[string]string) []Issue {
 				continue
 			}
 			want := len(qp.Params)
-			got := strings.Count(content, fmt.Sprintf("new OracleParameter(%q", qp.Params[0].Bind))
-			_ = got
 			// count parameters inside this const's method: the method name
 			// is the anchor (unique per endpoint+const pair)
 			n := countOracleParams(content, qp)
@@ -124,12 +122,24 @@ func OracleParams(p *csplan.Plan, files map[string]string) []Issue {
 // NamedQueries verbatim strings only).
 var sqlHeadRe = regexp.MustCompile(`(?im)^\s*(SELECT|INSERT|UPDATE|DELETE|MERGE)\s`)
 
+// sqlHeadByKw attributes each leak to its own keyword: one SQL head must
+// yield one issue naming the statement actually seen, not five issues (the
+// generic regex cannot tell which keyword matched — and the mislabeled
+// strings feed the seam's retry notes verbatim).
+var sqlHeadByKw = map[string]*regexp.Regexp{
+	"SELECT ": regexp.MustCompile(`(?im)^\s*SELECT\s`),
+	"INSERT ": regexp.MustCompile(`(?im)^\s*INSERT\s`),
+	"UPDATE ": regexp.MustCompile(`(?im)^\s*UPDATE\s`),
+	"DELETE ": regexp.MustCompile(`(?im)^\s*DELETE\s`),
+	"MERGE ":  regexp.MustCompile(`(?im)^\s*MERGE\s`),
+}
+
 func containsSQLHead(content, kw string) bool {
-	// strip verbatim and regular string literals crudely: generate files
-	// put SQL only inside @"..." blocks; a naive split on `"` would wreck
-	// @"..." (SQL contains quotes rarely) — use the line-head regex.
-	_ = kw
-	return sqlHeadRe.MatchString(stripVerbatim(content))
+	re, ok := sqlHeadByKw[kw]
+	if !ok {
+		return sqlHeadRe.MatchString(stripVerbatim(content))
+	}
+	return re.MatchString(stripVerbatim(content))
 }
 
 // stripVerbatim removes @"..."; blocks (non-greedy to the terminating
