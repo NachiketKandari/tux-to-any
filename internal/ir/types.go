@@ -1,0 +1,283 @@
+// Package ir is the deterministic extraction layer: it folds tsscan source
+// facts into the file-level IR every downstream consumer reads. It never
+// decides — no endpoint picking, no renaming, no silent dedup — and it never
+// drops facts silently: unbalanced regions ride on File, ambiguity is
+// recorded (Ambiguous tpcalls), and duplicates stay factual
+// (DedupKey/DuplicateOf; UniqueQueries is the planning-time view).
+package ir
+
+import (
+	"tux-to-any/internal/pred"
+)
+
+// QueryType classifies a database unit by shape.
+type QueryType string
+
+const (
+	QuerySelectSingle QueryType = "SELECT_SINGLE"
+	QuerySelectMulti  QueryType = "SELECT_MULTI"
+	QueryInsert       QueryType = "INSERT"
+	QueryUpdate       QueryType = "UPDATE"
+	QueryDelete       QueryType = "DELETE"
+	QueryMerge        QueryType = "MERGE"
+)
+
+// Template identifiers mirrored as plain strings (the template registry is a
+// consumer concern; the IR only carries the id).
+const (
+	TemplateSelectSingle = "db_method_select_single"
+	TemplateSelectMulti  = "db_method_select_multi"
+	TemplateInsertTx     = "db_method_insert_tx"
+	TemplateUpdateTx     = "db_method_update_tx"
+	TemplateDeleteTx     = "db_method_delete_tx"
+	TemplateMerge        = "db_method_merge"
+)
+
+// TemplateID maps the query type to its generation template id.
+func (q QueryType) TemplateID() string {
+	switch q {
+	case QuerySelectSingle:
+		return TemplateSelectSingle
+	case QuerySelectMulti:
+		return TemplateSelectMulti
+	case QueryInsert:
+		return TemplateInsertTx
+	case QueryUpdate:
+		return TemplateUpdateTx
+	case QueryDelete:
+		return TemplateDeleteTx
+	case QueryMerge:
+		return TemplateMerge
+	}
+	return ""
+}
+
+// IsDML reports whether the type is a mutating statement.
+func (q QueryType) IsDML() bool {
+	switch q {
+	case QueryInsert, QueryUpdate, QueryDelete, QueryMerge:
+		return true
+	}
+	return false
+}
+
+// IsErrField is the one home of the ERR-field rule: any FML field whose name
+// carries "ERR" is an error carrier.
+func IsErrField(field string) bool {
+	return containsFieldToken(field, "ERR")
+}
+
+func containsFieldToken(field, token string) bool {
+	if len(token) == 0 {
+		return false
+	}
+	for i := 0; i+len(token) <= len(field); i++ {
+		if field[i:i+len(token)] == token {
+			return true
+		}
+	}
+	return false
+}
+
+// FmlOpKind splits FML traffic by direction: Fget32 reads the request in,
+// Fadd32 writes the response out.
+type FmlOpKind string
+
+const (
+	FmlGet FmlOpKind = "get"
+	FmlAdd FmlOpKind = "add"
+)
+
+// FmlOp is one FML field access. Target is the host variable written (add)
+// or filled (get); Code is the legacy error-message code correlated through
+// the errlog/strcpy/sprintf writer convention; Optional marks an
+// FNOTPRES-guarded read; Dropped marks fields the conversion deliberately
+// drops (session/error plumbing).
+type FmlOp struct {
+	Kind     FmlOpKind `json:"kind"`
+	Field    string    `json:"field"`
+	Target   string    `json:"target,omitempty"`
+	Buffer   string    `json:"buffer,omitempty"`
+	Line     int       `json:"line"`
+	Code     string    `json:"code,omitempty"`
+	Optional bool      `json:"optional,omitempty"`
+	Dropped  bool      `json:"dropped,omitempty"`
+	Error    bool      `json:"error,omitempty"`
+}
+
+// FmlBufferRole is the resolved role of an FML buffer variable.
+type FmlBufferRole string
+
+const (
+	BufferInput   FmlBufferRole = "input"
+	BufferOutput  FmlBufferRole = "output"
+	BufferSend    FmlBufferRole = "send"
+	BufferRecv    FmlBufferRole = "recv"
+	BufferUnknown FmlBufferRole = "unknown-role"
+)
+
+// BufferRole records one buffer variable and its resolved role. Unknown
+// roles are recorded, never guessed.
+type BufferRole struct {
+	Name string        `json:"name"`
+	Role FmlBufferRole `json:"role"`
+}
+
+// TPCall is one correlated service call: the service, the buffers handed
+// across it, and the FML contracts on both sides gathered from the
+// surrounding block. Empty contracts with identified buffers are ambiguous
+// — recorded loudly, never guessed away.
+type TPCall struct {
+	Service     string  `json:"service"`
+	ServiceFile string  `json:"service_file,omitempty"`
+	SendBuffer  string  `json:"send_buffer,omitempty"`
+	RecvBuffer  string  `json:"recv_buffer,omitempty"`
+	SendFML     []FmlOp `json:"send_fml,omitempty"`
+	RecvFML     []FmlOp `json:"recv_fml,omitempty"`
+	StartLine   int     `json:"start_line"`
+	EndLine     int     `json:"end_line"`
+	Function    string  `json:"function,omitempty"`
+	Ambiguous   bool    `json:"ambiguous,omitempty"`
+}
+
+// HostVar is a host variable referenced by queries or FML traffic, typed
+// from the file's own declarations when possible.
+type HostVar struct {
+	Name             string `json:"name"`
+	CType            string `json:"c_type,omitempty"`
+	GoHint           string `json:"go_hint,omitempty"`
+	Array            bool   `json:"array,omitempty"`
+	Nullable         bool   `json:"nullable,omitempty"`
+	FromHeader       bool   `json:"from_header,omitempty"`
+	InDeclareSection bool   `json:"in_declare_section,omitempty"`
+}
+
+// Query is one database unit. Cursor units carry the cursor's raw-case name
+// as both ID and CursorName, with CursorFlattened marking the
+// DECLARE→CLOSE choreography folded into a single SELECT_MULTI. Duplicates
+// stay in the file (DuplicateOf points at the first unit of the group);
+// UniqueQueries is the planning-time view.
+type Query struct {
+	ID              string    `json:"id"`
+	Type            QueryType `json:"type"`
+	TemplateID      string    `json:"template_id"`
+	SQL             string    `json:"sql"`
+	Aliases         []string  `json:"aliases,omitempty"`
+	StartLine       int       `json:"start_line"`
+	EndLine         int       `json:"end_line"`
+	OwningFunction  string    `json:"owning_function"`
+	CursorName      string    `json:"cursor_name,omitempty"`
+	CursorFlattened bool      `json:"cursor_flattened,omitempty"`
+	Tables          []string  `json:"tables"`
+	Binds           []string  `json:"binds"`
+	BindArity       int       `json:"bind_arity"`
+	RowShape        []string  `json:"row_shape,omitempty"`
+	OrderBy         string    `json:"order_by,omitempty"`
+	Sites           []int     `json:"sites"`
+	DedupKey        string    `json:"dedup_key"`
+	DuplicateOf     string    `json:"duplicate_of,omitempty"`
+	DefinedBy       string    `json:"defined_by,omitempty"`
+}
+
+// Condition is one member of the entry function's top-level dispatch chain.
+// Predicate is the parsed C-precedence tree of the raw Expr text; FlagVars
+// are the predicate identifiers that are FML read-targets; FmlOps and
+// QueryIDs collect the traffic that lives inside the branch's span.
+type Condition struct {
+	Index     int        `json:"index"`
+	Kind      string     `json:"kind"`
+	Expr      string     `json:"expr,omitempty"`
+	Predicate *pred.Expr `json:"predicate,omitempty"`
+	FlagVars  []string   `json:"flag_vars,omitempty"`
+	StartLine int        `json:"start_line"`
+	EndLine   int        `json:"end_line"`
+	FmlOps    []FmlOp    `json:"fml_ops,omitempty"`
+	QueryIDs  []string   `json:"query_ids,omitempty"`
+	IsDefault bool       `json:"is_default,omitempty"`
+}
+
+// ContainsLine is the one ownership predicate for associating facts with a
+// condition's branch span.
+func (c *Condition) ContainsLine(line int) bool {
+	return line >= c.StartLine && line <= c.EndLine
+}
+
+// ExternalFn is a project-convention symbol (fn_*/chk_* prefix) called but
+// not defined locally; directory mode resolves it against the corpus.
+type ExternalFn struct {
+	Name      string   `json:"name"`
+	Resolved  bool     `json:"resolved,omitempty"`
+	DefinedIn string   `json:"defined_in,omitempty"`
+	HasSQL    bool     `json:"has_sql,omitempty"`
+	Callsites []int    `json:"callsites"`
+	QueryIDs  []string `json:"query_ids,omitempty"`
+}
+
+// Unbalanced is a loud record of a construct the scanner could not close.
+type Unbalanced struct {
+	Kind string `json:"kind"`
+	Line int    `json:"line"`
+	Col  int    `json:"col"`
+}
+
+// Define is one #define/#undef fact with its lexical scope: file scope when
+// Function is empty, function scope (from its line onward, shadowing file
+// scope) otherwise. Macros are audit-only and never substituted.
+type Define struct {
+	Name     string `json:"name"`
+	Value    string `json:"value,omitempty"`
+	Line     int    `json:"line"`
+	Function string `json:"function,omitempty"`
+	Macro    bool   `json:"macro,omitempty"`
+	Undef    bool   `json:"undef,omitempty"`
+}
+
+// File is the extracted IR for one source file.
+type File struct {
+	Path            string       `json:"path"`
+	Entry           string       `json:"entry,omitempty"`
+	Fragment        bool         `json:"fragment,omitempty"`
+	Functions       []string     `json:"functions"`
+	Defines         []Define     `json:"defines,omitempty"`
+	BranchCount     int          `json:"branch_count"`
+	BranchingFactor int          `json:"branching_factor"`
+	Conditions      []Condition  `json:"conditions,omitempty"`
+	FmlOps          []FmlOp      `json:"fml_ops,omitempty"`
+	Buffers         []BufferRole `json:"buffers,omitempty"`
+	TPCalls         []TPCall     `json:"tpcalls,omitempty"`
+	Queries         []*Query     `json:"queries"`
+	HostVars        []HostVar    `json:"host_vars"`
+	ExternalFns     []ExternalFn `json:"external_fns,omitempty"`
+	Unbalanced      []Unbalanced `json:"unbalanced,omitempty"`
+}
+
+// Condition returns the condition with the given 1-based index — the one
+// lookup for plan (map building) and gen (linear scans).
+func (f *File) Condition(index int) *Condition {
+	for i := range f.Conditions {
+		if f.Conditions[i].Index == index {
+			return &f.Conditions[i]
+		}
+	}
+	return nil
+}
+
+// SameCursor compares cursor names case-insensitively (the scanner
+// uppercases, the IR keeps raw casing).
+func SameCursor(a, b string) bool {
+	return equalFold(a, b)
+}
+
+// UniqueQueries returns the first unit of every DedupKey group, in IR order.
+func (f *File) UniqueQueries() []*Query {
+	seen := make(map[string]bool, len(f.Queries))
+	out := make([]*Query, 0, len(f.Queries))
+	for _, q := range f.Queries {
+		if seen[q.DedupKey] {
+			continue
+		}
+		seen[q.DedupKey] = true
+		out = append(out, q)
+	}
+	return out
+}
