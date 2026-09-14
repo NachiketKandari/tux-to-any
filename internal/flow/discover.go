@@ -185,7 +185,7 @@ func fmlCensus(n *Node) struct {
 				seenGet[op.Field] = true
 				out.gets = append(out.gets, op.Field)
 			}
-		case op.Kind == ir.FmlAdd && isErrorAdd(op, n):
+		case op.Kind == ir.FmlAdd && isErrorAdd(op):
 			if !seenErr[op.Field] {
 				seenErr[op.Field] = true
 				out.errorAdds = append(out.errorAdds, op.Field)
@@ -216,29 +216,26 @@ func fmlCodes(n *Node) []string {
 	return out
 }
 
-// isErrorAdd reports an error-emission add: an ERR field or an add into a
-// buffer with a known input/send role (the "fadd err = returning error"
-// idiom). Unknown-role buffers stay conservative — a plain add is a
-// response write unless proven otherwise. Gets never qualify: a read-guard
-// node shares the input buffer, and marking its GETs as error emissions
-// would erase the branch's request fields from the contract.
-func isErrorAdd(op ir.FmlOp, n *Node) bool {
+// isErrorAdd reports an error-emission add: the field is an ERR field or
+// the value written is the service's error-message variable (the "fadd
+// c_errmsg = returning error" idiom). The buffer plays no part — the reply
+// is often the request buffer reused in place, so a role-based rule would
+// swallow genuine response writes (FML_VLME into the reused input buffer).
+// Every non-error add is a response write: something is returned either
+// way, which is what makes the branch convertible into an API. Gets never
+// qualify: a read-guard node shares the input buffer, and marking its GETs
+// as error emissions would erase the branch's request fields from the
+// contract.
+func isErrorAdd(op ir.FmlOp) bool {
 	if op.Kind != ir.FmlAdd {
 		return false
 	}
-	if ir.IsErrField(op.Field) {
-		return true
-	}
-	if role, ok := n.BufRoles[op.Buffer]; ok && (role == "input" || role == "send") {
-		return true
-	}
-	return false
+	return ir.IsErrField(op.Field) || ir.IsErrValue(op.Target)
 }
 
 // Census summarizes a condition's FML ops with the discovery error-add rule
-// (DIS-D2, ERR-field convention — buffer roles need the flow node, so this
-// inventory-level helper is the approximation the draft comments use). It
-// works for any condition, qualifying or not.
+// (DIS-D2, ERR-field/value convention — the error emissions the draft
+// comments use). It works for any condition, qualifying or not.
 func Census(c *ir.Condition) (gets, adds, errs []string) {
 	seen := map[string]map[string]bool{"/g": {}, "/a": {}, "/e": {}}
 	add := func(k, s string) []string {
@@ -259,7 +256,7 @@ func Census(c *ir.Condition) (gets, adds, errs []string) {
 		switch {
 		case op.Kind == ir.FmlGet:
 			add("/g", op.Field)
-		case op.Kind == ir.FmlAdd && ir.IsErrField(op.Field):
+		case op.Kind == ir.FmlAdd && (ir.IsErrField(op.Field) || ir.IsErrValue(op.Target)):
 			add("/e", op.Field)
 		case op.Kind == ir.FmlAdd:
 			add("/a", op.Field)
@@ -366,7 +363,7 @@ func synthCondition(n *Node) *ir.Condition {
 	}
 	for _, op := range n.FmlOps {
 		o := op
-		if isErrorAdd(o, n) {
+		if isErrorAdd(o) {
 			o.Error = true
 		}
 		c.FmlOps = append(c.FmlOps, o)

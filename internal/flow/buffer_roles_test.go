@@ -6,37 +6,50 @@ import (
 	"tux-to-any/internal/ir"
 )
 
-// The engine-wiring audit (docs/engine-wiring-audit.md Tier-1 #4) pinned
-// the buffer-role exclusion: adds into input/send-role buffers are request
-// plumbing, never response-mapping candidates — but only when the roles
-// actually reach the flow node (the wiring bug: discover extracted with an
-// empty registry, so every buffer was unknown-role and the exclusion never
-// fired, inflating the response census).
-func TestBufferRoleExcludesRequestAddsFromResponseMapping(t *testing.T) {
-	// BufRoles keys are the raw extracted buffer names (flow.Build maps
-	// irFile.Buffers verbatim); the role VALUE is what the audit's wiring
-	// bug zeroed out ("unknown-role" for every buffer).
-	withRole := &Node{BufRoles: map[string]string{"ptr_fml_Ibuffer": "input"}}
-	inputAdd := ir.FmlOp{Kind: ir.FmlAdd, Buffer: "ptr_fml_Ibuffer", Field: "FML_MODE_FLG"}
-	if !isErrorAdd(inputAdd, withRole) {
-		t.Error("add into an input-role buffer must classify as request plumbing, not a response write")
+// The error-emission rule is field+value based, never buffer based: the
+// reply is frequently the request buffer reused in place, so a role-based
+// rule (adds into input/send buffers = errors) swallowed genuine response
+// writes (FML_VLME into the reused input buffer, risk.pc). Error-ness is
+// the FML_ERR field or the error-message value written (c_errmsg); every
+// other add is a response write — something is returned either way.
+func TestErrorAddClassificationIsFieldAndValueBased(t *testing.T) {
+	errField := ir.FmlOp{Kind: ir.FmlAdd, Buffer: "ptr_fml_Ibuffer", Field: "FML_ERR_MSG", Target: "c_errmsg"}
+	if !isErrorAdd(errField) {
+		t.Error("an ERR-field add must classify as an error emission")
 	}
-	if isErrorAdd(inputAdd, &Node{}) {
-		t.Error("unknown-role buffer stays conservative — a plain add is a response write until proven otherwise")
+	errValue := ir.FmlOp{Kind: ir.FmlAdd, Buffer: "ptr_fml_Ibuffer", Field: "FML_STATLIN", Target: "c_errmsg"}
+	if !isErrorAdd(errValue) {
+		t.Error("a c_errmsg-valued add must classify as an error emission even on a non-ERR field")
 	}
-	if isErrorAdd(ir.FmlOp{Kind: ir.FmlAdd, Buffer: "ptr_fml_Ibuffer", Field: "FML_X"}, &Node{BufRoles: map[string]string{"ptr_fml_Ibuffer": "unknown-role"}}) {
-		t.Error("an unknown-ROLE buffer (the audit's extraction output) must stay conservative")
+	valueCase := ir.FmlOp{Kind: ir.FmlAdd, Buffer: "ptr_fml_Sbuffer", Field: "FML_ERR_TXT", Target: "C_Err_Msg"}
+	if !isErrorAdd(valueCase) {
+		t.Error("the value rule matches case-insensitively, underscores flattened")
 	}
+	response := ir.FmlOp{Kind: ir.FmlAdd, Buffer: "ptr_fml_Ibuffer", Field: "FML_VLME", Target: "&i_return_val"}
+	if isErrorAdd(response) {
+		t.Error("a plain add into the reused input buffer is a response write, not an error emission")
+	}
+	get := ir.FmlOp{Kind: ir.FmlGet, Field: "FML_ERR_CODE", Target: "c_err"}
+	if isErrorAdd(get) {
+		t.Error("gets never qualify as error emissions")
+	}
+}
 
+func TestFanoutKeepsResponseAddsRegardlessOfBufferRole(t *testing.T) {
 	fanout := fanoutAdds(&Node{
 		FmlOps: []ir.FmlOp{
-			{Kind: ir.FmlAdd, Buffer: "ptr_fml_Ibuffer", Field: "FML_A"},
-			{Kind: ir.FmlAdd, Buffer: "ptr_fml_Ibuffer", Field: "FML_B"},
-			{Kind: ir.FmlAdd, Buffer: "ptr_fml_Obuffer", Field: "FML_C"},
+			{Kind: ir.FmlAdd, Buffer: "ptr_fml_Ibuffer", Field: "FML_A", Target: "c_a"},
+			{Kind: ir.FmlAdd, Buffer: "ptr_fml_Ibuffer", Field: "FML_B", Target: "c_b"},
+			{Kind: ir.FmlAdd, Buffer: "ptr_fml_Ibuffer", Field: "FML_ERR_MSG", Target: "c_errmsg"},
+			{Kind: ir.FmlAdd, Buffer: "ptr_fml_Sbuffer", Field: "FML_C", Target: "c_msg"},
 		},
-		BufRoles: map[string]string{"ptr_fml_Ibuffer": "input", "ptr_fml_Obuffer": "output"},
+		BufRoles: map[string]string{"ptr_fml_Ibuffer": "input", "ptr_fml_Sbuffer": "send"},
 	})
-	if len(fanout) != 0 {
-		t.Errorf("input-role adds must not surface as response-mapping fanout, got %v", fanout)
+	if len(fanout) != 1 {
+		t.Fatalf("fanout buffers = %v, want only ptr_fml_Ibuffer", fanout)
+	}
+	fields := fanout["ptr_fml_Ibuffer"]
+	if len(fields) != 2 || fields[0] != "FML_A" || fields[1] != "FML_B" {
+		t.Errorf("fanout fields = %v, want [FML_A FML_B] — the error emission excluded, role ignored", fields)
 	}
 }

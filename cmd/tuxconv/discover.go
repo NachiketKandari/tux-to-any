@@ -130,18 +130,19 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *con
 			// stay loadable for the non-axis legacy files). The artifacts
 			// are the human-validation evidence and write regardless; the
 			// draft needs at least one scenario passing the census rubric
-			// (request reads AND non-error response writes).
+			// (FML traffic on either contract side — a reads-only slice is
+			// a message-only API, the handler returns the string).
 			scens := flow.Scenarios(tree, axis)
 			diff := flow.DiffScenarios(f.Entry, scens)
 			qualifying := 0
 			for _, sc := range scens {
-				if len(sc.Gets) > 0 && len(sc.Adds) > 0 {
+				if sc.CarriesContract() {
 					qualifying++
 				}
 			}
 			printScenarioSummary(f, axis, scens)
 			if qualifying == 0 {
-				fmt.Printf("- %s: axis %s — no scenario carries reads+writes (the census rubric); map manually if you know better\n", f.Entry, axis)
+				fmt.Printf("- %s: axis %s — no scenario carries FML traffic (reads or writes); map manually if you know better\n", f.Entry, axis)
 			} else {
 				aiNames := aiNameScenarios(ctx, log, client, bd, f, scens, diff, src, rec)
 				draft = renderScenarioDraft(f, axis, scens, diff, aiNames, dirMode)
@@ -402,13 +403,16 @@ func renderScenarioDraft(f *ir.File, axis *flow.DispatchAxis, scens []*flow.Scen
 	sb.WriteString("\nendpoints:\n")
 	var logicOnly []*flow.Scenario
 	for _, sc := range scens {
-		if len(sc.Gets) == 0 || len(sc.Adds) == 0 {
+		if !sc.CarriesContract() {
 			logicOnly = append(logicOnly, sc)
 			continue
 		}
 		ext := sc.BodyExtent()
 		fmt.Fprintf(&sb, "  - scenarioRef: %-16s # kept lines %d-%d | reads: %s | writes: %s",
 			scenarioRefValue(sc), ext[0], ext[1], censusList(sc.Gets, 12), censusList(sc.Adds, 12))
+		if len(sc.Adds) == 0 {
+			sb.WriteString(" | message-only: handler returns the message string")
+		}
 		if qids := scenarioQueryIDs(sc); len(qids) > 0 {
 			fmt.Fprintf(&sb, " | queries: %d (%s)", len(qids), censusList(qids, 20))
 		}
@@ -422,7 +426,7 @@ func renderScenarioDraft(f *ir.File, axis *flow.DispatchAxis, scens []*flow.Scen
 		writeSuggestion(&sb, aiNames[sc.Key])
 	}
 	if len(logicOnly) > 0 {
-		sb.WriteString("# scenarios without reads+writes (the census rubric) — map manually if you know better:\n")
+		sb.WriteString("# scenarios with no FML traffic (pure logic) — map manually if you know better:\n")
 		for _, sc := range logicOnly {
 			fmt.Fprintf(&sb, "# - scenarioRef: %-14s # reads: %s | writes: %s | queries: %d\n",
 				scenarioRefValue(sc), fieldsOrDash(sc.Gets), fieldsOrDash(sc.Adds), len(scenarioQueryIDs(sc)))
@@ -508,8 +512,13 @@ func printScenarioSummary(f *ir.File, axis *flow.DispatchAxis, scens []*flow.Sce
 	fmt.Printf("\n%s: %d scenario(s) on %s\n", f.Entry, len(scens), axis)
 	for _, sc := range scens {
 		note := ""
-		if len(sc.Gets) == 0 || len(sc.Adds) == 0 {
-			note = "  (logic-only — reads+writes census)"
+		switch {
+		case len(sc.Gets) == 0 && len(sc.Adds) == 0:
+			note = "  (logic-only — no FML traffic)"
+		case len(sc.Adds) == 0:
+			note = "  (message-only — handler returns the message string)"
+		case len(sc.Gets) == 0:
+			note = "  (emit-only — empty request body)"
 		}
 		fmt.Printf("  %-12s kept %3d dropped %3d unfolded %d  reads %-2d writes %-2d queries %-3d%s\n",
 			scenarioRefValue(sc), sc.Counts.Kept, sc.Counts.Dropped, sc.Counts.Unfolded,

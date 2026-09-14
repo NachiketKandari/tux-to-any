@@ -7,6 +7,8 @@
 package ir
 
 import (
+	"strings"
+
 	"tux-to-any/internal/pred"
 )
 
@@ -65,6 +67,21 @@ func (q QueryType) IsDML() bool {
 // carries "ERR" is an error carrier.
 func IsErrField(field string) bool {
 	return containsFieldToken(field, "ERR")
+}
+
+// IsErrValue is the value side of the error rule: the host variable an
+// Fadd32 writes is the service's error-message carrier (c_errmsg and
+// friends). Error-ness is decided by the field and the value written —
+// never the buffer: the reply is frequently the request buffer reused
+// in place, so the buffer a message lands in says nothing. An add that
+// is not an error emission is a response write — something is returned
+// either way, which is what makes the branch convertible into an API.
+func IsErrValue(target string) bool {
+	if target == "" {
+		return false
+	}
+	flat := strings.ReplaceAll(strings.ToLower(target), "_", "")
+	return strings.Contains(flat, "errmsg")
 }
 
 func containsFieldToken(field, token string) bool {

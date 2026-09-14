@@ -131,15 +131,15 @@ func isErrOpLoop(n *Node) bool {
 }
 
 // isRequestGuard reports the request-read guard shape: an if whose condition
-// contains an Fget32 call, whose body adds an error field and returns
-// (tpreturn or C return).
+// contains an Fget32 call, whose body adds an error field or error-message
+// value and returns (tpreturn or C return).
 func isRequestGuard(n *Node) bool {
 	if !strings.Contains(n.Cond, "Fget32") {
 		return false
 	}
 	errAdd := false
 	for _, op := range n.FmlOps {
-		if op.Kind == ir.FmlAdd && ir.IsErrField(op.Field) {
+		if op.Kind == ir.FmlAdd && (ir.IsErrField(op.Field) || ir.IsErrValue(op.Target)) {
 			errAdd = true
 		}
 	}
@@ -178,19 +178,16 @@ func isDebugIf(n *Node) bool {
 
 // fanoutAdds groups the node's Fadd32 ops by buffer, returning field names
 // per buffer with ≥2 adds (the response-mapping idiom). Error emissions are
-// not response mapping: adds into the input/send buffers (IR roles) or of
-// ERR fields are excluded.
+// not response mapping — an ERR field or an error-message value (the
+// "fadd c_errmsg = returning error" idiom) is excluded. The buffer plays no
+// part: the reply is often the request buffer reused in place.
 func fanoutAdds(n *Node) map[string][]string {
 	byBuf := map[string][]string{}
 	for _, op := range n.FmlOps {
 		if op.Kind != ir.FmlAdd {
 			continue
 		}
-		if ir.IsErrField(op.Field) {
-			continue
-		}
-		if role, ok := n.BufRoles[op.Buffer]; ok &&
-			(role == "input" || role == "send") {
+		if ir.IsErrField(op.Field) || ir.IsErrValue(op.Target) {
 			continue
 		}
 		byBuf[op.Buffer] = append(byBuf[op.Buffer], op.Field)

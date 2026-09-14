@@ -515,6 +515,17 @@ type Scenario struct {
 	Counts    ScenarioCounts     `json:"counts"`
 }
 
+// CarriesContract is the census rubric (SCEN-5): the slice maps to an API
+// when it carries FML traffic on either side of the contract. Writes are
+// not required — a reads-only scenario is a message-only API: the
+// controller returns the message string (and err) and the handler wraps
+// it into the response envelope. Likewise a writes-only slice is a
+// zero-input endpoint. Only a slice with no FML traffic at all stays
+// logic-only.
+func (sc *Scenario) CarriesContract() bool {
+	return len(sc.Gets) > 0 || len(sc.Adds) > 0
+}
+
 // ScenarioCounts reconcile the slice against the tree: Kept+Dropped must
 // equal the classified lines inside the body span (coverage cross-check).
 type ScenarioCounts struct {
@@ -1269,7 +1280,7 @@ func censusOf(sc *Scenario, tree *Tree) {
 			switch {
 			case op.Kind == ir.FmlGet:
 				gets[op.Field] = true
-			case op.Kind == ir.FmlAdd && isErrorAdd(op, n):
+			case op.Kind == ir.FmlAdd && isErrorAdd(op):
 				errs[op.Field] = true
 			case op.Kind == ir.FmlAdd:
 				adds[op.Field] = true
@@ -1969,7 +1980,7 @@ func ScenarioCondition(sc *Scenario, tree *Tree) *ir.Condition {
 				continue
 			}
 			seen[key] = true
-			if isErrorAdd(op, n) {
+			if isErrorAdd(op) {
 				op.Error = true
 			}
 			c.FmlOps = append(c.FmlOps, op)

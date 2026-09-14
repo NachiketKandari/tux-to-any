@@ -74,14 +74,15 @@ func Render(f *ir.File, tree *flow.Tree, src []byte, opts Options) string {
 }
 
 // writeScenarioEndpoints emits one scenarioRef endpoint per qualifying
-// scenario slice (the census rubric — request reads AND non-error response
-// writes); the logic-only slices stay commented for user control.
+// scenario slice (the census rubric — FML traffic on either contract side;
+// a reads-only slice is a message-only API, the handler returns the
+// string); the pure-logic slices stay commented for user control.
 func writeScenarioEndpoints(sb *strings.Builder, tree *flow.Tree, axis *flow.DispatchAxis, component, stem string) {
 	scens := flow.Scenarios(tree, axis)
 	routeStem := routeStemOf(stem)
 	var logicOnly []*flow.Scenario
 	for _, sc := range scens {
-		if len(sc.Gets) == 0 || len(sc.Adds) == 0 {
+		if !sc.CarriesContract() {
 			logicOnly = append(logicOnly, sc)
 			continue
 		}
@@ -93,7 +94,7 @@ func writeScenarioEndpoints(sb *strings.Builder, tree *flow.Tree, axis *flow.Dis
 		fmt.Fprintf(sb, "    route: %-16s # deterministic — edit freely\n", strconvQuote(routeStem+"_"+sc.Value))
 	}
 	if len(logicOnly) > 0 {
-		sb.WriteString("# scenarios without reads+writes (the census rubric) — map manually if you know better:\n")
+		sb.WriteString("# scenarios with no FML traffic (pure logic) — map manually if you know better:\n")
 		for _, sc := range logicOnly {
 			fmt.Fprintf(sb, "# - scenarioRef: %-14s # reads: %s | writes: %s\n",
 				strconvQuote(sc.Key), capList(sc.Gets, 8), capList(sc.Adds, 8))

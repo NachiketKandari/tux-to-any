@@ -69,8 +69,11 @@ func TestDraftRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Endpoints) != 1 || plan.Endpoints[0].Name != "CustGetDtlC" {
-		t.Fatalf("plan endpoints = %v, want [CustGetDtlC]", plan.Endpoints)
+	// Both arms map now: C carries FML reads+writes; P is the message-only
+	// shape (reads the shared preamble, emits no FML) — the census rubric
+	// accepts it as an endpoint whose handler returns the message string.
+	if len(plan.Endpoints) != 2 || plan.Endpoints[0].Name != "CustGetDtlC" || plan.Endpoints[1].Name != "CustGetDtlP" {
+		t.Fatalf("plan endpoints = %v, want [CustGetDtlC CustGetDtlP]", plan.Endpoints)
 	}
 	res, err := csgen.Generate(t.Context(), csgen.Options{Plan: plan, NoLLM: true})
 	if err != nil {
