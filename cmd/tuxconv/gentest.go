@@ -90,6 +90,13 @@ func runGentest(ctx context.Context, args []string) error {
 		archiveGapReport(ctx, rep)
 		return nil
 	}
+	// Scan warnings reach the operator in generate mode too (engine-wiring
+	// audit Tier-1 #9: pre-fix they were logged as a count only; an
+	// unreadable dir or unparseable file silently shrank the gap report).
+	for _, wn := range rep.Warnings {
+		log.Warn("gentest scan warning", "detail", wn)
+		fmt.Println("  scan warning:", wn)
+	}
 
 	// Staged-first output: -base wins, else paths.staged.
 	base := *baseDir
