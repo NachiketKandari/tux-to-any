@@ -108,16 +108,32 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		archived, messages := in.Prompt(notes)
+		inputTokens := in.Budget.Count(archived)
 		if in.Budget.MaxPromptTokens > 0 {
 			if berr := in.Budget.CheckInput(archived); berr != nil {
 				return "", calls, notes, berr
 			}
 		}
+		// The output ceiling for this attempt: the dynamic policy derives it
+		// from the model context minus the measured input (clamped by the
+		// provider's completion cap); the static policy returns
+		// MaxOutputTokens (0 = no ceiling). A room the reserve collapsed to
+		// near zero means the prompt over-consumed the context — loud, not
+		// a one-token generation.
+		cap := in.Budget.OutputCeiling(inputTokens)
+		if in.Budget.Dynamic() && cap < 256 {
+			return "", calls, notes, fmt.Errorf("budget: prompt of ~%d tokens leaves only %d tokens of output room against the %d-token context — shrink the prompt, raise the context, or lower the reserve",
+				inputTokens, cap, in.Budget.ModelContextTokens)
+		}
+		maxTokens := in.MaxTokens // the seam's explicit override wins (thinking-mode room)
+		if maxTokens == 0 && in.Budget.Dynamic() {
+			maxTokens = cap
+		}
 		resp, cerr := in.Client.Chat(ctx, ChatRequest{
 			Model:       "", // endpoint default (resolved by the client's wiring)
 			Messages:    messages,
 			Temperature: in.Temperature,
-			MaxTokens:   in.MaxTokens,
+			MaxTokens:   maxTokens,
 		})
 		calls++
 		if cerr != nil {
@@ -140,8 +156,8 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 				"finish_reason", resp.FinishReason, "total_tokens", resp.Usage.TotalTokens)
 			notes = append(notes, "response truncated (finish_reason "+resp.FinishReason+") — the payload may be incomplete")
 		}
-		if in.Budget.MaxOutputTokens > 0 {
-			if berr := in.Budget.CheckOutput(resp.Content); berr != nil {
+		if cap > 0 {
+			if berr := in.Budget.CheckOutputCap(resp.Content, cap); berr != nil {
 				lastErr = berr
 				record(attempt, archived, resp, []string{berr.Error()})
 				notes = append(notes, "output over budget: "+berr.Error())

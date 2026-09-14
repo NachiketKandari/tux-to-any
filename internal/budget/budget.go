@@ -17,6 +17,16 @@ type Budget struct {
 	MaxPromptTokens int
 	MaxOutputTokens int
 	CharsPerToken   int
+
+	// Dynamic output policy (run.tokenPolicy: dynamic): the per-call output
+	// room derives from the model's real context window minus the measured
+	// input, clamped by the provider's per-request completion cap — a
+	// static MaxOutputTokens below the model's room truncates bodies that
+	// would have fit. ModelContextTokens enables the policy; zero keeps the
+	// static ceilings.
+	ModelContextTokens   int
+	ModelMaxOutputTokens int
+	OutputReserveTokens  int
 }
 
 // New returns a Budget. A non-positive charsPerToken falls back to the §4.3
@@ -32,10 +42,15 @@ func New(maxPromptTokens, maxOutputTokens, charsPerToken int) Budget {
 	}
 }
 
-// Count approximates the token count of s (chars/ratio, rounded up).
+// Count approximates the token count of s (chars/ratio, rounded up). A
+// zero-value Budget carries ratio 0 — fall back to the §4.3 default of 4 so
+// a mis-built Budget cannot divide by zero.
 func (b Budget) Count(s string) int {
 	if s == "" {
 		return 0
+	}
+	if b.CharsPerToken <= 0 {
+		b.CharsPerToken = 4
 	}
 	n := len(s)
 	tokens := n / b.CharsPerToken
@@ -70,6 +85,42 @@ func (b Budget) CheckInput(prompt string) error {
 func (b Budget) CheckOutput(response string) error {
 	if have := b.Count(response); have > b.MaxOutputTokens {
 		return &ErrOverBudget{Section: "output", Have: have, Limit: b.MaxOutputTokens}
+	}
+	return nil
+}
+
+// Dynamic reports whether the output room derives from the model context
+// rather than the static MaxOutputTokens.
+func (b Budget) Dynamic() bool { return b.ModelContextTokens > 0 }
+
+// OutputCeiling is the output ceiling for one call given the input's token
+// estimate: the dynamic policy returns min(context − input − reserve,
+// modelMaxOutput) — never below 1 — and the static policy returns
+// MaxOutputTokens (0 when unset: no ceiling). The caller passes the input's
+// estimated tokens; a 40%-skewed estimate overclaims the room, which the
+// reserve absorbs after charsPerToken calibration.
+func (b Budget) OutputCeiling(inputTokens int) int {
+	if !b.Dynamic() {
+		return b.MaxOutputTokens
+	}
+	if b.OutputReserveTokens < 0 {
+		b.OutputReserveTokens = 0
+	}
+	room := b.ModelContextTokens - inputTokens - b.OutputReserveTokens
+	if b.ModelMaxOutputTokens > 0 && room > b.ModelMaxOutputTokens {
+		room = b.ModelMaxOutputTokens
+	}
+	if room < 1 {
+		room = 1
+	}
+	return room
+}
+
+// CheckOutputCap validates a model response against an explicit ceiling —
+// the dynamic OutputCeiling result at the seam call site.
+func (b Budget) CheckOutputCap(response string, limit int) error {
+	if have := b.Count(response); have > limit {
+		return &ErrOverBudget{Section: "output", Have: have, Limit: limit}
 	}
 	return nil
 }

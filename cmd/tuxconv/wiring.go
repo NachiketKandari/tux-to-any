@@ -20,13 +20,27 @@ type runWiring struct {
 	audit  *audit.Recorder // nil when the archive folder is unavailable
 }
 
+// runBudget resolves the run's budget from the config: the static ceilings
+// plus the dynamic output policy when run.tokenPolicy selects it — the
+// per-call output room then derives from the model's real context instead of
+// a configured cap (config validate enforces the dynamic knobs).
+func runBudget(r config.Run) budget.Budget {
+	b := budget.New(r.MaxPromptTokens, r.MaxOutputTokens, r.CharsPerToken)
+	if r.TokenPolicy == "dynamic" {
+		b.ModelContextTokens = r.ModelContextTokens
+		b.ModelMaxOutputTokens = r.ModelMaxOutputTokens
+		b.OutputReserveTokens = r.OutputReserveTokens
+	}
+	return b
+}
+
 // newWiring resolves the bundle. Audit degradation is visible (WARN), never
 // fatal — the audit trail is best-effort by contract (§4.7).
 func newWiring(ctx context.Context, cfg *config.Config) *runWiring {
 	log := telemetry.Log(ctx)
 	w := &runWiring{
 		cfg:    cfg,
-		budget: budget.New(cfg.Run.MaxPromptTokens, cfg.Run.MaxOutputTokens, cfg.Run.CharsPerToken),
+		budget: runBudget(cfg.Run),
 	}
 	rec, err := audit.New(auditDir, telemetry.RunIDFromContext(ctx))
 	if err != nil {

@@ -225,7 +225,7 @@ type convertWiring struct {
 // review is a free re-run (no tree cleanup, no half-converted state).
 func draftAndStop(ctx context.Context, target string, cfg *config.Config, noLLM bool) error {
 	client := resolveLLMClient(ctx, cfg, noLLM, "endpoint naming")
-	bd := budget.New(cfg.Run.MaxPromptTokens, cfg.Run.MaxOutputTokens, cfg.Run.CharsPerToken)
+	bd := runBudget(cfg.Run)
 	n, err := discoverCore(ctx, target, discoverOutDir(""), false, cfg, client, bd)
 	if err != nil {
 		return err

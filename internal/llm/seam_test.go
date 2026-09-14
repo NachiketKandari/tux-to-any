@@ -332,3 +332,47 @@ func TestRunSeamTruncationFeedsRetryNotes(t *testing.T) {
 		t.Errorf("final notes must carry the gate errors, got %v", notes)
 	}
 }
+
+// TestRunSeamDynamicOutputCap pins the dynamic output policy: the request
+// carries the computed room (context − input − reserve, clamped by the
+// model completion cap), and CheckOutput judges against the same cap.
+func TestRunSeamDynamicOutputCap(t *testing.T) {
+	c := &stubClient{responses: []chatOutcome{{content: strings.Repeat("x", 100)}}}
+	in := seamInput(c, nil)
+	in.Budget = budget.New(1000, 0, 4)
+	in.Budget.ModelContextTokens = 1000
+	in.Budget.ModelMaxOutputTokens = 600
+	in.Budget.OutputReserveTokens = 0
+	in.Prompt = func([]string) (string, []Message) {
+		return strings.Repeat("x", 400), nil // 100 estimator tokens
+	}
+	payload, _, _, err := RunSeam(context.Background(), in)
+	if err != nil || payload != strings.Repeat("x", 100) {
+		t.Fatalf("payload=%q err=%v", payload, err)
+	}
+	if got := c.lastReq.MaxTokens; got != 600 {
+		t.Errorf("request MaxTokens = %d, want the clamped dynamic cap 600", got)
+	}
+}
+
+// TestRunSeamDynamicNoRoom pins the loud posture when the prompt consumes
+// the context: the seam fails before any call instead of generating into a
+// collapsed room.
+func TestRunSeamDynamicNoRoom(t *testing.T) {
+	c := &stubClient{responses: []chatOutcome{{content: "x"}}}
+	in := seamInput(c, nil)
+	in.Budget = budget.New(1000, 0, 4)
+	in.Budget.ModelContextTokens = 1000
+	in.Budget.ModelMaxOutputTokens = 16384
+	in.Budget.OutputReserveTokens = 0
+	in.Prompt = func([]string) (string, []Message) {
+		return strings.Repeat("x", 3500), nil // 875 tokens → room 125 < 256
+	}
+	_, calls, _, err := RunSeam(context.Background(), in)
+	if calls != 0 {
+		t.Errorf("calls = %d, want 0 (no chat call)", calls)
+	}
+	if err == nil || !strings.Contains(err.Error(), "output room") {
+		t.Fatalf("err=%v, want the loud no-room failure", err)
+	}
+}

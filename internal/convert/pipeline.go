@@ -438,7 +438,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	if opts.Budget.MaxPromptTokens > 0 && opts.Budget.Count(prompt) > opts.Budget.MaxPromptTokens {
 		chunkReason = fmt.Sprintf("prompt of %d tokens exceeds the %d-token ceiling",
 			opts.Budget.Count(prompt), opts.Budget.MaxPromptTokens)
-	} else if reason := outputChunkReason(opts.Budget, view.Source, opts.Budget.MaxOutputTokens); reason != "" {
+	} else if reason := outputChunkReason(opts.Budget, view.Source, opts.Budget.OutputCeiling(opts.Budget.Count(prompt))); reason != "" {
 		chunkReason = reason
 	}
 	if chunkReason != "" {

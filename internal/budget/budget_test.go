@@ -60,3 +60,49 @@ func TestDBCallLine(t *testing.T) {
 		t.Errorf("bare Line() = %q, want %q", got, want)
 	}
 }
+
+// TestOutputCeiling pins the ceiling policy: static passes MaxOutputTokens
+// through (0 = no ceiling); dynamic derives min(context − input − reserve,
+// modelMaxOutput) with a floor of 1.
+func TestOutputCeiling(t *testing.T) {
+	st := New(12000, 4000, 4)
+	if got := st.OutputCeiling(500); got != 4000 {
+		t.Errorf("static ceiling = %d, want MaxOutputTokens 4000", got)
+	}
+	if got := New(0, 0, 4).OutputCeiling(500); got != 0 {
+		t.Errorf("static unset ceiling = %d, want 0 (no ceiling)", got)
+	}
+	dyn := New(12000, 4000, 4)
+	dyn.ModelContextTokens = 40960
+	dyn.ModelMaxOutputTokens = 16384
+	dyn.OutputReserveTokens = 768
+	if !dyn.Dynamic() {
+		t.Error("dynamic() must report true when the context is set")
+	}
+	if got := dyn.OutputCeiling(4726); got != 16384 {
+		t.Errorf("dynamic room 35466 clamped = %d, want 16384", got)
+	}
+	if got := dyn.OutputCeiling(40200); got != 1 {
+		t.Errorf("collapsed room floored = %d, want 1", got)
+	}
+	b2 := New(0, 0, 4)
+	b2.ModelContextTokens = 1000
+	b2.OutputReserveTokens = 100
+	if got := b2.OutputCeiling(100); got != 800 {
+		t.Errorf("unclamped room = %d, want 800", got)
+	}
+}
+
+// TestCheckOutputCap pins the explicit-ceiling variant the dynamic seam
+// consumes.
+func TestCheckOutputCap(t *testing.T) {
+	b := New(0, 0, 4)
+	if err := b.CheckOutputCap(makeStr(20), 6); err != nil { // 5 tokens ≤ 6
+		t.Errorf("within cap: %v", err)
+	}
+	var over *ErrOverBudget
+	err := b.CheckOutputCap(makeStr(25), 6) // 7 tokens > 6
+	if !errors.As(err, &over) || over.Have != 7 || over.Limit != 6 {
+		t.Errorf("over-cap = %v, want output 7>6", err)
+	}
+}

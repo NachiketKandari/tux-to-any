@@ -30,6 +30,26 @@ func (c *Config) Validate() error {
 	if c.Run.MaxPromptTokens > c.Run.MaxContextTokens {
 		return fmt.Errorf("run.maxPromptTokens (%d) exceeds the context window (%d)", c.Run.MaxPromptTokens, c.Run.MaxContextTokens)
 	}
+	switch c.Run.TokenPolicy {
+	case "", "static":
+		// The static policy ignores the dynamic knobs — a stray
+		// modelContextTokens on a static run stays inert.
+	case "dynamic":
+		if c.Run.ModelContextTokens <= 0 {
+			return fmt.Errorf("run.tokenPolicy \"dynamic\" requires run.modelContextTokens (the provider's context length)")
+		}
+		if c.Run.ModelMaxOutputTokens <= 0 {
+			return fmt.Errorf("run.tokenPolicy \"dynamic\" requires run.modelMaxOutputTokens (the provider's per-request completion cap)")
+		}
+		if c.Run.ModelContextTokens < c.Run.ModelMaxOutputTokens {
+			return fmt.Errorf("run.modelContextTokens (%d) is below run.modelMaxOutputTokens (%d)", c.Run.ModelContextTokens, c.Run.ModelMaxOutputTokens)
+		}
+		if c.Run.OutputReserveTokens < 0 {
+			return fmt.Errorf("run.outputReserveTokens must not be negative, got %d", c.Run.OutputReserveTokens)
+		}
+	default:
+		return fmt.Errorf("run.tokenPolicy %q: only \"static\" or \"dynamic\"", c.Run.TokenPolicy)
+	}
 	if c.Run.Temperature < 0 || c.Run.Temperature > 2 {
 		return fmt.Errorf("run.temperature %v out of range [0,2]", c.Run.Temperature)
 	}

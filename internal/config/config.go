@@ -43,13 +43,15 @@ func DefaultPaths() Paths {
 func Default() *Config {
 	return &Config{
 		Run: Run{
-			Profile:          "onprem-vllm",
-			Temperature:      0.1,
-			MaxContextTokens: 16000,
-			MaxPromptTokens:  12000,
-			MaxOutputTokens:  4000,
-			CharsPerToken:    4,
-			LLM:              true,
+			Profile:             "onprem-vllm",
+			Temperature:         0.1,
+			MaxContextTokens:    16000,
+			MaxPromptTokens:     12000,
+			MaxOutputTokens:     4000,
+			CharsPerToken:       4,
+			TokenPolicy:         "static",
+			OutputReserveTokens: 768,
+			LLM:                 true,
 		},
 		Models: []Model{
 			{
@@ -242,6 +244,19 @@ type Run struct {
 	MaxPromptTokens  int     `yaml:"maxPromptTokens"`
 	MaxOutputTokens  int     `yaml:"maxOutputTokens"`
 	CharsPerToken    int     `yaml:"charsPerToken"`
+	// TokenPolicy selects the output-ceiling policy: "static" (default)
+	// keeps MaxOutputTokens; "dynamic" derives the per-call output room
+	// from the model's real context minus the measured input (best output:
+	// no configured-ceiling truncation, fragment stitching only when the
+	// prompt itself nears the context window). Dynamic requires
+	// modelContextTokens and modelMaxOutputTokens.
+	TokenPolicy          string `yaml:"tokenPolicy"`
+	ModelContextTokens   int    `yaml:"modelContextTokens"`
+	ModelMaxOutputTokens int    `yaml:"modelMaxOutputTokens"`
+	// OutputReserveTokens is the headroom dynamic mode subtracts from the
+	// context when claiming output room — the estimator skew residual
+	// (default 768).
+	OutputReserveTokens int `yaml:"outputReserveTokens"`
 	// LLM gates the generation seam (default true). false = deterministic-only
 	// run: models/db/interfaces/handler/router generate, pending controller
 	// bodies are marked skipped (never failed) for a later LLM-enabled resume.

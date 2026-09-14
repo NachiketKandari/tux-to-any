@@ -353,3 +353,34 @@ func TestOutputChunkReason(t *testing.T) {
 		t.Errorf("outputChunkReason with unset ceiling = %q, want empty", r)
 	}
 }
+
+// TestDynamicBudgetSingleCall pins the yaml switch (run.tokenPolicy:
+// dynamic): the same fixture that chunks under a small static output
+// ceiling runs as ONE call when the model context is configured — the
+// truncation the policy exists to prevent never engages, and the request
+// carries the computed room.
+func TestDynamicBudgetSingleCall(t *testing.T) {
+	opts, fake, auditRoot := bigFixture(t, 12000, 1500)
+	opts.Budget.ModelContextTokens = 40960
+	opts.Budget.ModelMaxOutputTokens = 16384
+	opts.Budget.OutputReserveTokens = 768
+
+	res, err := Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Failed) > 0 {
+		t.Fatalf("dynamic run failed endpoints: %v", res.Failed)
+	}
+	if fake.RequestCount() != 1 {
+		t.Fatalf("dynamic run made %d llm calls, want 1 (no chunking under a roomy context)", fake.RequestCount())
+	}
+	maxTokens, ok := fake.Requests[0]["max_tokens"].(float64)
+	if !ok || maxTokens != 16384 {
+		t.Errorf("request max_tokens = %v, want the model completion cap 16384", fake.Requests[0]["max_tokens"])
+	}
+	matches, _ := filepath.Glob(filepath.Join(auditRoot, "bigrun", "controller_method-BigBranch#chunk*-attempt0.json"))
+	if len(matches) != 0 {
+		t.Errorf("dynamic run wrote %d chunk audit exchanges, want 0", len(matches))
+	}
+}
