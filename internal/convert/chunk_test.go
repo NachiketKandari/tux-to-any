@@ -335,3 +335,21 @@ func TestOutputTokenEstimate(t *testing.T) {
 		t.Errorf("outputTokenEstimate(empty) = %d, want 0", got)
 	}
 }
+
+// TestOutputChunkReason pins the margin trigger (mainTux 2026-09-14): the
+// 10.3k-char view's 3360-token estimate read below the 4000 ceiling but the
+// provider truncated at exactly 4000 — the trigger fires at 80% of the
+// ceiling, not 100%.
+func TestOutputChunkReason(t *testing.T) {
+	b := budget.New(0, 0, 4)
+	view := strings.Repeat("a", 10333) // the mainTux F-branch view's char mass
+	if r := outputChunkReason(b, view, 4000); r == "" {
+		t.Errorf("outputChunkReason(view≈3360, ceiling 4000) = %q, want a trigger reason", r)
+	}
+	if r := outputChunkReason(b, strings.Repeat("a", 4000), 4000); r != "" {
+		t.Errorf("outputChunkReason(view≈1300, ceiling 4000) = %q, want empty", r)
+	}
+	if r := outputChunkReason(b, view, 0); r != "" {
+		t.Errorf("outputChunkReason with unset ceiling = %q, want empty", r)
+	}
+}

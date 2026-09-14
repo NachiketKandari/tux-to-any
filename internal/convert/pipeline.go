@@ -438,8 +438,8 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	if opts.Budget.MaxPromptTokens > 0 && opts.Budget.Count(prompt) > opts.Budget.MaxPromptTokens {
 		chunkReason = fmt.Sprintf("prompt of %d tokens exceeds the %d-token ceiling",
 			opts.Budget.Count(prompt), opts.Budget.MaxPromptTokens)
-	} else if est := outputTokenEstimate(opts.Budget, view.Source); opts.Budget.MaxOutputTokens > 0 && est > opts.Budget.MaxOutputTokens {
-		chunkReason = fmt.Sprintf("expected output of ~%d tokens exceeds the %d-token ceiling", est, opts.Budget.MaxOutputTokens)
+	} else if reason := outputChunkReason(opts.Budget, view.Source, opts.Budget.MaxOutputTokens); reason != "" {
+		chunkReason = reason
 	}
 	if chunkReason != "" {
 		telemetry.Log(ctx).Info("endpoint split into statement fragments", "unit", u.Name, "reason", chunkReason)

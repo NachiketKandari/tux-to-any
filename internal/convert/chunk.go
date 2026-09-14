@@ -40,6 +40,28 @@ const chunkSafetyPct = 70
 // mid-range and errs toward splitting earlier.
 const outputExpansionPct = 130
 
+// outputTriggerPct routes to fragments when the estimate reaches this share
+// of the output ceiling: the chars/token ratio is configured, not measured,
+// and the provider's tokenizer on dense C code ran ~2.8 chars/token against
+// the default 4 (mainTux 2026-09-14 run — the estimate read 3360 of 4000,
+// the call truncated at exactly 4000). Splitting a branch that would have
+// fit costs one extra call; a truncated body costs the call plus every
+// retry — the margin errs the same way.
+const outputTriggerPct = 80
+
+// outputChunkReason names the output-ceiling split trigger, empty when the
+// estimate fits with margin.
+func outputChunkReason(b budget.Budget, viewSrc string, maxOutputTokens int) string {
+	if maxOutputTokens <= 0 {
+		return ""
+	}
+	est := outputTokenEstimate(b, viewSrc)
+	if est > maxOutputTokens*outputTriggerPct/100 {
+		return fmt.Sprintf("expected output of ~%d tokens approaches the %d-token ceiling", est, maxOutputTokens)
+	}
+	return ""
+}
+
 // outputTokenEstimate projects the controller body's token size from the
 // post-replacement view source: view tokens inflated by the translation
 // factor. It drives the output-ceiling routing decision — an estimate over
