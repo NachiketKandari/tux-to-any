@@ -451,17 +451,41 @@ const txPairsSrc = `void SVC_DEMO(TPSVCINFO *rqst) {
 }
 `
 
-func txScenario(t *testing.T, value string) *Scenario {
+func txScenario(t *testing.T, value string) (*Scenario, *Tree) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "SVC_DEMO.pc")
 	if err := os.WriteFile(path, []byte(txPairsSrc), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return scenarioFromFile(t, path, value)
+	return scenarioFromFileTree(t, path, value)
+}
+
+// scenarioFromFileTree mirrors scenarioFromFile but returns the tree too —
+// the ScenarioSource consumers (tx plumbing elision) walk it.
+func scenarioFromFileTree(t *testing.T, path, value string) (*Scenario, *Tree) {
+	t.Helper()
+	f, err := ir.ExtractFileOpts(path, ir.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := scanner.ScanBytes(src, f.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build(src, facts, f.Entry, f)
+	axis := DispatchAxisFor(src, facts, f.Entry)
+	if axis == nil {
+		t.Fatal("no axis detected")
+	}
+	return ScenarioFor(tree, axis, value), tree
 }
 
 func TestScenarioTxSpanPairs(t *testing.T) {
-	sc := txScenario(t, "A")
+	sc, _ := txScenario(t, "A")
 	if len(sc.TxSpans) != 2 {
 		t.Fatalf("tx spans = %v, want 2 (helper pair + tp pair)", sc.TxSpans)
 	}
@@ -486,7 +510,7 @@ func TestScenarioTxSpanPairs(t *testing.T) {
 func TestScenarioTxSpansScenarioScoped(t *testing.T) {
 	// Under P the A-update's branch is contradicted; the B-update survives.
 	// Both scenarios keep the entry-level spans (non-dispatch nodes).
-	sc := txScenario(t, "P")
+	sc, _ := txScenario(t, "P")
 	if len(sc.TxSpans) != 2 {
 		t.Errorf("tx spans = %v, want the helper + tp pair in both scenarios", sc.TxSpans)
 	}
@@ -659,5 +683,72 @@ func TestScenarioResponseUnstableLoud(t *testing.T) {
 	}
 	if !loud {
 		t.Errorf("unstable field not in residue: %v", sc.Residue)
+	}
+}
+
+
+// TestScenarioTxAbortsCensus pins the abort census: aborts never pair into
+// spans but register as sites (SCEN-D8) — one helper abort in the txPairsSrc
+// fixture.
+func TestScenarioTxAbortsCensus(t *testing.T) {
+	sc, _ := txScenario(t, "A")
+	if len(sc.TxAborts) != 1 || sc.TxAborts[0] != 11 {
+		t.Errorf("tx aborts = %v, want [11]", sc.TxAborts)
+	}
+}
+
+// TestScenarioSourceElidesTxPlumbing pins the slice-level elision: standalone
+// begin/commit/abort call lines drop from the scenario text (the wrapper owns
+// begin/commit/rollback), SQL regions still map, and non-plumbing lines stay.
+func TestScenarioSourceElidesTxPlumbing(t *testing.T) {
+	sc, tree := txScenario(t, "A")
+	src, spans := ScenarioSource(sc, tree, []byte(txPairsSrc))
+	for _, bad := range []string{"fn_equ_begintran", "fn_equ_committran", "fn_equ_aborttran", "tpbegin", "tpcommit"} {
+		if strings.Contains(src, bad) {
+			t.Errorf("scenario source still contains %q\n%s", bad, src)
+		}
+	}
+	// Scenario A folds the P-branch away — the B-update's branch is
+	// contradicted and its SQL drops with it.
+	for _, good := range []string{"INSERT INTO MAP_T", "UPDATE A SET C = 1", "tpreturn(TPSUCCESS"} {
+		if !strings.Contains(src, good) {
+			t.Errorf("scenario source lost %q\n%s", good, src)
+		}
+	}
+	if len(spans) == 0 {
+		t.Fatal("no SQL regions captured")
+	}
+	last := len(strings.Split(src, "\n"))
+	for id, sp := range spans {
+		if sp[0] < 1 || sp[1] > last {
+			t.Errorf("query %s span %v exceeds the slice text (%d lines)", id, sp, last)
+		}
+	}
+}
+
+// TestLineIsTxPlumbingCall pins the line classifier: assignment form elides;
+// guard conditions, multi-statement lines, and non-tx calls stay.
+func TestLineIsTxPlumbingCall(t *testing.T) {
+	name := "fn_equ_begintran"
+	for _, good := range []string{
+		"i_h = fn_equ_begintran(c_ServiceName, c_usr_id, c_err_msg);",
+		"fn_equ_aborttran(c_ServiceName, i_h, c_err_msg);",
+		"tpcommit(0);",
+	} {
+		if !lineIsTxPlumbingCall(good, name) && strings.Contains(good, name) {
+			t.Errorf("%q must classify as tx plumbing for %s", good, name)
+		}
+	}
+	if lineIsTxPlumbingCall("", name) {
+		t.Error("empty line must not classify")
+	}
+	for _, bad := range []string{
+		"if (fn_equ_committran(c, u, i_h, m) != OK) {",
+		"i_h = fn_equ_begintran(c, u, m); log_it();",
+		"errlog(c_ServiceName, \"S1\", m);",
+	} {
+		if lineIsTxPlumbingCall(bad, name) {
+			t.Errorf("%q must NOT classify as tx plumbing", bad)
+		}
 	}
 }

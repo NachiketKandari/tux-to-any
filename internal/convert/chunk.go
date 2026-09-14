@@ -35,7 +35,7 @@ const chunkSafetyPct = 70
 // own token estimate: the Go body carries the same statements plus error
 // checks per store call and struct-literal shaping per output field, while
 // the Pro*C error choreography (errlog/Fadd/tpfree/tpreturn) shrinks to
-// `if err != nil`. Calibrated on the 2026-09-14 mainTux run — the F branch's
+// `if err != nil`. Calibrated on the 2026-09-14 dense-C run — the F branch's
 // completion measured ~1.2–1.4× its post-replacement view's tokens — 130 is
 // mid-range and errs toward splitting earlier.
 const outputExpansionPct = 130
@@ -43,7 +43,7 @@ const outputExpansionPct = 130
 // outputTriggerPct routes to fragments when the estimate reaches this share
 // of the output ceiling: the chars/token ratio is configured, not measured,
 // and the provider's tokenizer on dense C code ran ~2.8 chars/token against
-// the default 4 (mainTux 2026-09-14 run — the estimate read 3360 of 4000,
+// the default 4 (2026-09-14 dense-C run — the estimate read 3360 of 4000,
 // the call truncated at exactly 4000). Splitting a branch that would have
 // fit costs one extra call; a truncated body costs the call plus every
 // retry — the margin errs the same way.
@@ -93,6 +93,7 @@ type chunkCtx struct {
 	view   budget.View
 	scen   *scenPrompt
 	prompt string // the full single-call prompt (base-scaffold accounting)
+	calls  map[string]budget.DBCall
 }
 
 // systemPromptFragment is the fragment-framed system prompt: the same rules
@@ -570,6 +571,7 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 	var fullErrs []string
 	fullErrs = append(fullErrs, validateBody(opts, combined)...)
 	fullErrs = append(fullErrs, requiredCallErrs(cx.view.Source, combined, receiver)...)
+	fullErrs = append(fullErrs, txGateErrs(combined, cx.calls)...)
 	if len(fullErrs) > 0 {
 		return "", fmt.Errorf("combined fragment body failed validation: %s", strings.Join(fullErrs, "; "))
 	}

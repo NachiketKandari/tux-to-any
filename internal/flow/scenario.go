@@ -456,6 +456,10 @@ type Scenario struct {
 	// TxSpans lists the live begin→commit pairs in the slice (SCEN-D8) —
 	// the evidence behind the per-query Tx flags, visible for review.
 	TxSpans []txSpan `json:"tx_spans,omitempty"`
+	// TxAborts lists the live abort/rollback call lines in the slice —
+	// error-path evidence; the calls themselves elide from the slice text
+	// (utils.ExecTransaction owns rollback).
+	TxAborts []int `json:"tx_aborts,omitempty"`
 	// Responses resolves the scenario's response writes (SCEN-D9).
 	Responses []ScenarioResponse `json:"responses,omitempty"`
 	Residue   []string           `json:"residue,omitempty"`
@@ -1023,8 +1027,10 @@ type txSpan struct {
 	Conditional bool
 }
 
-// txCallKind classifies a call name as a tx-begin, tx-commit, or neither.
-// Aborts never pair (SCEN-D8: error-path-only, never open or close a span).
+// txCallKind classifies a call name as a tx-begin, tx-commit, tx-abort, or
+// none. Begins pair commits into spans; aborts never pair (SCEN-D8:
+// error-path-only, never open or close a span) but are recognized so their
+// call lines elide from the slice — utils.ExecTransaction owns rollback.
 func txCallKind(name string) (kind string, role string) {
 	switch name {
 	case "tpbegin":
@@ -1039,29 +1045,34 @@ func txCallKind(name string) (kind string, role string) {
 			return "helper", "begin"
 		case strings.Contains(l, "committran") || strings.Contains(l, "commit_tran"):
 			return "helper", "commit"
+		case strings.Contains(l, "aborttran") || strings.Contains(l, "abort_tran") ||
+			strings.Contains(l, "rollbacktran") || strings.Contains(l, "rollback_tran"):
+			return "helper", "abort"
 		}
 	}
 	return "", ""
 }
 
-// txSpansOf pairs live begin→commit call sites over the scenario's surviving
-// slice (SCEN-D8). Sites come from the scanner's exact-line call facts
-// (Node.Calls cannot serve: branch nodes carry their whole span's calls);
-// a commit pairs the nearest unpaired begin of the same kind (C stack
-// discipline), a commit without a begin is ignored (a mid-branch commit
-// rides the enclosing entry-level span), and a begin without a
-// surviving commit closes nothing.
-func txSpansOf(sc *Scenario, tree *Tree) []txSpan {
+// txSite is one recognized tx call site in the entry: line, the span kind
+// ("tp" | "helper"), the role ("begin" | "commit" | "abort"), and the raw
+// call name (line-level elision matches against it).
+type txSite struct {
+	line int
+	kind string
+	role string
+	name string
+}
+
+// txSites collects the recognized tx call sites over the scenario's
+// surviving slice, in source order. Sites come from the scanner's exact-line
+// call facts (Node.Calls cannot serve: branch nodes carry their whole
+// span's calls).
+func txSites(sc *Scenario, tree *Tree) []txSite {
 	if tree.facts == nil {
 		return nil
 	}
 	kept := keptNodeLines(sc)
-	type site struct {
-		line int
-		kind string
-		role string
-	}
-	var sites []site
+	var sites []txSite
 	for i := range tree.facts.Calls {
 		call := &tree.facts.Calls[i]
 		if call.Func != tree.Function {
@@ -1071,16 +1082,25 @@ func txSpansOf(sc *Scenario, tree *Tree) []txSpan {
 		if kind == "" || !kept[call.Line] {
 			continue
 		}
-		sites = append(sites, site{line: call.Line, kind: kind, role: role})
+		sites = append(sites, txSite{line: call.Line, kind: kind, role: role, name: call.Name})
 	}
 	sort.SliceStable(sites, func(i, j int) bool { return sites[i].line < sites[j].line })
+	return sites
+}
+
+// txSpansOf pairs live begin→commit call sites over the scenario's
+// surviving slice (SCEN-D8). A commit pairs the nearest unpaired begin of
+// the same kind (C stack discipline), a commit without a begin is ignored
+// (a mid-branch commit rides the enclosing entry-level span), a begin
+// without a surviving commit closes nothing, and aborts never pair.
+func txSpansOf(sc *Scenario, tree *Tree) []txSpan {
 	spans := []txSpan{}
 	type openBegin struct {
 		kind string
 		line int
 	}
 	var open []openBegin
-	for _, s := range sites {
+	for _, s := range txSites(sc, tree) {
 		switch s.role {
 		case "begin":
 			open = append(open, openBegin{kind: s.kind, line: s.line})
@@ -1093,6 +1113,40 @@ func txSpansOf(sc *Scenario, tree *Tree) []txSpan {
 		}
 	}
 	return spans
+}
+
+// lineIsTxPlumbingCall reports whether a source line is *only* a tx
+// plumbing call (optionally assigning its handle): a stripped code line
+// starting with the call name — an `<ident> = ` prefix stripped — running
+// to the statement end with no second statement and no braces. Guard lines
+// (`if (fn_equ_committran(...) != OK)`) and multi-statement lines stay in
+// the slice; only the standalone statement elides.
+func lineIsTxPlumbingCall(line, name string) bool {
+	s := line
+	for {
+		i := strings.Index(s, "/*")
+		if i < 0 {
+			break
+		}
+		j := strings.Index(s[i+2:], "*/")
+		if j < 0 {
+			s = s[:i]
+			break
+		}
+		s = s[:i] + s[i+2+j+2:]
+	}
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, "="); i > 0 && !strings.ContainsAny(s[:i], "(;") {
+		s = strings.TrimSpace(s[i+1:])
+	}
+	if !strings.HasPrefix(s, name) {
+		return false
+	}
+	rest := s[len(name):]
+	if !strings.HasSuffix(rest, ";") || strings.ContainsAny(rest, "{}") {
+		return false
+	}
+	return !strings.Contains(rest[:len(rest)-1], ";")
 }
 
 // keptNodeLines maps every line of each surviving slice node's span → true
@@ -1221,6 +1275,11 @@ func censusOf(sc *Scenario, tree *Tree) {
 		sc.Queries = append(sc.Queries, qy)
 	}
 	sc.TxSpans = spans
+	for _, s := range txSites(sc, tree) {
+		if s.role == "abort" {
+			sc.TxAborts = append(sc.TxAborts, s.line)
+		}
+	}
 	sc.Responses = resolveResponses(sc, tree, recs)
 }
 
@@ -1938,8 +1997,18 @@ func (sc *Scenario) BodyExtent() [2]int {
 // the replacement coordinates budget.ReplaceQueries consumes. A query's
 // region merges every kept SQL node carrying its id (flattened cursors
 // replace DECLARE..CLOSE as one unit, matching the whole-file path).
+// Standalone tx plumbing call lines (begin/commit/abort — SCEN-D8, the
+// wrapper owns them) elide from the text.
 func ScenarioSource(sc *Scenario, tree *Tree, src []byte) (string, map[string][2]int) {
 	kept := keptLineSet(sc, tree)
+	// Tx plumbing (begin/commit/abort call statements) elides from the
+	// slice — utils.ExecTransaction owns begin/commit/rollback, and the
+	// prompt's TxNotes say so; guard-form calls stay (see
+	// lineIsTxPlumbingCall). SQL regions never anchor on a plumbing line.
+	plumbing := map[int]string{}
+	for _, s := range txSites(sc, tree) {
+		plumbing[s.line] = s.name
+	}
 	var out []int
 	seen := map[int]bool{}
 	add := func(from, to int) {
@@ -1963,6 +2032,9 @@ func ScenarioSource(sc *Scenario, tree *Tree, src []byte) (string, map[string][2
 	idx := make(map[int]int, len(out))
 	for _, l := range out {
 		if l < 1 || l > len(lines) {
+			continue
+		}
+		if name := plumbing[l]; name != "" && lineIsTxPlumbingCall(string(lines[l-1]), name) {
 			continue
 		}
 		idx[l] = len(text) + 1

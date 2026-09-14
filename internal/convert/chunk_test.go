@@ -336,13 +336,13 @@ func TestOutputTokenEstimate(t *testing.T) {
 	}
 }
 
-// TestOutputChunkReason pins the margin trigger (mainTux 2026-09-14): the
+// TestOutputChunkReason pins the margin trigger (2026-09-14 dense-C run): the
 // 10.3k-char view's 3360-token estimate read below the 4000 ceiling but the
 // provider truncated at exactly 4000 — the trigger fires at 80% of the
 // ceiling, not 100%.
 func TestOutputChunkReason(t *testing.T) {
 	b := budget.New(0, 0, 4)
-	view := strings.Repeat("a", 10333) // the mainTux F-branch view's char mass
+	view := strings.Repeat("a", 10333) // the dense-C F-branch view's char mass
 	if r := outputChunkReason(b, view, 4000); r == "" {
 		t.Errorf("outputChunkReason(view≈3360, ceiling 4000) = %q, want a trigger reason", r)
 	}
@@ -382,5 +382,34 @@ func TestDynamicBudgetSingleCall(t *testing.T) {
 	matches, _ := filepath.Glob(filepath.Join(auditRoot, "bigrun", "controller_method-BigBranch#chunk*-attempt0.json"))
 	if len(matches) != 0 {
 		t.Errorf("dynamic run wrote %d chunk audit exchanges, want 0", len(matches))
+	}
+}
+
+// TestTxGateErrs pins the transaction contract gate: a unit whose store
+// calls take tx must wrap the flow in utils.ExecTransaction and call each
+// tx-variant with the tx handle — string-level, deterministic notes.
+func TestTxGateErrs(t *testing.T) {
+	calls := map[string]budget.DBCall{
+		"cur_x": {Receiver: "s.store", Name: "InsertOrder", CtxName: "c", Tx: "tx", Args: []string{"a"}},
+		"q1":    {Receiver: "s.store", Name: "GetCount", CtxName: "c"},
+	}
+	// No tx calls on the unit → the gate is inert.
+	if errs := txGateErrs("whatever", map[string]budget.DBCall{"q1": calls["q1"]}); errs != nil {
+		t.Errorf("inert gate = %v, want nil", errs)
+	}
+	// Missing wrapper AND missing call form → both named.
+	errs := txGateErrs("s.store.InsertOrder(c, a)", calls)
+	if len(errs) != 2 {
+		t.Fatalf("errs = %v, want 2 (no wrapper, call without tx)", errs)
+	}
+	if !strings.Contains(errs[0], "ExecTransaction") || !strings.Contains(errs[1], "InsertOrder") {
+		t.Errorf("errs = %v, want the wrapper + call-form notes", errs)
+	}
+	// Wrapper + tx call form → clean.
+	ok := "err = utils.ExecTransaction(c, s.store.GetDB(), func(tx *sqlx.Tx) error {\n" +
+		"\ts.store.InsertOrder(c, tx, a)\n" +
+		"\treturn nil\n})"
+	if errs := txGateErrs(ok, calls); errs != nil {
+		t.Errorf("valid tx body rejected: %v", errs)
 	}
 }

@@ -150,7 +150,7 @@ flagged), `Directive.IsHeader`/`IsSystem`, `DALFn.RowShape`,
   case-insensitively (yaml keys stay free-form), defaults are lowercase.
   Proven end-to-end: a non-ERR `Fadd32` into an input-role buffer no
   longer surfaces as a response `write` in discover drafts (census
-  deflated 8→7 on the mainTux probe). Pinned by
+  deflated 8→7 on the dense-C probe). Pinned by
   cmd/tuxconv/flowir_test.go + internal/flow/buffer_roles_test.go.
 - Tier-1 #5: `Plan.Warnings` render in plan.md ("Coverage warnings"
   section) and plan.json, and `runPlan` prints them (`coverage:` prefix,

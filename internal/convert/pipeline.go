@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"tux-to-any/internal/audit"
@@ -447,7 +448,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		// combined body through the full gates.
 		body, cerr := controllerBodyChunked(chunkCtx{
 			ctx: ctx, opts: opts, res: res, svc: svc, unit: u, db: dbBodies,
-			cond: c, view: view, scen: scen, prompt: prompt,
+			cond: c, view: view, scen: scen, prompt: prompt, calls: calls,
 		})
 		if cerr != nil {
 			return "", prompt, cerr
@@ -478,7 +479,8 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		Extract: cleanBody,
 		Gate: func(body string) []string {
 			verr := validateBody(opts, body)
-			return append(verr, requiredCallErrs(view.Source, body, receiverOf(opts))...)
+			verr = append(verr, requiredCallErrs(view.Source, body, receiverOf(opts))...)
+			return append(verr, txGateErrs(body, calls)...)
 		},
 	})
 	res.LLMCalls += chatCalls
@@ -857,11 +859,20 @@ func scenPromptOf(sc *flow.Scenario, diff *flow.ScenarioDiff) *scenPrompt {
 	}
 	if len(txIDs) > 0 {
 		for _, s := range sc.TxSpans {
-			p.TxNotes = append(p.TxNotes, fmt.Sprintf("legacy tx span %d→%d (%s)", s.BeginLine, s.CommitLine, txKindName(s.Kind)))
+			p.TxNotes = append(p.TxNotes, fmt.Sprintf("legacy tx span %d→%d (%s) — the wrapper owns begin/commit; the standalone tx call lines are elided from the slice", s.BeginLine, s.CommitLine, txKindName(s.Kind)))
 		}
 		p.TxNotes = append(p.TxNotes,
 			fmt.Sprintf("DML queries %s ride those transactions and their store calls take tx — wrap each call in utils.ExecTransaction(c, s.store.GetDB(), func(tx *sqlx.Tx) error { ...; return nil }); the wrapper owns begin/commit/rollback",
 				strings.Join(txIDs, ", ")))
+	}
+	if len(sc.TxAborts) > 0 {
+		lines := make([]string, 0, len(sc.TxAborts))
+		for _, l := range sc.TxAborts {
+			lines = append(lines, strconv.Itoa(l))
+		}
+		p.TxNotes = append(p.TxNotes,
+			fmt.Sprintf("legacy abort/rollback calls (lines %s) are elided from the slice — never emit a stub call for them: translate their error paths as returning the error, and utils.ExecTransaction rolls the transaction back when the closure errors",
+				strings.Join(lines, ", ")))
 	}
 	return p
 }
@@ -1096,6 +1107,42 @@ func requiredCallErrs(view, body string, receiver string) []string {
 	for _, call := range requiredCalls(view, receiver) {
 		if !strings.Contains(body, call+"(") {
 			errs = append(errs, "orchestration contract: "+call+" appears in the branch view but is missing from the body — every REQUIRED CALL is mandatory under its view condition")
+		}
+	}
+	return errs
+}
+
+// txGateErrs enforces the transaction contract the prompt instructs: when
+// the unit's store calls take tx, the body wraps the flow in
+// utils.ExecTransaction and each tx-variant call carries the tx handle.
+// String-level by design (pre-Tier-B): a parse-only gate cannot see
+// undefined symbols, and Tier B is skipped on syntax-only runs — without
+// this check a body that never opens the transaction passes as
+// transactional. Guard-ordering (call inside the closure) stays Tier B's
+// type-check job when the target service is wired.
+func txGateErrs(body string, calls map[string]budget.DBCall) []string {
+	txCalls := map[string]budget.DBCall{}
+	for _, call := range calls {
+		if call.Tx != "" {
+			txCalls[call.Name] = call
+		}
+	}
+	if len(txCalls) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(txCalls))
+	for name := range txCalls {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var errs []string
+	if !strings.Contains(body, "ExecTransaction(") {
+		errs = append(errs, "transaction contract: the branch's DML calls take tx — the body must wrap the flow in utils.ExecTransaction(c, s.store.GetDB(), func(tx *sqlx.Tx) error { ...; return nil }); the wrapper owns begin/commit/rollback")
+	}
+	for _, name := range names {
+		call := txCalls[name]
+		if !strings.Contains(body, name+"("+call.CtxName+", "+call.Tx) {
+			errs = append(errs, "transaction contract: "+name+" must be called inside the ExecTransaction closure with the tx handle: "+call.Receiver+"."+name+"("+call.CtxName+", "+call.Tx+", ...)")
 		}
 	}
 	return errs
