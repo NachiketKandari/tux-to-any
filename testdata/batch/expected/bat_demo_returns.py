@@ -61,11 +61,11 @@ class BatDemoReturnsRepository:
                 cur.execute(INSERT_DEMO_RET_TMP_QUERY)
                 return cur.rowcount
 
-    def fetch_demo_ret_tmp(self, sql_demo_ret_tmp_bskt_id: Any, sql_demo_ret_tmp_weight: Any, sql_demo_ret_tmp_return: Any, sql_demo_ret_tmp_amfi_cd: Any, v_rowid: Any) -> Optional[Tuple]:
+    def fetch_demo_ret_tmp(self) -> Optional[Tuple]:
         """Fetches rows (READ mode)."""
         with self.db_router.get_connection(mode=DbMode.READ) as conn:
             with conn.cursor() as cur:
-                cur.execute(FETCH_DEMO_RET_TMP_QUERY, {"sql_demo_ret_tmp_bskt_id": sql_demo_ret_tmp_bskt_id, "sql_demo_ret_tmp_weight": sql_demo_ret_tmp_weight, "sql_demo_ret_tmp_return": sql_demo_ret_tmp_return, "sql_demo_ret_tmp_amfi_cd": sql_demo_ret_tmp_amfi_cd, "v_rowid": v_rowid})
+                cur.execute(FETCH_DEMO_RET_TMP_QUERY)
                 return cur.fetchone()
 
     def fetch_dual(self, d_final: Any) -> Optional[Tuple]:

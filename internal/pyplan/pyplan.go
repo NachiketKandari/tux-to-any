@@ -42,16 +42,18 @@ type QueryConst struct {
 	Name  string
 	Kind  string
 	SQL   string
-	Binds []string // textual order, unique
+	Binds []string // binds of the executable SQL (INTO stripped), textual order, unique
 }
 
 // DALFn is one pure cursor function of the simple shape (mockable with a
 // plain cursor double, the local-only reference shape).
 type DALFn struct {
-	Name     string
-	Kind     string // fetch | dml
-	Const    string
-	BindIdx  []int // DML: fetch-row indexes for the bind projection
+	Name    string
+	Kind    string // fetch | dml
+	Const   string
+	BindIdx []int // DML: fetch-row indexes for the bind projection
+	// RowShape is RESERVED as data on the DAL (the fetch template renders
+	// whole rows); the repo-shape twin feeds the seam prompt.
 	RowShape []string
 }
 
@@ -71,10 +73,13 @@ type RepoMethod struct {
 	Kind      string // fetch | dml | rebuild
 	QueryKind string // ir.QueryType of the backing query ("" for truncate halves)
 	Consts    []string
-	Binds     []string // kwarg bind names
+	Binds     []string // kwarg bind names of the executable SQL
 	RowShape  []string
-	InLoop    bool
-	SrcLine   int // source line of the backing query (orchestration-block assignment)
+	// InLoop is RESERVED as data — block assignment runs off SrcLine
+	// ranges (Orchestration); InLoop stays for the diff/plan JSON review
+	// surface (engine-wiring audit Tier-2 note).
+	InLoop  bool
+	SrcLine int // source line of the backing query (orchestration-block assignment)
 }
 
 // Plan is the deterministic Python generation plan for one batch program.
@@ -139,13 +144,13 @@ func Build(flow *batchflow.Flow, opts Options) *Plan {
 	for _, g := range flow.CursorGroups {
 		sel := g.Select
 		sc := take("SELECT_" + strings.ToUpper(g.CursorName) + "_QUERY")
-		p.Consts = append(p.Consts, QueryConst{ID: sel.ID, Name: sc, Kind: string(sel.Type), SQL: emitSQL(sel), Binds: bindOrder(sel.SQL)})
+		p.Consts = append(p.Consts, QueryConst{ID: sel.ID, Name: sc, Kind: string(sel.Type), SQL: emitSQL(sel), Binds: bindsOf(sel)})
 		p.constByQuery[sel.ID] = sc
 		if g.DML == nil {
 			continue
 		}
 		dc := take(strings.ToUpper(verbOf(g.DML.Type)) + "_" + strings.ToUpper(g.CursorName) + "_QUERY")
-		p.Consts = append(p.Consts, QueryConst{ID: g.DML.ID, Name: dc, Kind: string(g.DML.Type), SQL: emitSQL(g.DML), Binds: bindOrder(g.DML.SQL)})
+		p.Consts = append(p.Consts, QueryConst{ID: g.DML.ID, Name: dc, Kind: string(g.DML.Type), SQL: emitSQL(g.DML), Binds: bindsOf(g.DML)})
 		p.constByQuery[g.DML.ID] = dc
 		if p.Shape == "repo" {
 			continue // groups become repository methods below, not DAL phases
@@ -175,7 +180,7 @@ func Build(flow *batchflow.Flow, opts Options) *Plan {
 		name := take(verbOf(sel.Type) + "_" + strings.ToLower(g.CursorName))
 		p.Repo = append(p.Repo, RepoMethod{
 			Name: name, Kind: "fetch", QueryKind: string(sel.Type),
-			Consts: []string{p.constByQuery[sel.ID]}, Binds: bindOrder(sel.SQL), RowShape: sel.RowShape,
+			Consts: []string{p.constByQuery[sel.ID]}, Binds: bindsOf(sel), RowShape: sel.RowShape,
 			InLoop: false, SrcLine: sel.StartLine,
 		})
 		p.callByQuery[sel.ID] = name
@@ -185,7 +190,7 @@ func Build(flow *batchflow.Flow, opts Options) *Plan {
 		dname := take(verbOf(g.DML.Type) + "_" + strings.ToLower(g.CursorName))
 		p.Repo = append(p.Repo, RepoMethod{
 			Name: dname, Kind: verbOf(g.DML.Type), QueryKind: string(g.DML.Type),
-			Consts: []string{p.constByQuery[g.DML.ID]}, Binds: bindOrder(g.DML.SQL),
+			Consts: []string{p.constByQuery[g.DML.ID]}, Binds: bindsOf(g.DML),
 			InLoop: batchflow.InLoop(flow.Loops, g.DML.StartLine), SrcLine: g.DML.StartLine,
 		})
 		p.callByQuery[g.DML.ID] = dname
@@ -199,12 +204,12 @@ func Build(flow *batchflow.Flow, opts Options) *Plan {
 			p.Consts = append(p.Consts, QueryConst{ID: q.ID + "-trunc", Name: tc, Kind: "TRUNCATE", SQL: s.TruncateSQL})
 		}
 		cn := take(strings.ToUpper(verbOf(q.Type)) + "_" + strings.ToUpper(firstTable(q)) + "_QUERY")
-		p.Consts = append(p.Consts, QueryConst{ID: q.ID, Name: cn, Kind: string(q.Type), SQL: emitSQL(q), Binds: bindOrder(q.SQL)})
+		p.Consts = append(p.Consts, QueryConst{ID: q.ID, Name: cn, Kind: string(q.Type), SQL: emitSQL(q), Binds: bindsOf(q)})
 		p.constByQuery[q.ID] = cn
 		m := RepoMethod{
 			Name: take(verbOf(q.Type) + "_" + strings.ToLower(firstTable(q))),
 			Kind: verbOf(q.Type), QueryKind: string(q.Type), Consts: []string{cn},
-			Binds: bindOrder(q.SQL), RowShape: q.RowShape, InLoop: s.InLoop, SrcLine: q.StartLine,
+			Binds: bindsOf(q), RowShape: q.RowShape, InLoop: s.InLoop, SrcLine: q.StartLine,
 		}
 		if tc != "" && q.Type == ir.QueryInsert {
 			m.Kind = "rebuild"
@@ -343,6 +348,13 @@ func collapseBinds(sql string) string {
 	return b.String()
 }
 
+// bindsOf returns the bind names of the EXECUTABLE SQL (emitSQL: the INTO
+// host-target list is stripped from SELECTs) — the exact names a caller
+// must supply for oracledb's named binds. Binds derived from the raw
+// source SQL would count INTO targets as binds and mismatch the const at
+// runtime (ORA-01008 class).
+func bindsOf(q *ir.Query) []string { return bindOrder(emitSQL(q)) }
+
 // bindOrder returns the unique bind names in textual order of appearance
 // (`: name` with whitespace counts — Pro*C tolerates the space).
 func bindOrder(sql string) []string {
@@ -439,9 +451,20 @@ func (p *Plan) Orchestration(src string) []OrchestrationBlock {
 		if first := p.Flow.Loops[0].StartLine; first-1 >= p.Flow.BodyStart {
 			ranges = append(ranges, rng{p.Flow.BodyStart, first - 1, "setup (before any loop)"})
 		}
-		for _, l := range p.Flow.Loops {
+		for i, l := range p.Flow.Loops {
+			if i > 0 {
+				prev := p.Flow.Loops[i-1].EndLine
+				if l.StartLine-1 > prev {
+					ranges = append(ranges, rng{prev + 1, l.StartLine - 1,
+						"between loops (source " + strconv.Itoa(prev+1) + "-" + strconv.Itoa(l.StartLine-1) + ")"})
+				}
+			}
 			ranges = append(ranges, rng{l.StartLine, l.EndLine,
 				"loop `" + l.Header + "` (source " + strconv.Itoa(l.StartLine) + "-" + strconv.Itoa(l.EndLine) + ")"})
+		}
+		if tail := p.Flow.Loops[len(p.Flow.Loops)-1].EndLine; tail+1 <= p.Flow.BodyEnd {
+			ranges = append(ranges, rng{tail + 1, p.Flow.BodyEnd,
+				"epilogue (source " + strconv.Itoa(tail+1) + "-" + strconv.Itoa(p.Flow.BodyEnd) + ")"})
 		}
 	}
 	blocks := make([]OrchestrationBlock, 0, len(ranges))
@@ -536,7 +559,7 @@ func (p *Plan) sqlPlaceholder(s batchflow.SQLSpan) string {
 			continue
 		}
 		if call := p.CallName(q.ID); call != "" {
-			return "# " + call + "(" + strings.Join(kwargBinds(bindOrder(q.SQL)), ", ") + ")"
+			return "# " + call + "(" + strings.Join(kwargBinds(bindsOf(q)), ", ") + ")"
 		}
 		return "# SQL " + string(q.Type)
 	}

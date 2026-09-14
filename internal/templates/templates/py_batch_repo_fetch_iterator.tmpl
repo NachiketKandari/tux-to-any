@@ -2,6 +2,10 @@
         """{{.Doc}}"""
         with self.db_router.get_connection(mode={{.ReadMode}}) as conn:
             with conn.cursor() as cur:
+{{- if .HasBinds}}
+                cur.execute({{.Const}}, {{.BindKwargs}})
+{{- else}}
                 cur.execute({{.Const}})
+{{- end}}
                 for row in cur:
                     yield row

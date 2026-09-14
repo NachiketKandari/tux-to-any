@@ -74,6 +74,11 @@ func userPrompt(p *pyplan.Plan, opts Options, notes []string) string {
 	sb.WriteString("Repository methods available (self.repo.*):\n")
 	for _, m := range p.Repo {
 		sig := m.Name + "(" + strings.Join(m.Binds, ", ") + ")"
+		if len(m.RowShape) > 0 {
+			// Row provenance for the positional-tuple rule (engine-wiring
+			// audit Tier-2: the plan computed RowShape and nothing read it).
+			sig += " -> row (" + strings.Join(m.RowShape, ", ") + ")"
+		}
 		fmt.Fprintf(&sb, "  - %s  [%s]\n", sig, m.Kind)
 	}
 	sb.WriteString("\nSQL constants available (never restate SQL):\n")
