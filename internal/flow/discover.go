@@ -219,8 +219,13 @@ func fmlCodes(n *Node) []string {
 // isErrorAdd reports an error-emission add: an ERR field or an add into a
 // buffer with a known input/send role (the "fadd err = returning error"
 // idiom). Unknown-role buffers stay conservative — a plain add is a
-// response write unless proven otherwise.
+// response write unless proven otherwise. Gets never qualify: a read-guard
+// node shares the input buffer, and marking its GETs as error emissions
+// would erase the branch's request fields from the contract.
 func isErrorAdd(op ir.FmlOp, n *Node) bool {
+	if op.Kind != ir.FmlAdd {
+		return false
+	}
 	if ir.IsErrField(op.Field) {
 		return true
 	}
