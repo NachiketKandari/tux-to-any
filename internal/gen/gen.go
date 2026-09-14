@@ -255,7 +255,9 @@ func (s *Service) rowFields(q *ir.Query) ([]templates.FieldSpec, error) {
 		fields = append(fields, spec)
 	}
 	if len(fields) == 0 {
-		return nil, fmt.Errorf("gen: query %s has a row shape but no FETCH-INTO fields", q.ID)
+		// RowShape empty means the INTO span captured no host refs — usually
+		// a scan miss (e.g. spaced ": var" host refs), never a real shape.
+		return nil, fmt.Errorf("gen: query %s has no row shape — the INTO span captured no host refs (check the source's host-ref formatting)", q.ID)
 	}
 	return fields, nil
 }

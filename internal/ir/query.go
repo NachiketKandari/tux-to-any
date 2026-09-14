@@ -208,29 +208,36 @@ func intoNames(s string) []string {
 				depth--
 			}
 		case depth == 0 && s[i] == ':':
-			j := i + 1
+			// ": name" — whitespace between the colon and the host name is
+			// legal Pro*C (reformatted sources ship it); scan past it.
+			k := i + 1
+			for k < len(s) && (s[k] == ' ' || s[k] == '\t') {
+				k++
+			}
+			j := k
 			for j < len(s) && isIdentByteFor(s[j]) {
 				j++
 			}
-			if j == i+1 {
+			if j == k {
 				continue
 			}
-			name := s[i+1 : j]
+			start := k
+			name := s[start : j]
 			for j+1 < len(s) && s[j] == '.' && isIdentByteFor(s[j+1]) {
 				k := j + 1
 				for k < len(s) && isIdentByteFor(s[k]) {
 					k++
 				}
-				name, j = s[i+1:k], k
+				name, j = s[start:k], k
 			}
 			if j < len(s) && s[j] == '[' {
-				k := j
-				for k < len(s) && s[k] != ']' {
-					k++
+				k2 := j
+				for k2 < len(s) && s[k2] != ']' {
+					k2++
 				}
-				if k < len(s) {
-					name = s[i+1 : k+1]
-					j = k + 1
+				if k2 < len(s) {
+					name = s[start : k2+1]
+					j = k2 + 1
 				}
 			}
 			j = skipIndicator(s, j)
@@ -315,21 +322,26 @@ func splitSelectRefs(norm string) (binds, into []string) {
 }
 
 // scanHostRefs captures the base names of :host refs in s[from:to];
-// array-occurrence subscripts are consumed and stripped.
+// array-occurrence subscripts are consumed and stripped. Whitespace between
+// the colon and the name is legal Pro*C (": var") and is scanned past.
 func scanHostRefs(s string, from, to int) []string {
 	var out []string
 	for i := from; i < to; i++ {
 		if s[i] != ':' {
 			continue
 		}
-		j := i + 1
+		k := i + 1
+		for k < to && (s[k] == ' ' || s[k] == '\t') {
+			k++
+		}
+		j := k
 		for j < to && isIdentByteFor(s[j]) {
 			j++
 		}
-		if j == i+1 {
+		if j == k {
 			continue
 		}
-		name := s[i+1 : j]
+		name := s[k : j]
 		if j < to && s[j] == '[' {
 			k := j
 			for k < to && s[k] != ']' {
