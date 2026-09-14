@@ -94,7 +94,7 @@ func runConvertFanout(ctx context.Context, w *convertWiring, target string, main
 			continue
 		}
 		ok++
-		printServiceSummary(r.service, r.res, r.led, r.base, degrade)
+		printServiceSummary(os.Stdout, r.service, r.res, r.led, r.base, degrade)
 	}
 	fmt.Printf("convert: %d service(s) from %s — %d ok, %d failed\n", len(mains), target, ok, failed)
 	return firstErr

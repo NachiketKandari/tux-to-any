@@ -65,7 +65,7 @@ func runDiscover(ctx context.Context, args []string) error {
 		// The cs drafts are deterministic (B1/B2): no AI naming pass —
 		// every suggestion derives from the flow IR and the config
 		// namespace/area defaults.
-		_, err = discoverCsCore(ctx, path, discoverOutDir(*outDir), *stdout,
+		_, err = discoverCsCore(ctx, path, discoverOutDir(*outDir), *stdout, cfg,
 			csdraft.Options{Namespace: cfg.Convertcs.Namespace, Area: cfg.Convertcs.Area})
 		return err
 	}
@@ -78,7 +78,7 @@ func runDiscover(ctx context.Context, args []string) error {
 	}
 	bd := newWiring(ctx, cfg).budget
 
-	_, err = discoverCore(ctx, path, discoverOutDir(*outDir), *stdout, client, bd)
+	_, err = discoverCore(ctx, path, discoverOutDir(*outDir), *stdout, cfg, client, bd)
 	return err
 }
 
@@ -88,7 +88,7 @@ func runDiscover(ctx context.Context, args []string) error {
 // AI naming runs per candidate when client is non-nil; the deterministic
 // picker fills any gaps. Drafts never clobber — existing ones stay and the
 // fresh draft lands alongside as a numbered sibling.
-func discoverCore(ctx context.Context, target, out string, stdout bool, client llm.Client, bd budget.Budget) (int, error) {
+func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *config.Config, client llm.Client, bd budget.Budget) (int, error) {
 	log := telemetry.Log(ctx)
 
 	fi, err := os.Stat(target)
@@ -97,7 +97,7 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, client l
 	}
 	dirMode := fi.IsDir()
 
-	irFiles, err := extractFlowIR(target)
+	irFiles, err := extractFlowIR(target, cfg)
 	if err != nil {
 		return 0, err
 	}

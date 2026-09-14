@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,7 +141,7 @@ func runConvert(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	printServiceSummary(mapping.Service, res, led, base, degrade)
+	printServiceSummary(os.Stdout, mapping.Service, res, led, base, degrade)
 	return nil
 }
 
@@ -200,7 +201,7 @@ func runConvertFnLib(ctx context.Context, w *convertWiring, main *ir.File, baseR
 		"service", svcName, "base", base,
 		"files", len(res.Files), "llm_calls", res.LLMCalls,
 		"duration_ms", time.Since(start).Milliseconds())
-	printServiceSummary(svcName, res, led, base, degrade)
+	printServiceSummary(os.Stdout, svcName, res, led, base, degrade)
 	return nil
 }
 
@@ -225,7 +226,7 @@ type convertWiring struct {
 func draftAndStop(ctx context.Context, target string, cfg *config.Config, noLLM bool) error {
 	client := resolveLLMClient(ctx, cfg, noLLM, "endpoint naming")
 	bd := budget.New(cfg.Run.MaxPromptTokens, cfg.Run.MaxOutputTokens, cfg.Run.CharsPerToken)
-	n, err := discoverCore(ctx, target, discoverOutDir(""), false, client, bd)
+	n, err := discoverCore(ctx, target, discoverOutDir(""), false, cfg, client, bd)
 	if err != nil {
 		return err
 	}
@@ -299,32 +300,38 @@ func convertOneService(ctx context.Context, w *convertWiring, main *ir.File, fil
 
 // printServiceSummary reports one service's run outcome — the same lines in
 // single-service and fan-out mode.
-func printServiceSummary(service string, res *convert.Result, led *ledger.Ledger, base, degrade string) {
-	appended, failed, blocked, skipped, placeholders, deviated := led.Counts()
-	fmt.Printf("%s: %d files written under %s — units: %d appended, %d failed, %d blocked, %d skipped, %d placeholders, %d stubbed fns, %d sql deviations, %d llm calls\n",
-		service, len(res.Files), base, appended, failed, blocked, skipped, placeholders, len(res.Stubs), deviated, res.LLMCalls)
+func printServiceSummary(w io.Writer, service string, res *convert.Result, led *ledger.Ledger, base, degrade string) {
+	appended, failed, _, skipped, placeholders, deviated := led.Counts()
+	fmt.Fprintf(w, "%s: %d files written under %s — units: %d appended, %d failed, %d skipped, %d placeholders, %d stubbed fns, %d sql deviations, %d llm calls\n",
+		service, len(res.Files), base, appended, failed, skipped, placeholders, len(res.Stubs), deviated, res.LLMCalls)
 	if degrade != "" {
-		fmt.Println("  note:", degrade)
+		fmt.Fprintln(w, "  note:", degrade)
 	}
 	if res.TierB != nil && res.TierB.DegradeReason != "" {
-		fmt.Println("  tier B:", res.TierB.DegradeReason)
+		fmt.Fprintln(w, "  tier B:", res.TierB.DegradeReason)
 	} else if res.TierB != nil {
-		fmt.Println("  tier B:", res.TierB.Summary)
+		fmt.Fprintln(w, "  tier B:", res.TierB.Summary)
+		// Engine-wiring audit Tier-1 #6: a failed batched Tier B must show
+		// its trimmed compiler/vet/test output, not just the one-line
+		// summary — the Errors slice was computed and dropped.
+		for _, e := range res.TierB.Errors {
+			fmt.Fprintln(w, "  tier B error:", e)
+		}
 	}
 	for _, f := range res.Failed {
-		fmt.Println("  failed:", f)
+		fmt.Fprintln(w, "  failed:", f)
 	}
 	for _, s := range res.Skipped {
-		fmt.Println("  skipped:", s)
+		fmt.Fprintln(w, "  skipped:", s)
 	}
 	for _, d := range res.SQLDeviations {
-		fmt.Println("  sql deviation:", d)
+		fmt.Fprintln(w, "  sql deviation:", d)
 	}
 	for _, st := range res.Stubs {
-		fmt.Println("  stubbed fn (panics until implemented):", st)
+		fmt.Fprintln(w, "  stubbed fn (panics until implemented):", st)
 	}
-	for _, w := range res.Warnings {
-		fmt.Println("  coverage:", w)
+	for _, cw := range res.Warnings {
+		fmt.Fprintln(w, "  coverage:", cw)
 	}
 }
 

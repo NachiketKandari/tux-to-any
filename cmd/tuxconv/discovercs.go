@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"tux-to-any/internal/config"
 	"tux-to-any/internal/csdraft"
 	"tux-to-any/internal/flow"
 	"tux-to-any/internal/telemetry"
@@ -24,13 +25,13 @@ import (
 // discoverCsCore renders one cs mapping draft per entry file into out (or
 // prints with stdout). The draft file name is <stem>.cs.mapping.yaml;
 // never clobbers — a kept draft gets a numbered sibling.
-func discoverCsCore(ctx context.Context, target, out string, stdout bool, opts csdraft.Options) (int, error) {
+func discoverCsCore(ctx context.Context, target, out string, stdout bool, cfg *config.Config, opts csdraft.Options) (int, error) {
 	log := telemetry.Log(ctx)
 
 	if _, err := os.Stat(target); err != nil {
 		return 0, fmt.Errorf("cannot access target path %s: %w", target, err)
 	}
-	irFiles, err := extractFlowIR(target)
+	irFiles, err := extractFlowIR(target, cfg)
 	if err != nil {
 		return 0, err
 	}

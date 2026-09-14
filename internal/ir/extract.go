@@ -448,12 +448,19 @@ func buildBuffers(facts *tsscan.SourceFacts, f *File, ops []FmlOp, opts Options)
 }
 
 // resolveBufferRole matches the buffer's full name or last '_' segment
-// against the registry, case-insensitively; unknown roles are recorded, not
-// guessed.
+// against the registry, case-insensitively on BOTH sides — the config yaml
+// may carry CamelCase keys ("Ibuffer"), the engine's contract is lowercase
+// ("ibuffer") — so a capitalized registry key can never silently degrade
+// every buffer to unknown-role. Unknown roles are recorded, not guessed.
 func resolveBufferRole(name string, opts Options) FmlBufferRole {
 	for _, cand := range []string{strings.ToLower(name), lastSegmentLower(name)} {
 		if role, ok := opts.BufferRoles[cand]; ok {
 			return FmlBufferRole(role)
+		}
+		for k, v := range opts.BufferRoles {
+			if strings.ToLower(k) == cand {
+				return FmlBufferRole(v)
+			}
 		}
 	}
 	return BufferUnknown
