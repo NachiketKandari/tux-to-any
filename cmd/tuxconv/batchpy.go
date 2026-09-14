@@ -18,6 +18,7 @@ import (
 	"tux-to-any/internal/ir"
 	"tux-to-any/internal/pygen"
 	"tux-to-any/internal/pyplan"
+	"tux-to-any/internal/sqlchk"
 	"tux-to-any/internal/telemetry"
 	scanner "tux-to-any/internal/tsscan"
 )
@@ -35,7 +36,7 @@ func runBatchpy(ctx context.Context, args []string) error {
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
 	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: skip the service-body LLM seam (overrides run.llm)")
 	shape := fs.String("shape", "", "auto|repo — shape rubric override (default: batchpy.shape from config)")
-	dmlLoop := fs.String("dml-loop", "", "batch|rowbyrow — cursor-DML semantics (default: batchpy.dmlLoop from config)")
+	dmlLoop := fs.String("dml-loop", "", "batch|rowbyrow — cursor-DML semantics, simple shape only (repo shape renders row-by-row; default: batchpy.dmlLoop from config)")
 
 	flagArgs, positional := reorderArgs(args)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -125,7 +126,7 @@ func runBatchpy(ctx context.Context, args []string) error {
 		path := paths[i]
 		start := time.Now()
 		telemetry.Log(ctx).Info("batch file started", "source", path)
-		res, plan, name, err := convertBatchFile(ctx, path, b, pygen.Options{
+		res, plan, name, err := convertBatchFile(ctx, path, b, irOptions(cfg, false), pygen.Options{
 			NoLLM: !llmEnabled || client == nil, Client: client, Budget: bg, MaxRetries: cfg.ValidateCfg.MaxRetries,
 			Audit: rec,
 		})
@@ -184,27 +185,8 @@ func runBatchpy(ctx context.Context, args []string) error {
 			"sql_deviations", r.res.Retention.SQLDeviations, "llm_calls", r.res.LLMCalls,
 			"duration_ms", time.Since(r.start).Milliseconds())
 		archiveBatchArtifacts(ctx, rec, r.name, r.plan, r.res)
-		res := r.res
-		ret := res.Retention
-		summary += ret.SQLDeviations
-		fmt.Printf("%s: shape=%s dml=%s consts=%d phases=%d syntax=%s sql_deviations=%d retention=%.0f%% llm_calls=%d -> %s\n",
-			r.name, ret.Shape, ret.DMLLoop, ret.SelectTotal+ret.DMLTotal, ret.PhasesTotal, ret.PyMode, ret.SQLDeviations, ret.Percent(), ret.LLMCalls, filepath.Join(out, r.name+".py"))
-		for _, n := range res.Notes {
-			fmt.Println("  note:", n)
-		}
-		for _, d := range res.Fidelity {
-			if d.Status == "deviated" {
-				for _, dv := range d.Deviations {
-					fmt.Printf("  sql deviation: %s [%s] %s\n", d.Method, dv.Kind, dv.Detail)
-				}
-			}
-			if d.Status == "unverifiable" {
-				fmt.Println("  sql unverifiable:", d.Method)
-			}
-		}
-		if !res.PyOK && ret.PyMode == "ast" {
-			fmt.Println("  python syntax:", res.PyDetail)
-		}
+		summary += r.res.Retention.SQLDeviations
+		writeBatchModuleReport(os.Stdout, r.name, r.res, out)
 	}
 	fmt.Printf("batchpy: %d module(s) written under %s — %d sql deviations total", len(paths)-skipped, out, summary)
 	if skipped > 0 {
@@ -212,6 +194,40 @@ func runBatchpy(ctx context.Context, args []string) error {
 	}
 	fmt.Println()
 	return firstErr
+}
+
+// writeBatchModuleReport renders one written module's human report — the
+// summary line (including the log-site parity the Retention contract
+// promises alongside, engine-wiring audit Tier-1 #10), seam notes,
+// structural issues, per-const SQL fidelity detail, and the interpreter
+// gate's ast detail. Every outcome the engine computed reaches the
+// operator here (Tier-1 #1/#11: no silent writes, no transcript-only
+// fidelity).
+func writeBatchModuleReport(w io.Writer, name string, res pygen.Result, out string) {
+	ret := res.Retention
+	fmt.Fprintf(w, "%s: shape=%s dml=%s consts=%d phases=%d syntax=%s sql_deviations=%d retention=%.0f%% llm_calls=%d log_sites=%d/%d -> %s\n",
+		name, ret.Shape, ret.DMLLoop, ret.SelectTotal+ret.DMLTotal, ret.PhasesTotal, ret.PyMode,
+		ret.SQLDeviations, ret.Percent(), ret.LLMCalls, ret.LogCallsEmitted, ret.LogSitesTotal,
+		filepath.Join(out, name+".py"))
+	for _, n := range res.Notes {
+		fmt.Fprintln(w, "  note:", n)
+	}
+	for _, iss := range res.Structure {
+		fmt.Fprintf(w, "  structure: line %d: %s\n", iss.Line, iss.Msg)
+	}
+	for _, d := range res.Fidelity {
+		switch d.Status {
+		case sqlchk.StatusDeviated:
+			for _, dv := range d.Deviations {
+				fmt.Fprintf(w, "  sql deviation: %s [%s] %s\n", d.Method, dv.Kind, dv.Detail)
+			}
+		case sqlchk.StatusUnverifiable:
+			fmt.Fprintln(w, "  sql unverifiable:", d.Method)
+		}
+	}
+	if !res.PyOK && ret.PyMode == "ast" {
+		fmt.Fprintln(w, "  python syntax:", res.PyDetail)
+	}
 }
 
 // wrongPipelineError marks a Tuxedo service entry (SVC_*) fed to the batch
@@ -226,13 +242,15 @@ func (e *wrongPipelineError) Error() string {
 // convertBatchFile runs the batchpy pipeline for one .pc file — scan →
 // flow → plan → generate → gates — and returns the generated module; the
 // caller owns the ordered write phase (collision gate + input-order
-// writes), so workers never race one output file.
-func convertBatchFile(ctx context.Context, path string, b config.Batchpy, gOpts pygen.Options) (pygen.Result, *pyplan.Plan, string, error) {
+// writes), so workers never race one output file. irOpts threads the run
+// config's buffer-role registry (audit Tier-1 #4) — batchflow's census and
+// the IR archive stay consistent with the extract/convertgo paths.
+func convertBatchFile(ctx context.Context, path string, b config.Batchpy, irOpts ir.Options, gOpts pygen.Options) (pygen.Result, *pyplan.Plan, string, error) {
 	facts, err := scanner.ScanFile(path)
 	if err != nil {
 		return pygen.Result{}, nil, "", fmt.Errorf("batchpy: scan %s: %w", path, err)
 	}
-	irf, err := ir.ExtractFileOpts(path, ir.Options{})
+	irf, err := ir.ExtractFileOpts(path, irOpts)
 	if err != nil {
 		return pygen.Result{}, nil, "", fmt.Errorf("batchpy: extract %s: %w", path, err)
 	}
@@ -316,9 +334,10 @@ func batchTargets(ctx context.Context, target string, filter string) ([]string, 
 	return paths, nil
 }
 
-// archiveBatchArtifacts writes the module, its plan, and its retention
-// report into the run's audit trail (best-effort, never fatal). JSON
-// artifacts go through the shared WriteJSON (nil-receiver tolerated, A5.2).
+// archiveBatchArtifacts writes the module, its plan, its retention report,
+// and its per-const fidelity detail into the run's audit trail (best-effort,
+// never fatal). JSON artifacts go through the shared WriteJSON
+// (nil-receiver tolerated, A5.2).
 func archiveBatchArtifacts(ctx context.Context, rec *audit.Recorder, name string, plan *pyplan.Plan, res pygen.Result) {
 	if rec == nil {
 		return
@@ -334,6 +353,9 @@ func archiveBatchArtifacts(ctx context.Context, rec *audit.Recorder, name string
 		log.Warn("audit archive write failed", "error", err)
 	}
 	if _, err := rec.WriteJSON(name+".retention.json", res.Retention); err != nil {
+		log.Warn("audit archive write failed", "error", err)
+	}
+	if _, err := rec.WriteJSON(name+".fidelity.json", res.Fidelity); err != nil {
 		log.Warn("audit archive write failed", "error", err)
 	}
 	if len(res.Notes) > 0 {
