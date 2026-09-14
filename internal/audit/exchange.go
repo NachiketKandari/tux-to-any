@@ -23,6 +23,17 @@ type Exchange struct {
 	Response string   `json:"response"`
 	Errors   []string `json:"errors,omitempty"` // gate/validation errors fed back into the next attempt
 	Outcome  string   `json:"outcome"`          // ok | failed
+	// FinishReason is the provider's finish_reason for this attempt
+	// ("stop", "length", …). Anything but "stop"/"" means the payload may
+	// be cut mid-statement — the audit trail must say so (engine-wiring
+	// audit Tier-1 #8: truncation was indistinguishable from success).
+	FinishReason string `json:"finish_reason,omitempty"`
+	// Token usage for this attempt (provider-reported; estimated when the
+	// endpoint omits usage — UsageEstimated says which).
+	PromptTokens     int  `json:"prompt_tokens,omitempty"`
+	CompletionTokens int  `json:"completion_tokens,omitempty"`
+	TotalTokens      int  `json:"total_tokens,omitempty"`
+	UsageEstimated   bool `json:"usage_estimated,omitempty"`
 	// File overrides the default "<kind>-<name>-attempt<attempt>.json"
 	// artifact name (convert pins its unit-<id>-attempt<n> convention).
 	File string `json:"-"`

@@ -79,14 +79,21 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 	if extract == nil {
 		extract = func(content string) string { return content }
 	}
-	record := func(attempt int, prompt, response string, errs []string) {
+	record := func(attempt int, prompt string, resp Response, errs []string) {
 		if in.Audit == nil {
 			return
 		}
 		e := audit.Exchange{
 			Unit: in.Unit, Kind: in.Kind, Name: in.Name, Attempt: attempt,
 			Template: in.Template, LLM: in.LLM,
-			Prompt: prompt, Response: response, Errors: errs, Outcome: "ok",
+			Prompt: prompt, Response: resp.Content, Errors: errs, Outcome: "ok",
+			FinishReason: resp.FinishReason,
+		}
+		if resp.Usage.TotalTokens > 0 || resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0 {
+			e.PromptTokens = resp.Usage.PromptTokens
+			e.CompletionTokens = resp.Usage.CompletionTokens
+			e.TotalTokens = resp.Usage.TotalTokens
+			e.UsageEstimated = resp.Usage.Estimated
 		}
 		if len(errs) > 0 {
 			e.Outcome = "failed"
@@ -115,17 +122,28 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 		calls++
 		if cerr != nil {
 			lastErr = cerr
-			record(attempt, archived, "", []string{cerr.Error()})
+			record(attempt, archived, Response{}, []string{cerr.Error()})
 			if in.AbortOnChatError {
 				return "", calls, notes, fmt.Errorf("llm chat: %w", cerr)
 			}
 			notes = append(notes, cerr.Error())
 			continue
 		}
+		// Truncation signal (engine-wiring audit Tier-1 #8): a
+		// finish_reason other than "stop" means the provider cut the
+		// completion — the payload may end mid-statement even when the
+		// gates happen to pass. The archived Exchange carries
+		// finish_reason + usage; the note rides into the next attempt's
+		// prompt whenever a later gate rejects.
+		if resp.FinishReason != "" && resp.FinishReason != "stop" {
+			telemetry.Log(ctx).Warn("llm response truncated", "kind", in.Kind, "name", in.Name,
+				"finish_reason", resp.FinishReason, "total_tokens", resp.Usage.TotalTokens)
+			notes = append(notes, "response truncated (finish_reason "+resp.FinishReason+") — the payload may be incomplete")
+		}
 		if in.Budget.MaxOutputTokens > 0 {
 			if berr := in.Budget.CheckOutput(resp.Content); berr != nil {
 				lastErr = berr
-				record(attempt, archived, resp.Content, []string{berr.Error()})
+				record(attempt, archived, resp, []string{berr.Error()})
 				notes = append(notes, "output over budget: "+berr.Error())
 				continue
 			}
@@ -137,11 +155,11 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 		}
 		if len(gateErrs) > 0 {
 			lastErr = errors.New(strings.Join(gateErrs, "; "))
-			record(attempt, archived, resp.Content, gateErrs)
+			record(attempt, archived, resp, gateErrs)
 			notes = append(notes, gateErrs...)
 			continue
 		}
-		record(attempt, archived, resp.Content, nil)
+		record(attempt, archived, resp, nil)
 		return payload, calls, notes, nil
 	}
 	if lastErr == nil {

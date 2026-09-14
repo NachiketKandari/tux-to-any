@@ -23,8 +23,10 @@ type stubClient struct {
 }
 
 type chatOutcome struct {
-	content string
-	err     error
+	content      string
+	err          error
+	finishReason string
+	usage        Usage
 }
 
 func (s *stubClient) Chat(_ context.Context, req ChatRequest) (Response, error) {
@@ -35,7 +37,7 @@ func (s *stubClient) Chat(_ context.Context, req ChatRequest) (Response, error) 
 		if o.err != nil {
 			return Response{}, o.err
 		}
-		return Response{Content: o.content}, nil
+		return Response{Content: o.content, FinishReason: o.finishReason, Usage: o.usage}, nil
 	}
 	o := s.responses[len(s.responses)-1]
 	s.calls++
@@ -43,7 +45,7 @@ func (s *stubClient) Chat(_ context.Context, req ChatRequest) (Response, error) 
 	if o.err != nil {
 		return Response{}, o.err
 	}
-	return Response{Content: o.content}, nil
+	return Response{Content: o.content, FinishReason: o.finishReason, Usage: o.usage}, nil
 }
 
 func (s *stubClient) Stream(ctx context.Context, req ChatRequest, onDelta func(string) error) (Response, error) {
@@ -247,5 +249,86 @@ func TestJSONObject(t *testing.T) {
 	}
 	if got := JSONObject("no braces"); got != "" {
 		t.Errorf("got %q", got)
+	}
+}
+
+// The engine-wiring audit (docs/engine-wiring-audit.md Tier-1 #8) pinned
+// the truncation signal: a finish_reason other than "stop" must be visible
+// — in the archived Exchange (finish_reason + usage fields), in the run
+// log, and in the notes that reach the next attempt's prompt. Pre-fix,
+// RunSeam read only Content and a length-cut payload was
+// indistinguishable from success.
+func TestRunSeamSignalsTruncation(t *testing.T) {
+	rec := newRecorder(t)
+	client := &stubClient{responses: []chatOutcome{{
+		content:      "func partial(",
+		finishReason: "length",
+		usage:        Usage{PromptTokens: 100, CompletionTokens: 42, TotalTokens: 142},
+	}}}
+	payload, calls, notes, err := RunSeam(context.Background(), SeamInput{
+		Unit: "u1", Kind: "test", Name: "trunc", Audit: rec, Client: client,
+		Prompt: func([]string) (string, []Message) { return "p", nil },
+	})
+	if err != nil {
+		t.Fatalf("gate-less seam must accept the payload: %v", err)
+	}
+	if payload != "func partial(" || calls != 1 {
+		t.Fatalf("payload/calls = %q/%d", payload, calls)
+	}
+	joined := strings.Join(notes, "; ")
+	if !strings.Contains(joined, "truncated") || !strings.Contains(joined, "length") {
+		t.Errorf("notes must carry the truncation signal, got %v", notes)
+	}
+	data, rerr := os.ReadFile(filepath.Join(rec.Dir(), "test-trunc-attempt0.json"))
+	if rerr != nil {
+		t.Fatalf("exchange artifact: %v", rerr)
+	}
+	var ex audit.Exchange
+	if err := json.Unmarshal(data, &ex); err != nil {
+		t.Fatal(err)
+	}
+	if ex.FinishReason != "length" {
+		t.Errorf("exchange finish_reason = %q, want length", ex.FinishReason)
+	}
+	if ex.PromptTokens != 100 || ex.CompletionTokens != 42 || ex.TotalTokens != 142 || ex.UsageEstimated {
+		t.Errorf("exchange usage = %+v estimated=%v", ex, ex.UsageEstimated)
+	}
+	if ex.Outcome != "ok" {
+		t.Errorf("outcome = %q — truncation alone must not flip the outcome the gate decided", ex.Outcome)
+	}
+}
+
+// The truncation note rides into the next attempt's prompt notes when the
+// gate rejects the truncated payload.
+func TestRunSeamTruncationFeedsRetryNotes(t *testing.T) {
+	client := &stubClient{responses: []chatOutcome{
+		{content: "bad(", finishReason: "length"},
+		{content: "good", finishReason: "stop"},
+	}}
+	var seen []string
+	_, calls, notes, err := RunSeam(context.Background(), SeamInput{
+		Kind: "test", Name: "retry", Client: client, MaxRetries: 1,
+		Prompt: func(n []string) (string, []Message) {
+			seen = append(seen, strings.Join(n, "|"))
+			return "p", nil
+		},
+		Gate: func(payload string) []string {
+			if payload == "bad(" {
+				return []string{"unbalanced"}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("second attempt must pass: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	if !strings.Contains(seen[1], "truncated") {
+		t.Errorf("attempt 1 notes must carry the truncation signal, got %q", seen[1])
+	}
+	if !strings.Contains(strings.Join(notes, "; "), "unbalanced") {
+		t.Errorf("final notes must carry the gate errors, got %v", notes)
 	}
 }
