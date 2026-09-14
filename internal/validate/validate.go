@@ -121,9 +121,12 @@ func (v *Validator) Syntax(path string) Result {
 }
 
 // CompileAll runs Tier B against the target module: build, vet, test, and —
-// when opts.RunSmoke — a smoke run. Batched after conversion completes and
-// per retry cycle; failures are unit failures whose trimmed errors feed the
-// bounded retry loop.
+// when opts.RunSmoke — a smoke run. Batched after conversion completes.
+// Its Errors surface in the run summary (cmd) — they do NOT feed any
+// per-unit retry loop: the LLM seams' gates are per-body structural checks
+// (goast/parse), and Tier B has no unit to retry by the time it runs
+// (engine-wiring audit Tier-1 #6: the old doc claimed a retry loop no
+// code path fed).
 func (v *Validator) CompileAll(ctx context.Context) Result {
 	res := Result{Tier: "compile"}
 	enabled, degrade := v.TierBEnabled()
