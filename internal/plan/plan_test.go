@@ -135,9 +135,6 @@ func TestPlanGateNavGolden(t *testing.T) {
 	if !strings.HasSuffix(stubUnit.TargetPath, "/controller/fnstubs.go") {
 		t.Errorf("fn_stub target = %q, want controller/fnstubs.go", stubUnit.TargetPath)
 	}
-	if len(p.Orphans) != 0 {
-		t.Errorf("orphans = %v, want none", p.Orphans)
-	}
 	if len(p.Skipped) != 0 {
 		t.Errorf("skipped = %v, want none (all conditions mapped)", p.Skipped)
 	}
@@ -194,9 +191,6 @@ func TestPlanSkipsUnmappedBranchQueries(t *testing.T) {
 	}
 	if _, ok := skipped["cur_demo_insured"]; !ok {
 		t.Errorf("cur_demo_insured must be a recorded skip, got %v", p.Skipped)
-	}
-	if len(p.Orphans) != 0 {
-		t.Errorf("orphans = %v", p.Orphans)
 	}
 	for _, u := range p.Units {
 		if u.Name == "GetSipInsurance" {
@@ -275,5 +269,45 @@ func TestDefaultMethodNames(t *testing.T) {
 	}
 	if names["q3"] == "" {
 		t.Error("q3 missing from the resolved names")
+	}
+}
+
+// The engine-wiring audit (docs/engine-wiring-audit.md Tier-1 #5) pinned
+// the plan-warnings surface: the unmapped-arm advisories Build computes
+// must reach both plan artifacts — the human twin renders a coverage
+// section, the cmd prints them. Pre-fix, WriteMD and runPlan never read
+// Warnings; they surfaced only via a later convertgo run.
+func TestUnmappedArmWarningsSurfaceInArtifacts(t *testing.T) {
+	opts := navOptions(t)
+	m := navMapping()
+	var eps []Endpoint
+	for _, e := range m.Endpoints {
+		if e.Condition != 3 {
+			eps = append(eps, e)
+		}
+	}
+	m.Endpoints = eps
+	opts.Mapping = m
+	p, err := Build(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(p.Warnings, "\n")
+	if !strings.Contains(joined, "condition 3") {
+		t.Fatalf("warnings must name the unmapped condition, got %v", p.Warnings)
+	}
+	var md bytes.Buffer
+	if err := WriteMD(&md, p); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(md.String(), "Coverage warnings") || !strings.Contains(md.String(), "condition 3") {
+		t.Errorf("plan.md must render the coverage warnings, got:\n%s", md.String())
+	}
+	var js bytes.Buffer
+	if err := WriteJSON(&js, p); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(js.String(), "condition 3") {
+		t.Error("plan.json must carry the warnings")
 	}
 }

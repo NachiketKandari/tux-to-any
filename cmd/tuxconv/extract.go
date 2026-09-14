@@ -61,7 +61,7 @@ func runExtract(ctx context.Context, args []string) error {
 			fmt.Fprintf(os.Stderr, "no .pc or .pcf files found in %s\n", target)
 			return nil
 		}
-		return writeDirIR(ctx, cfg, files)
+		return writeDirIR(ctx, cfg, *outPath, files)
 	}
 
 	file, err := ir.ExtractFileOpts(target, irOpts)
@@ -281,9 +281,15 @@ func logConfigRouting(ctx context.Context, cfg *config.Config, source string) {
 	)
 }
 
-func writeDirIR(ctx context.Context, cfg *config.Config, files []*ir.File) error {
+func writeDirIR(ctx context.Context, cfg *config.Config, outPath string, files []*ir.File) error {
 	log := telemetry.Log(ctx)
-	stateDir := cfg.Paths.State
+	// Flag > config (C1): -out redirects the directory-mode IR state dir —
+	// pre-fix the flag was silently ignored here (engine-wiring audit
+	// Tier-1 #12).
+	stateDir := outPath
+	if stateDir == "" {
+		stateDir = cfg.Paths.State
+	}
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		return fmt.Errorf("failed creating IR state dir %s: %w", stateDir, err)
 	}
@@ -344,6 +350,10 @@ func logFileIR(ctx context.Context, file *ir.File) {
 		log.Warn("unbalanced region — the parse continues leniently past it, so downstream facts may be truncated",
 			"file", file.Path, "kind", u.Kind, "line", u.Line, "col", u.Col)
 	}
+	for _, pe := range file.ParseErrors {
+		log.Warn("parse error — the grammar recovered, but downstream facts over this region are untrusted",
+			"file", file.Path, "kind", pe.Kind, "line", pe.Line, "col", pe.Col)
+	}
 	for _, tp := range file.TPCalls {
 		if tp.ServiceFile != "" {
 			log.Info("tpcall site resolved", "file", file.Path, "service", tp.Service,
@@ -360,6 +370,7 @@ func logFileIR(ctx context.Context, file *ir.File) {
 		"queries", len(file.Queries),
 		"host_vars", len(file.HostVars),
 		"unbalanced", len(file.Unbalanced),
+		"parse_errors", len(file.ParseErrors),
 	)
 }
 

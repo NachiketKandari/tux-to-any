@@ -112,6 +112,9 @@ func runPlan(ctx context.Context, args []string) error {
 	for _, d := range p.Dropped {
 		fmt.Printf("  dropped: %s\n", d)
 	}
+	for _, w := range p.Warnings {
+		fmt.Printf("  coverage: %s\n", w)
+	}
 	return nil
 }
 

@@ -103,7 +103,6 @@ type Plan struct {
 	Skipped []Skipped `json:"skipped,omitempty"`
 	Stubs   []Stub    `json:"stubs,omitempty"`
 	Dropped []string  `json:"dropped,omitempty"`
-	Orphans []string  `json:"orphans,omitempty"`
 	// FnLib marks a fn-library plan (no entry service): units are the
 	// library's own queries (db methods) and functions (helper bodies) —
 	// no endpoints, no handler glue, no mapping draft needed.

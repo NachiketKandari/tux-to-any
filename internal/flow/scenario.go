@@ -22,11 +22,14 @@ import (
 // RefName is the scenario-key identifier — the alias when present, else the
 // ref's base ident before the first '.'.
 type DispatchAxis struct {
-	Ref        string
-	RefName    string
-	Alias      string
-	Domain     []string
-	Sites      int
+	Ref     string
+	RefName string
+	Alias   string
+	Domain  []string
+	Sites   int
+	// Normalized records that the axis ref needed the normalize chain
+	// (strcmp/upper-casing) to match its domain. RESERVED as data — no
+	// reader propagates it yet (engine-wiring audit Tier-2 note).
 	Normalized bool
 	// HasDefault marks a dispatch chain that terminates in an else — the
 	// entry dispatches a default arm no domain value names. Detected from
@@ -638,15 +641,6 @@ func Scenarios(tree *Tree, axis *DispatchAxis) []*Scenario {
 		out = append(out, ScenarioFor(tree, axis, axis.DefaultKey()))
 	}
 	return out
-}
-
-// FallbackScenario is the honest axis:none shape (G-SCEN1): one scenario
-// covering the whole function — nothing folds, nothing is silent. Keyed
-// axis=none so the diff/report consumers treat it as a single-body scenario.
-func FallbackScenario(tree *Tree) *Scenario {
-	sc := ScenarioFor(tree, nil, "none")
-	sc.Key, sc.Var, sc.Value = "axis=none", "axis", "none"
-	return sc
 }
 
 // tribool is the fold's three-valued truth.
@@ -1365,6 +1359,23 @@ func RenderScenario(sc *Scenario, entry string, src []byte, irFile *ir.File) str
 	}
 	for _, r := range sc.Residue {
 		fmt.Fprintf(&sb, "/* UNFOLDED: %s */\n", r)
+	}
+	// Response/error provenance (SCEN-D9; engine-wiring audit Tier-2: the
+	// engine computed these and no artifact carried them — the scenario
+	// file is the per-scenario review surface).
+	if len(sc.ErrorAdds) > 0 {
+		fmt.Fprintf(&sb, "/* error adds: %s */\n", strings.Join(sc.ErrorAdds, ", "))
+	}
+	for _, r := range sc.Responses {
+		src := r.Var
+		if src == "" {
+			src = r.Value
+		}
+		stable := ""
+		if !r.Stable {
+			stable = " — UNSTABLE, verify manually"
+		}
+		fmt.Fprintf(&sb, "/* response: %s <- %s (L%d)%s */\n", r.Field, src, r.Line, stable)
 	}
 	sb.WriteString("\n")
 

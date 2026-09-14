@@ -66,8 +66,18 @@ type EpData struct {
 	Props      []string // DTO properties (union of the select queries' row props)
 	Queries    []QData
 	ReturnExpr string
-	Todo       bool
 	Span       string
+	// Scenario is the scenarioRef key when the arm comes from a scenario
+	// slice ("c_flag=F"); "" for condition-sliced arms.
+	Scenario string
+	// Residue is the loud SCEN-D4 slice evidence: source regions the
+	// planner kept verbatim because they touch the axis. The seam prompt
+	// carries them so the LLM implements the kept branches faithfully.
+	Residue []string
+	// LineSpan is the arm's source span (the arm view's extent) — read
+	// directly instead of re-parsing Span (engine-wiring audit Tier-1 #7:
+	// the Sscanf round-trip was a live drift trap).
+	LineSpan [2]int
 	// TodoSlot is the block between the deterministic prologue and the
 	// return statement: the tuxgo:TODO placeholder, or the seam's filled
 	// residual logic (16-space indent, trailing newline included).
@@ -191,7 +201,6 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 		if body, ok := opts.Resumed[epDatas[i].Name]; ok {
 			normalized := normalizeBody(body, bodyIndent)
 			if errs := armGates(p, epDatas[i], svc, i, normalized); len(errs) == 0 {
-				epDatas[i].Todo = false
 				epDatas[i].TodoSlot = normalized
 				res.Filled = append(res.Filled, epDatas[i].Name)
 				res.Bodies[epDatas[i].Name] = normalized
@@ -208,7 +217,6 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 		filled, calls, notes, err := fillArmBody(ctx, opts, p, epDatas[i], svc, i)
 		res.LLMCalls += calls
 		if err == nil {
-			epDatas[i].Todo = false
 			epDatas[i].TodoSlot = filled
 			res.Filled = append(res.Filled, epDatas[i].Name)
 			res.Bodies[epDatas[i].Name] = filled
@@ -270,7 +278,8 @@ func buildEndpoints(p *csplan.Plan) ([]EpData, []QData) {
 	for _, ep := range p.Endpoints {
 		data := EpData{
 			Name: ep.Name, Route: ep.Route, DTOName: ep.DTOName,
-			Todo: true, Span: ep.SourceSpan,
+			Span:     ep.SourceSpan,
+			Scenario: ep.Scenario, Residue: ep.Residue, LineSpan: ep.LineSpan,
 		}
 		methodSfx := 0
 		var props []string

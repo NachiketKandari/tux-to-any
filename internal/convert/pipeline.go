@@ -412,6 +412,11 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 			draft = flowDraft(opts, svc, c)
 		}
 	}
+	// §4.7 query-replacement accounting (engine-wiring audit Tier-2: the
+	// budget engine computed this on every seam call and nothing recorded
+	// it). One line per unit in the run log.
+	telemetry.Log(ctx).Info("sql replaced by store calls", "unit", u.Name,
+		"queries", len(view.Report), "shrink_pct", fmt.Sprintf("%.0f", view.ShrinkPct()))
 	methods := make([]string, 0, len(calls))
 	for _, call := range calls {
 		methods = append(methods, call.Name)
@@ -547,6 +552,8 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 	if err != nil {
 		return "", "", fmt.Errorf("convert: query replacement for fn %s: %w", u.Name, err)
 	}
+	telemetry.Log(ctx).Info("sql replaced by store calls", "unit", u.Name,
+		"queries", len(view.Report), "shrink_pct", fmt.Sprintf("%.0f", view.ShrinkPct()))
 	methods := make([]string, 0, len(calls))
 	for _, call := range calls {
 		methods = append(methods, call.Name)

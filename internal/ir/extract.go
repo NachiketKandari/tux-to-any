@@ -228,6 +228,12 @@ func build(rawFacts *tsscan.SourceFacts, opts Options) *File {
 	}
 	f.BranchCount, f.BranchingFactor = branchingOf(facts)
 	f.Unbalanced = unbalancedOf(facts)
+	if len(facts.ParseErrors) > 0 {
+		f.ParseErrors = make([]ParseError, 0, len(facts.ParseErrors))
+		for _, pe := range facts.ParseErrors {
+			f.ParseErrors = append(f.ParseErrors, ParseError{Kind: pe.Kind, Node: pe.Node, Line: pe.Line, Col: pe.Col})
+		}
+	}
 
 	ops := allFmlOps(facts, f, opts)
 	f.Queries = buildQueries(facts, ops)

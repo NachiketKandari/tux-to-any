@@ -61,8 +61,12 @@ func repoFieldExpr(field string) string { return "(_" + field + ")" }
 
 func userPrompt(p *csplan.Plan, ep EpData, svc fileData, source string, notes []string) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Component: %s · service: %s · endpoint: %s · arm source lines %s\n",
-		p.Component, p.Service, ep.Name, ep.Span)
+	scenario := ""
+	if ep.Scenario != "" {
+		scenario = " · scenario " + ep.Scenario
+	}
+	fmt.Fprintf(&sb, "Component: %s · service: %s · endpoint: %s%s · arm source lines %s\n",
+		p.Component, p.Service, ep.Name, scenario, ep.Span)
 	fmt.Fprintf(&sb, "Return type: Task<%s> — the method already ends with `return %s;`\n\n", ep.RetType, ep.ReturnExpr)
 
 	sb.WriteString("Repository methods available (deterministic calls, already rendered in the prologue):\n")
@@ -113,6 +117,17 @@ func userPrompt(p *csplan.Plan, ep EpData, svc fileData, source string, notes []
 	sb.WriteString(armView(source, p, ep, svc))
 	sb.WriteString("\n```\n")
 
+	if len(ep.Residue) > 0 {
+		// SCEN-D4 slice evidence, now reaching the seam (engine-wiring
+		// audit Tier-1 #7): the planner kept these source regions verbatim
+		// because they touch the dispatch axis — the LLM must implement
+		// them, not summarize them away.
+		sb.WriteString("\nSlice residue (regions the planner kept verbatim — implement them faithfully inside the residual logic):\n")
+		for _, r := range ep.Residue {
+			sb.WriteString("  - " + r + "\n")
+		}
+	}
+
 	if len(notes) > 0 {
 		sb.WriteString("\nEarlier attempts failed these gate checks — fix every listed problem:\n")
 		for _, n := range notes {
@@ -160,6 +175,9 @@ func armView(source string, p *csplan.Plan, ep EpData, svc fileData) string {
 }
 
 func epLineSpan(ep EpData) (int, int) {
+	if ep.LineSpan[0] > 0 && ep.LineSpan[1] >= ep.LineSpan[0] {
+		return ep.LineSpan[0], ep.LineSpan[1]
+	}
 	var from, to int
 	_, _ = fmt.Sscanf(ep.Span, "%d-%d", &from, &to)
 	if to < from {
@@ -257,7 +275,6 @@ func armGates(p *csplan.Plan, ep EpData, svc fileData, epIdx int, body string) [
 
 // filledEp returns ep with the candidate body as its TodoSlot.
 func filledEp(ep EpData, body string) EpData {
-	ep.Todo = false
 	if !strings.HasSuffix(body, "\n") {
 		body += "\n"
 	}

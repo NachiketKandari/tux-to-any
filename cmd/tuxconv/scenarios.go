@@ -81,14 +81,3 @@ func scenarioArtifacts(log *slog.Logger, dir, entry string, src []byte, scens []
 	}
 	return written, nil
 }
-
-// scenarioSliceFor resolves the entry's scenario set: the axis domain's
-// scenarios when an axis exists, the honest whole-function fallback
-// otherwise (G-SCEN1 — never silent).
-func scenarioSliceFor(src []byte, tree *flow.Tree) ([]*flow.Scenario, *flow.DispatchAxis) {
-	axis := tree.DispatchAxisFor(src)
-	if axis == nil {
-		return []*flow.Scenario{flow.FallbackScenario(tree)}, nil
-	}
-	return flow.Scenarios(tree, axis), axis
-}

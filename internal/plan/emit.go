@@ -69,10 +69,14 @@ func WriteMD(w io.Writer, p *Plan) error {
 			fmt.Fprintf(&sb, "- %s\n", d)
 		}
 	}
-	if len(p.Orphans) > 0 {
-		sb.WriteString("\n## ⚠ Orphans — extracted units with no plan entry (§4.6 completeness check)\n\n")
-		for _, o := range p.Orphans {
-			fmt.Fprintf(&sb, "- `%s`\n", o)
+	if len(p.Warnings) > 0 {
+		// The unmapped-arm advisories (G-SCEN1 spirit): the tool never
+		// invents endpoints, but it never stays silent about a reachable
+		// dispatch arm either (engine-wiring audit Tier-1 #5: these were
+		// computed and dropped from every plan artifact).
+		sb.WriteString("\n## Coverage warnings — reachable arms no endpoint maps (map them or they stay logic-only)\n\n")
+		for _, w := range p.Warnings {
+			fmt.Fprintf(&sb, "- %s\n", w)
 		}
 	}
 	_, err := io.WriteString(w, sb.String())

@@ -136,8 +136,11 @@ type TPCall struct {
 	RecvFML     []FmlOp `json:"recv_fml,omitempty"`
 	StartLine   int     `json:"start_line"`
 	EndLine     int     `json:"end_line"`
-	Function    string  `json:"function,omitempty"`
-	Ambiguous   bool    `json:"ambiguous,omitempty"`
+	// Function is call-site attribution (the enclosing legacy fn).
+	// Surfaced in the IR JSON archive only; no in-process reader
+	// (engine-wiring audit Tier-2 note).
+	Function  string `json:"function,omitempty"`
+	Ambiguous bool   `json:"ambiguous,omitempty"`
 }
 
 // HostVar is a host variable referenced by queries or FML traffic, typed
@@ -184,9 +187,14 @@ type Query struct {
 // are the predicate identifiers that are FML read-targets; FmlOps and
 // QueryIDs collect the traffic that lives inside the branch's span.
 type Condition struct {
-	Index     int        `json:"index"`
-	Kind      string     `json:"kind"`
-	Expr      string     `json:"expr,omitempty"`
+	Index int    `json:"index"`
+	Kind  string `json:"kind"`
+	Expr  string `json:"expr,omitempty"`
+	// Predicate is the parsed form of Expr. RESERVED as data — flow
+	// re-parses Expr with define substitution and does NOT read this
+	// field, so the two parses can diverge by construction; keep them in
+	// sync or drop this one in a later version (engine-wiring audit
+	// Tier-2 note).
 	Predicate *pred.Expr `json:"predicate,omitempty"`
 	FlagVars  []string   `json:"flag_vars,omitempty"`
 	StartLine int        `json:"start_line"`
@@ -249,6 +257,20 @@ type File struct {
 	HostVars        []HostVar    `json:"host_vars"`
 	ExternalFns     []ExternalFn `json:"external_fns,omitempty"`
 	Unbalanced      []Unbalanced `json:"unbalanced,omitempty"`
+	// ParseErrors carries the grammar's recovery nodes — source the parser
+	// could not fully understand (engine-wiring audit Tier-2: the scanner
+	// computed them, no stage surfaced them; "never a silent drop" is a
+	// README promise).
+	ParseErrors []ParseError `json:"parse_errors,omitempty"`
+}
+
+// ParseError is one grammar-recovery site, mirrored from tsscan so the IR
+// archive carries it without importing the scanner's fact types.
+type ParseError struct {
+	Kind string `json:"kind"` // "error" | "missing"
+	Node string `json:"node"`
+	Line int    `json:"line"`
+	Col  int    `json:"col"`
 }
 
 // Condition returns the condition with the given 1-based index — the one

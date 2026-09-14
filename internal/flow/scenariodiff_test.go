@@ -132,22 +132,3 @@ func TestDiffScenarioSetAlgebra(t *testing.T) {
 		t.Errorf("report sections missing:\n%s", md)
 	}
 }
-
-func TestFallbackScenarioWholeFunction(t *testing.T) {
-	facts, err := scanner.ScanBytes([]byte(noAxisSrc), "demo.pc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	tree := Build([]byte(noAxisSrc), facts, "SVC_DEMO", nil)
-	sc := FallbackScenario(tree)
-	if sc.Key != "axis=none" {
-		t.Errorf("key = %q, want axis=none", sc.Key)
-	}
-	if len(sc.Body) == 0 || len(sc.Preamble) != 0 {
-		t.Errorf("fallback must carry the whole function as body: preamble %v body %d", sc.Preamble, len(sc.Body))
-	}
-	out := RenderScenario(sc, "SVC_DEMO", []byte(noAxisSrc), nil)
-	if !strings.Contains(out, "if (c_flag == 'H') {") {
-		t.Errorf("fallback rendering lost the body:\n%s", out)
-	}
-}

@@ -79,7 +79,7 @@ func runConvertcs(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	irf, err := ir.ExtractFileOpts(path, ir.Options{})
+	irf, err := ir.ExtractFileOpts(path, irOptions(cfg, false))
 	if err != nil {
 		return fmt.Errorf("convertcs: extract %s: %w", path, err)
 	}
@@ -98,6 +98,16 @@ func runConvertcs(ctx context.Context, args []string) error {
 
 	client := resolveLLMClient(ctx, cfg, noLLMEnabled, "convertcs service bodies")
 	wiring := newWiring(ctx, cfg)
+
+	// Archive the plan (engine-wiring audit Tier-1 #7): the decomposition —
+	// scenario refs, the loud SCEN-D4 slice residue, line spans, requests —
+	// is computed here and never landed in the audit trail. Best-effort,
+	// like every archive.
+	if _, err := wiring.audit.WriteJSON(plan.Component+"_csplan.json", plan); err != nil {
+		log.Warn("convertcs plan archive write failed", "error", err)
+	} else {
+		log.Info("convertcs plan archived", "component", plan.Component)
+	}
 
 	// Ledger resume (A4): filled bodies are never re-generated — a re-run
 	// re-gates and reuses them; TODO seams retry the seam.
