@@ -119,6 +119,7 @@ go run ./cmd/tuxconv plan <file> -mapping <yaml>
 go run ./cmd/tuxconv discover <file|dir> [-stdout]
 go run ./cmd/tuxconv convertgo <file|dir> [-mapping <yaml|dir>] [-no-llm] [-base dir]
 go run ./cmd/tuxconv convertbatchpy <file|dir> [-no-llm] [-shape auto|repo] [-dml-loop batch|rowbyrow] [-out dir]
+go run ./cmd/tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir]
 go run ./cmd/tuxconv analyze <file|dir> [-csv out.csv] [-weights csv] [-pattern mf_]
 go run ./cmd/tuxconv gentest <converted tree> [-check-only] [-no-llm] [-layers db,controller,handler] [-base dir]
 ```
@@ -138,6 +139,36 @@ the `# tuxgo marks:` marker kept verbatim so CSVs stay interchangeable) and
 `gentest` (`internal/testscan` + `internal/testgen` — post-conversion test
 generation). The flow machinery drives convert/discover and the scenario
 artifacts.
+
+## The .NET Core target (convertcs)
+
+`convertcs` converts a Tuxedo service into the seven-file C# component
+tree: `Controller/<C>Controller.cs` (one action per mapped dispatch arm,
+validator + ResponseHelper boilerplate), `DTO/<C>DTO.cs` (one response
+class per action, properties named from the query's row shape),
+`NamedQueries/<C>Queries.cs` (the source SQL verbatim, the Pro*C `INTO
+:host` plumbing stripped), `Repository/I<C>Repository.cs` +
+`<C>Repository.cs` (one method per query unit: `ExecuteQueryAsync` /
+`ExecuteNonQueryAsync` + named `OracleParameter`s whose names stay the
+source's own host binds), and `Service/I<C>Service.cs` + `<C>Service.cs`
+(deterministic repo calls, row mapping via `DataReaderHelper.GetStr`, and
+structured logging; the arm's residual logic stays a `tuxgo:TODO` seam
+that the LLM fills on an LLM-enabled run).
+
+The pipeline is `csplan` → `csgen` → `cschk`: the mapping yaml carries the
+namespace identity (`namespace` / `area` / `component`) and the endpoints
+(the same `condition` / `conditionRef` / `scenarioRef` reference forms as
+the Go mapping — a dispatch arm becomes one action). Gates: brace/type
+structure, no raw SQL outside NamedQueries, and a normalized SQL-fidelity
+comparison of every const against the source (comment-stripped,
+whitespace-collapsed, bind names wildcarded). The golden pins the full
+pipeline over `testdata/fixtures/cs` (regenerate with
+`CS_UPDATE_GOLDENS=1`).
+
+```
+go run ./cmd/tuxconv convertcs testdata/fixtures/cs/SVC_CUST_GET_DTL.pc \
+    -mapping testdata/fixtures/cs/cust.mapping.yaml -no-llm
+```
 
 ### Modes: LLM vs deterministic-only
 

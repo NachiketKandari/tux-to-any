@@ -60,6 +60,17 @@ const (
 	TestControllerMethod ID = "test_controller_method"
 	TestHandlerFile      ID = "test_handler_file"
 	TestHandlerMethod    ID = "test_handler_method"
+
+	// C# target (convertcs): the .NET Core emitter's file templates —
+	// the seven-file Controller/DTO/NamedQueries/Repository/Service shape,
+	// distilled from the local-only reference conversion.
+	CsControllerFile       ID = "cs_controller_file"
+	CsDTOFile              ID = "cs_dto_file"
+	CsNamedQueriesFile     ID = "cs_namedqueries_file"
+	CsRepoInterfaceFile    ID = "cs_repo_interface_file"
+	CsRepoFile             ID = "cs_repo_file"
+	CsServiceInterfaceFile ID = "cs_service_interface_file"
+	CsServiceFile          ID = "cs_service_file"
 )
 
 // AllIDs lists every template in the embedded set.
@@ -99,6 +110,13 @@ var AllIDs = []ID{
 	TestControllerMethod,
 	TestHandlerFile,
 	TestHandlerMethod,
+	CsControllerFile,
+	CsDTOFile,
+	CsNamedQueriesFile,
+	CsRepoInterfaceFile,
+	CsRepoFile,
+	CsServiceInterfaceFile,
+	CsServiceFile,
 }
 
 func (id ID) path() string { return "templates/" + string(id) + ".tmpl" }

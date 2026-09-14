@@ -1,0 +1,33 @@
+# cust.mapping.yaml — the endpoint mapping for the convertcs (C#) target.
+# Same contract as the Go mapping: the tool never invents endpoints; the
+# scenarioRef selects the dispatch-axis slice this endpoint converts.
+#
+#   go run ./cmd/tuxconv convertcs testdata/fixtures/cs/SVC_CUST_GET_DTL.pc \
+#       -mapping testdata/fixtures/cs/cust.mapping.yaml -no-llm
+
+source: SVC_CUST_GET_DTL.pc
+
+namespace: OaoBackendApi          # root namespace (the generated .cs tree)
+area: OAOApplication.CustomerAuthenticate   # area path under the root (dotted)
+component: CustOtp                # class stem: <Component>Controller/Service/Repository/Queries/DTO
+
+apiVersion: "1.0"
+requestDTO: CommonMobileRequest   # the shared request type the actions take
+validator: CUSE                   # optional per-run validator tag ("" skips validation)
+
+endpoints:
+  - scenarioRef: "c_arm_flg=C"
+    name: CustomEvent             # action + DTO method name
+    route: cst_get_dtl_CUSE       # literal [Route(...)] value
+
+# FML/host-var → request property (the action parameter's source field)
+requestFields:
+  sql_cst_pan_no: MobileNo
+
+# bind host var → named Oracle parameter (defaults to the request property)
+paramNames:
+  sql_cst_pan_no: MobileNo
+
+dbMethods:                        # query unit → NamedQueries const name
+  q1:
+    name: GetCUSTDetailsQuery
