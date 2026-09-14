@@ -50,13 +50,13 @@ func main() {
 	log.Info("run started", "version", version, "command", rest[0], "args", rest[1:], "log_dir", logDir, "verbose", verbose)
 
 	commands := map[string]func(context.Context, []string) error{
-		"extract":  runExtract,
-		"plan":     runPlan,
-		"convert":  runConvert,
-		"discover": runDiscover,
-		"batchpy":  runBatchpy,
-		"analyze":  runAnalyze,
-		"gentest":  runGentest,
+		"extract":        runExtract,
+		"plan":           runPlan,
+		"convertgo":      runConvert,
+		"discover":       runDiscover,
+		"convertbatchpy": runBatchpy,
+		"analyze":        runAnalyze,
+		"gentest":        runGentest,
 	}
 	run, ok := commands[rest[0]]
 	switch {
@@ -166,10 +166,11 @@ Available Commands:
                under conversion_logs/audit/<run-id>/
   plan         Generate the deterministic decomposition plan from the IR + the
                user's endpoint mapping (plan.json/plan.md in the ledger dir)
-  convert      Convert a .pc/.pcf file or directory into the target Go service.
+  convertgo    Convert a .pc/.pcf file or directory into the target Go service.
                Without a mapping it first scans the target and writes editable
                mapping drafts to mappings/ and stops — review, then re-run
-  batchpy      Convert Pro*C batch programs into Python service modules
+  convertbatchpy
+               Convert Pro*C batch programs into Python service modules
                (SQL constants + repository/DAL + service with process_daily_batch;
                pychk syntax gate + SQL fidelity + retention report)
   discover     Endpoint scan-then-tag: write a mapping draft per entry to
@@ -232,7 +233,7 @@ func deriveValueFlags() map[string]bool {
 			fs.String("ledger", "", "")
 			fs.Bool("fragment", false, "")
 		},
-		"convert": func(fs *flag.FlagSet) {
+		"convertgo": func(fs *flag.FlagSet) {
 			fs.String("mapping", "", "")
 			fs.String("config", "", "")
 			fs.String("base", "", "")
@@ -245,7 +246,7 @@ func deriveValueFlags() map[string]bool {
 			fs.Bool("no-llm", false, "")
 			fs.String("config", "", "")
 		},
-		"batchpy": func(fs *flag.FlagSet) {
+		"convertbatchpy": func(fs *flag.FlagSet) {
 			fs.String("out", "", "")
 			fs.String("config", "", "")
 			fs.Bool("no-llm", false, "")

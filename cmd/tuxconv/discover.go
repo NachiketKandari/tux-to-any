@@ -218,7 +218,7 @@ func renderDraft(f *ir.File, candidates []flow.Candidate, dirMode bool, aiNames 
 	sb.WriteString("#\n")
 	sb.WriteString("# HOW TO USE: names/routes below are suggested defaults — review them\n")
 	sb.WriteString("# (or delete entries you do not want), optionally set module/readDBs,\n")
-	sb.WriteString("# then convert. A condition you omit stays logic-only. `condition:` is\n")
+	sb.WriteString("# then convertgo. A condition you omit stays logic-only. `condition:` is\n")
 	sb.WriteString("# the top-level inventory index; `conditionRef:` is a nested block.\n")
 	sb.WriteString("\n")
 	if dirMode {
@@ -357,7 +357,7 @@ func renderScenarioDraft(f *ir.File, axis *flow.DispatchAxis, scens []*flow.Scen
 	sb.WriteString("#\n")
 	sb.WriteString("# HOW TO USE: names/routes below are suggested defaults — review them\n")
 	sb.WriteString("# (or delete entries you do not want), optionally set module/readDBs,\n")
-	sb.WriteString("# then convert. The entry folds into one scenario slice per value of its\n")
+	sb.WriteString("# then convertgo. The entry folds into one scenario slice per value of its\n")
 	sb.WriteString("# dispatch axis, plus the default arm when the dispatch chain ends in an\n")
 	sb.WriteString("# else (`<var>=default`); every reachable arm gets exactly one slice.\n")
 	sb.WriteString("# `scenarioRef:` names one slice (`<var>=<value>`). A scenario you omit\n")

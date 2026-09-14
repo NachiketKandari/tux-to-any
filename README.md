@@ -117,17 +117,17 @@ Commands (`cmd/tuxconv`):
 go run ./cmd/tuxconv extract <file|dir>     # IR JSON; archived per run
 go run ./cmd/tuxconv plan <file> -mapping <yaml>
 go run ./cmd/tuxconv discover <file|dir> [-stdout]
-go run ./cmd/tuxconv convert <file|dir> [-mapping <yaml|dir>] [-no-llm] [-base dir]
-go run ./cmd/tuxconv batchpy <file|dir> [-no-llm] [-shape auto|repo] [-dml-loop batch|rowbyrow] [-out dir]
+go run ./cmd/tuxconv convertgo <file|dir> [-mapping <yaml|dir>] [-no-llm] [-base dir]
+go run ./cmd/tuxconv convertbatchpy <file|dir> [-no-llm] [-shape auto|repo] [-dml-loop batch|rowbyrow] [-out dir]
 go run ./cmd/tuxconv analyze <file|dir> [-csv out.csv] [-weights csv] [-pattern mf_]
 go run ./cmd/tuxconv gentest <converted tree> [-check-only] [-no-llm] [-layers db,controller,handler] [-base dir]
 ```
 
-Verified output: `tuxconv convert testdata/fixtures/stripped -mapping
+Verified output: `tuxconv convertgo testdata/fixtures/stripped -mapping
 testdata/fixtures/stripped/mappings -no-llm` converts 4/4 services with
 **0 sql deviations** (`diff -r` clean across all four services, with
 controller bodies correctly skipped in deterministic-only mode). The nav
-fixture end-to-end (`tuxconv convert testdata/fixtures/nav -mapping
+fixture end-to-end (`tuxconv convertgo testdata/fixtures/nav -mapping
 configs/nav.mapping.yaml -no-llm`) converts cleanly, and the batch→Python
 pipeline (`batchflow` + `pyplan` + `pygen` + `pychk`) writes deterministic
 modules for both corpus shapes (`bat_min_simple` simple, `bat_min_repo`

@@ -30,7 +30,7 @@ import (
 // gate + SQL fidelity check and reports its logic retention per mode.
 func runBatchpy(ctx context.Context, args []string) error {
 	log := telemetry.Log(ctx)
-	fs := flag.NewFlagSet("batchpy", flag.ContinueOnError)
+	fs := flag.NewFlagSet("convertbatchpy", flag.ContinueOnError)
 	outDir := fs.String("out", "", "Output directory for generated modules (default: batchpy.outDir from config)")
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
 	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: skip the service-body LLM seam (overrides run.llm)")

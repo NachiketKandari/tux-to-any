@@ -71,7 +71,7 @@ func runPlan(ctx context.Context, args []string) error {
 	}
 	main := mains[0]
 	if main.Entry == "" {
-		return fmt.Errorf("plan: %s is a fn library (no Tuxedo entry) — it converts directly, no mapping needed: tuxconv convert %s", filepath.Base(main.Path), target)
+		return fmt.Errorf("plan: %s is a fn library (no Tuxedo entry) — it converts directly, no mapping needed: tuxconv convertgo %s", filepath.Base(main.Path), target)
 	}
 	logFileIR(ctx, main)
 

@@ -32,7 +32,7 @@ import (
 // holds several Tuxedo entry files, one worker converts each service
 // end-to-end in parallel (convert_dir.go), each in its own output subtree.
 func runConvert(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("convert", flag.ContinueOnError)
+	fs := flag.NewFlagSet("convertgo", flag.ContinueOnError)
 	mappingFlag := fs.String("mapping", "", "User mapping YAML, or a directory of per-service yamls (each with source: <entry file>) when the target dir holds multiple services (default: convert.mapping from config, else the mappings/ convention)")
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
 	baseDir := fs.String("base", "", "Output base directory override (default: target module root when paths.mainGo resolves, else paths.staged; dir fan-out appends each service name)")
