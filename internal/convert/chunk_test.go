@@ -46,9 +46,10 @@ func firstLine(s string) string {
 
 // bigFixture builds a convert run whose single endpoint's branch view is
 // far larger than the budget ceiling — the deterministic trigger for the
-// chunked controller path. Returns the options, the fake server, and the
-// audit root (exchanges land under <root>/bigrun/).
-func bigFixture(t *testing.T, ceiling int) (Options, *llm.FakeServer, string) {
+// chunked controller path. promptCeiling drives the input trigger; outputCeiling
+// the output-estimate trigger (2026-09-14). Returns the options, the fake
+// server, and the audit root (exchanges land under <root>/bigrun/).
+func bigFixture(t *testing.T, promptCeiling, outputCeiling int) (Options, *llm.FakeServer, string) {
 	t.Helper()
 	var sb strings.Builder
 	sb.WriteString("void SVC_BIG(TPSVCINFO *rqst)\n{\n    int i;\n    char c_flag;\n    if(Fget32(rqst,FML_COMP_CD,0,(char*)&c_flag,0) == -1)\n    {\n")
@@ -78,7 +79,7 @@ func bigFixture(t *testing.T, ceiling int) (Options, *llm.FakeServer, string) {
 			"q1": {Name: "GetBigCount"},
 		},
 	}
-	p, err := plan.Build(plan.Options{Main: main, Source: src, Mapping: m, Budget: budget.New(3000, 4000, 4)})
+	p, err := plan.Build(plan.Options{Main: main, Source: src, Mapping: m, Budget: budget.New(promptCeiling, outputCeiling, 4)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func bigFixture(t *testing.T, ceiling int) (Options, *llm.FakeServer, string) {
 	return Options{
 		Plan: p, Main: main, Source: src,
 		Client: contractClient{llm.New(llm.Endpoint{ProfileName: "fake", Model: "fake", APIBase: fake.URL, Temperature: 0.1})},
-		Budget: budget.New(3000, 4000, 4), BaseDir: base,
+		Budget: budget.New(promptCeiling, outputCeiling, 4), BaseDir: base,
 		Ledger: led, Validator: validate.New(validate.Options{}), MaxRetries: 2, Audit: rec,
 	}, fake, auditRoot
 }
@@ -189,7 +190,7 @@ func TestFragmentLocals(t *testing.T) {
 // fragments combine into a parse-clean body, the ledger records the
 // per-chunk attempts, and the audit trail keeps one exchange per chunk.
 func TestChunkedConvertEndToEnd(t *testing.T) {
-	opts, fake, auditRoot := bigFixture(t, 3000)
+	opts, fake, auditRoot := bigFixture(t, 3000, 4000)
 	base := opts.BaseDir
 
 	res, err := Run(context.Background(), opts)
@@ -238,7 +239,7 @@ func TestChunkedConvertEndToEnd(t *testing.T) {
 // produce a fragment fails the unit with the chunk index named — never a
 // silent drop, never a partial body appended.
 func TestChunkedFragmentFailure(t *testing.T) {
-	opts, fake, _ := bigFixture(t, 3000)
+	opts, fake, _ := bigFixture(t, 3000, 4000)
 	// The first response is fine (chunk 1); every later call is a transport
 	// failure — the second chunk exhausts its retries and the unit fails.
 	fake.Reset(llm.FakeResponse{Content: fakeBody}, llm.FakeResponse{Status: 500})
@@ -255,5 +256,82 @@ func TestChunkedFragmentFailure(t *testing.T) {
 	e := opts.Ledger.Get(u.ID, string(u.Kind), u.Name)
 	if e.Status != ledger.StatusFailed || !strings.Contains(e.Error, "fragment 2/") {
 		t.Errorf("unit %s status=%s error=%q, want failed with fragment 2 named", u.Name, e.Status, e.Error)
+	}
+}
+
+// TestOutputDrivenChunking pins the output-estimate trigger: the assembled
+// prompt fits its ceiling, but the view's projected Go translation exceeds
+// the output ceiling — the unit chunks instead of betting on one call that
+// would truncate (finish_reason=length, gates reject, retries burn).
+func TestOutputDrivenChunking(t *testing.T) {
+	// Prompt ceiling 12000 (the ~28k-char view's ~7k-token prompt fits);
+	// output ceiling 1500 (the ~7k-token view × 130% ≈ 9k estimate breaks it).
+	opts, fake, auditRoot := bigFixture(t, 12000, 1500)
+
+	res, err := Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Failed) > 0 {
+		t.Fatalf("output-chunked run failed endpoints: %v", res.Failed)
+	}
+	if fake.RequestCount() < 2 {
+		t.Fatalf("output-driven run made %d llm calls, want ≥ 2 fragments", fake.RequestCount())
+	}
+	var fragmentPrompts int
+	for _, req := range fake.Requests {
+		p := promptOf(t, req)
+		if strings.Contains(p, "Fragment 1 of") || strings.Contains(p, "Legacy fragment") {
+			fragmentPrompts++
+		}
+		if strings.Contains(p, "FROM DUAL") {
+			t.Errorf("raw SQL leaked into a fragment prompt")
+		}
+	}
+	if fragmentPrompts == 0 {
+		t.Errorf("no fragment prompts seen — the output-driven chunk path never engaged")
+	}
+	u := unitsOf(opts.Plan, plan.KindControllerMethod)[0]
+	e := opts.Ledger.Get(u.ID, string(u.Kind), u.Name)
+	if e.Status != ledger.StatusAppended {
+		t.Fatalf("BigBranch ledger status = %s, want appended", e.Status)
+	}
+	matches, _ := filepath.Glob(filepath.Join(auditRoot, "bigrun", "controller_method-BigBranch#chunk*-attempt0.json"))
+	if len(matches) < 2 {
+		t.Errorf("chunk audit exchanges = %d, want ≥ 2", len(matches))
+	}
+}
+
+// TestSingleCallWhenOutputFits is the negative control: same fixture, an
+// output ceiling the estimate fits — the single-call path stays (exactly
+// one llm call, no chunk exchanges).
+func TestSingleCallWhenOutputFits(t *testing.T) {
+	opts, fake, auditRoot := bigFixture(t, 12000, 30000)
+
+	res, err := Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Failed) > 0 {
+		t.Fatalf("single-call run failed endpoints: %v", res.Failed)
+	}
+	if fake.RequestCount() != 1 {
+		t.Fatalf("single-call run made %d llm calls, want 1", fake.RequestCount())
+	}
+	matches, _ := filepath.Glob(filepath.Join(auditRoot, "bigrun", "controller_method-BigBranch#chunk*-attempt0.json"))
+	if len(matches) != 0 {
+		t.Errorf("single-call run wrote %d chunk audit exchanges, want 0", len(matches))
+	}
+}
+
+// TestOutputTokenEstimate pins the estimator arithmetic: chars→tokens at the
+// configured ratio, then the translation expansion.
+func TestOutputTokenEstimate(t *testing.T) {
+	b := budget.New(0, 0, 4)
+	if got := outputTokenEstimate(b, strings.Repeat("a", 4000)); got != 1300 {
+		t.Errorf("outputTokenEstimate(4000 chars) = %d, want 1300", got)
+	}
+	if got := outputTokenEstimate(b, ""); got != 0 {
+		t.Errorf("outputTokenEstimate(empty) = %d, want 0", got)
 	}
 }

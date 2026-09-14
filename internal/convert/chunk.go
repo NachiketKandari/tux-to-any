@@ -31,6 +31,24 @@ import (
 // margin absorbs the estimation error.
 const chunkSafetyPct = 70
 
+// outputExpansionPct is the Go-translation inflation over the legacy view's
+// own token estimate: the Go body carries the same statements plus error
+// checks per store call and struct-literal shaping per output field, while
+// the Pro*C error choreography (errlog/Fadd/tpfree/tpreturn) shrinks to
+// `if err != nil`. Calibrated on the 2026-09-14 mainTux run — the F branch's
+// completion measured ~1.2–1.4× its post-replacement view's tokens — 130 is
+// mid-range and errs toward splitting earlier.
+const outputExpansionPct = 130
+
+// outputTokenEstimate projects the controller body's token size from the
+// post-replacement view source: view tokens inflated by the translation
+// factor. It drives the output-ceiling routing decision — an estimate over
+// MaxOutputTokens routes to the chunked path before a single call can
+// truncate (finish_reason=length, gates reject, retries burn).
+func outputTokenEstimate(b budget.Budget, viewSrc string) int {
+	return b.Count(viewSrc) * outputExpansionPct / 100
+}
+
 // minFragmentChars is the smallest slice a chunk may carry; below it the
 // scaffolding alone starves the fragment and the run fails loudly instead of
 // fanning out hundreds of calls.

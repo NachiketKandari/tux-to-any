@@ -428,11 +428,23 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	}
 	prompt = buildPrompt(view, dbSignaturesFor(opts.Plan, dbBodies, methods), contract, u.Name, draft, opts.Plan.Stubs, legacyHelpers(opts.Plan, view.Source),
 		legacyConstants(opts.Main, c, opts.Main.Entry), legacyErrorCodes(c), scen)
+	// Oversized-endpoint routing (2026-09-13 prompt-driven; 2026-09-14
+	// output-driven): chunked generation when either ceiling projects to
+	// break — the assembled prompt over maxPromptTokens, or the body's
+	// estimated translation over maxOutputTokens (a single call truncates
+	// mid-body there: finish_reason=length, gates reject, retries burn).
+	// Both triggers share the fragment path; the reason rides the run log.
+	chunkReason := ""
 	if opts.Budget.MaxPromptTokens > 0 && opts.Budget.Count(prompt) > opts.Budget.MaxPromptTokens {
-		// Oversized endpoint: chunked generation (2026-09-13) — statement-
-		// boundary fragments, one bounded seam call per fragment, combined
-		// body through the full gates. Falls through to the single-call
-		// path only when the prompt fits.
+		chunkReason = fmt.Sprintf("prompt of %d tokens exceeds the %d-token ceiling",
+			opts.Budget.Count(prompt), opts.Budget.MaxPromptTokens)
+	} else if est := outputTokenEstimate(opts.Budget, view.Source); opts.Budget.MaxOutputTokens > 0 && est > opts.Budget.MaxOutputTokens {
+		chunkReason = fmt.Sprintf("expected output of ~%d tokens exceeds the %d-token ceiling", est, opts.Budget.MaxOutputTokens)
+	}
+	if chunkReason != "" {
+		telemetry.Log(ctx).Info("endpoint split into statement fragments", "unit", u.Name, "reason", chunkReason)
+		// Statement-boundary fragments, one bounded seam call per fragment,
+		// combined body through the full gates.
 		body, cerr := controllerBodyChunked(chunkCtx{
 			ctx: ctx, opts: opts, res: res, svc: svc, unit: u, db: dbBodies,
 			cond: c, view: view, scen: scen, prompt: prompt,
