@@ -6,6 +6,55 @@
   ],
   "branch_count": 2,
   "branching_factor": 2,
+  "conditions": [
+    {
+      "index": 1,
+      "kind": "if",
+      "expr": "dead_fn(x) == -1",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "call",
+          "name": "dead_fn",
+          "args": [
+            "x"
+          ]
+        },
+        "r": {
+          "kind": "lit",
+          "text": "-1"
+        },
+        "op": "=="
+      },
+      "start_line": 16,
+      "end_line": 19
+    },
+    {
+      "index": 2,
+      "kind": "if",
+      "expr": "x == 1",
+      "predicate": {
+        "kind": "cmp",
+        "l": {
+          "kind": "ident",
+          "name": "x"
+        },
+        "r": {
+          "kind": "lit",
+          "text": "1"
+        },
+        "op": "=="
+      },
+      "flag_vars": [
+        "x"
+      ],
+      "start_line": 22,
+      "end_line": 28,
+      "query_ids": [
+        "q1"
+      ]
+    }
+  ],
   "queries": [
     {
       "id": "q1",
@@ -34,6 +83,11 @@
       "name": "c_flag",
       "c_type": "char",
       "go_hint": "string"
+    },
+    {
+      "name": "x",
+      "c_type": "int",
+      "go_hint": "int"
     }
   ]
 }

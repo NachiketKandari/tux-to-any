@@ -75,10 +75,11 @@ type axisStats struct {
 	compares int             // char-compare predicate lines (alias-scoped)
 	cvals    map[string]bool // char-compare values (alias-scoped)
 	normals  map[string]int  // normalization links: alias → count
+	guards   map[int]bool    // distinct branch guards touching the candidate
 }
 
 func newAxisStats(ref string) *axisStats {
-	return &axisStats{ref: ref, vals: map[string]bool{}, cvals: map[string]bool{}, normals: map[string]int{}}
+	return &axisStats{ref: ref, vals: map[string]bool{}, cvals: map[string]bool{}, guards: map[int]bool{}}
 }
 
 // DispatchAxisFor detects the entry's dispatch spine (SCEN-1). Recognizers, in
@@ -157,9 +158,31 @@ func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string) *Disp
 		}
 	}
 
+	// Pass 2: guard structure. An axis is dispatch structure, not string
+	// similarity: its values must sit in the guards of (mutually exclusive)
+	// branch arms. One branch record is ONE guard however many values its
+	// compound condition tests — a membership strcmp chain (`!=0 && !=0`)
+	// is flag derivation inside one arm, never a dispatch spine.
+	for bi := range facts.Branches {
+		b := &facts.Branches[bi]
+		if b.Function != entry || b.Cond == "" || b.StartLine < from || b.StartLine > to {
+			continue
+		}
+		for _, m := range strcmpSiteRe.FindAllStringSubmatch(b.Cond, -1) {
+			if st := refs[m[1]]; st != nil {
+				st.guards[b.StartLine] = true
+			}
+		}
+		for _, m := range charCompareRe.FindAllStringSubmatch(b.Cond, -1) {
+			if st := idents[m[1]]; st != nil {
+				st.guards[b.StartLine] = true
+			}
+		}
+	}
+
 	// Recognizer 1: the ref with the most normalization links (its alias
 	// is the most-linked ident); domain = linked values ∪ strcmp values.
-	best := pickAxis(refs, links, func(st *axisStats) (alias string, weight int) {
+	best := pickAxis(refs, links, idents, func(st *axisStats) (alias string, weight int) {
 		maxAlias, maxN := "", 0
 		for al, n := range links[st.ref] {
 			if n > maxN {
@@ -174,14 +197,14 @@ func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string) *Disp
 
 	// Recognizer 2: direct-strcmp — ref with the most distinct values.
 	if best == nil {
-		best = pickAxis(refs, links, func(st *axisStats) (alias string, weight int) {
+		best = pickAxis(refs, links, idents, func(st *axisStats) (alias string, weight int) {
 			return "", len(st.vals)
 		})
 	}
 
 	// Recognizer 3: char-compare scalar (no strcmp anywhere).
 	if best == nil {
-		best = pickAxis(idents, links, func(st *axisStats) (alias string, weight int) {
+		best = pickAxis(idents, links, idents, func(st *axisStats) (alias string, weight int) {
 			return st.ref, st.compares
 		})
 	}
@@ -192,8 +215,12 @@ func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string) *Disp
 }
 
 // pickAxis selects the qualifying stats with the recognizer's weight,
-// breaking ties by site count then identifier, and composes the axis.
-func pickAxis(stats map[string]*axisStats, links map[string]map[string]int, weightOf func(*axisStats) (alias string, weight int)) *DispatchAxis {
+// breaking ties by site count then identifier, and composes the axis. A
+// candidate qualifies only when its values sit in at least two distinct
+// branch guards (the candidate's own strcmp/compare guards, plus the
+// alias's char-compare guards — the normalize idiom splits the test
+// between spellings): one guard is a compound condition, not a dispatch.
+func pickAxis(stats map[string]*axisStats, links map[string]map[string]int, idents map[string]*axisStats, weightOf func(*axisStats) (alias string, weight int)) *DispatchAxis {
 	var best *axisStats
 	var bestAlias string
 	var bestWeight int
@@ -206,6 +233,9 @@ func pickAxis(stats map[string]*axisStats, links map[string]map[string]int, weig
 		st := stats[r]
 		alias, weight := weightOf(st)
 		if weight <= 0 {
+			continue
+		}
+		if guardSitesOf(st, alias, idents) < 2 {
 			continue
 		}
 		if weight > bestWeight || (weight == bestWeight && best != nil && (st.sites+st.compares) > (best.sites+best.compares)) {
@@ -243,6 +273,25 @@ func pickAxis(stats map[string]*axisStats, links map[string]map[string]int, weig
 		Sites:      best.sites + best.compares,
 		Normalized: normalized,
 	}
+}
+
+// guardSitesOf counts the distinct branch-guard lines a candidate's values
+// sit in: the candidate's own guards, plus the alias's char-compare guards
+// (a candidate may be the alias side of the normalize idiom — its
+// ident stats carry those guards).
+func guardSitesOf(st *axisStats, alias string, idents map[string]*axisStats) int {
+	lines := map[int]bool{}
+	for l := range st.guards {
+		lines[l] = true
+	}
+	if alias != "" {
+		if is := idents[alias]; is != nil {
+			for l := range is.guards {
+				lines[l] = true
+			}
+		}
+	}
+	return len(lines)
 }
 
 // linkNormal links an assignment `<alias> = '<ch>'` to the nearest

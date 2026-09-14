@@ -53,6 +53,7 @@ Deliverable shape (violations are rejected by automated gates):
 - Use ONLY the repository methods listed for the endpoint. Do not invent methods, SQL, or constants; do not restate or reformat any SQL (no EXEC SQL anywhere, no string containing SELECT/INSERT/UPDATE/DELETE/MERGE).
 - The prologue already fetched the data, mapped the response DTO, and logged. Implement ONLY the arm's residual logic visible in the arm view: derivations, conditionals over fetched values, loops, helper assignments, extra logging — in the SAME order the view shows, under the SAME conditions. A branch you consider dead still gets implemented.
 - request.<Prop> reads the request; response.<Prop> reads the mapped DTO. DataReaderHelper is NOT available inside the service method (the prologue already used it).
+- Every identifier you reference must be declared: a parameter, the response DTO property, request.<Prop>, or a local declared in your block. An arm-view identifier declared nowhere (a preamble local, a global) is NOT available — declare a local for it with its best-known initial value plus a // NOTE: comment flagging it, never reference it bare.
 - Mirror userlog sites as _logger.LogInformation / _logger.LogDebug calls (debug-gated ones -> LogDebug). Never swallow exceptions; the try/catch is already rendered.
 - Preserve legacy quirks verbatim (even suspicious logic) with a // NOTE: comment flagging them for review.`
 }
@@ -157,6 +158,12 @@ func armView(source string, p *csplan.Plan, ep EpData, svc fileData) string {
 		callByQuery[q.QueryID] = callLine(q, svc.RepoField)
 	}
 	from, to := epLineSpan(ep)
+	if from < 1 || to < from {
+		// An empty arm view is never a prompt: the slice kept no body
+		// lines (or the span never resolved) — the caller degrades loudly
+		// instead of prompting the model with nothing.
+		return ""
+	}
 	var out []string
 	for l := from; l <= to && l-1 < len(lines); l++ {
 		if q := spanByLine[l]; q != nil {
@@ -180,8 +187,8 @@ func epLineSpan(ep EpData) (int, int) {
 	}
 	var from, to int
 	_, _ = fmt.Sscanf(ep.Span, "%d-%d", &from, &to)
-	if to < from {
-		to = from
+	if from < 1 || to < from {
+		return 0, 0
 	}
 	return from, to
 }

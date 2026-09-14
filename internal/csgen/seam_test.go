@@ -199,6 +199,48 @@ func TestConvertcsSeamResume(t *testing.T) {
 	assertServiceClean(t, p, res)
 }
 
+// TestConvertcsEmptyArmViewDegrades pins the real-corpus regression: a
+// plan whose endpoint carries an empty span (the slice kept no body lines)
+// must never panic the seam — the seam is skipped, the TODO placeholder
+// stays, and the note names the span.
+func TestConvertcsEmptyArmViewDegrades(t *testing.T) {
+	p, src := loadCustPlan(t)
+	srv := llm.NewFakeServer(llm.FakeResponse{Content: "```csharp\n" + validResidual + "\n```"})
+	defer srv.Close()
+
+	ep := &p.Endpoints[0]
+	ep.LineSpan = [2]int{0, 0}
+	ep.SourceSpan = "0-0"
+
+	res, err := Generate(context.Background(), Options{
+		Plan: p, Source: src,
+		Client: llm.New(llm.Endpoint{APIBase: srv.URL, Model: "fake"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.LLMCalls != 0 {
+		t.Errorf("LLMCalls = %d, want 0 — an empty arm view must never prompt the model", res.LLMCalls)
+	}
+	if len(res.Filled) != 0 {
+		t.Errorf("Filled = %v, want none", res.Filled)
+	}
+	svc := res.Files["Service/"+p.Service+".cs"]
+	if !strings.Contains(svc, "tuxgo:TODO residual arm logic") {
+		t.Error("empty arm view must keep the TODO placeholder")
+	}
+	found := false
+	for _, n := range res.Notes {
+		if strings.Contains(n, "arm view empty") && strings.Contains(n, "CustomEvent") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the degradation must be noted, notes = %v", res.Notes)
+	}
+	assertServiceClean(t, p, res)
+}
+
 func TestNormalizeBody(t *testing.T) {
 	in := "    var a = 1;\n    if (a > 0)\n    {\n        a--;\n    }\n"
 	want := strings.Repeat(" ", bodyIndent) + "var a = 1;\n" +

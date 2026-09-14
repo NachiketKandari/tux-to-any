@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"tux-to-any/internal/csplan"
@@ -101,12 +102,25 @@ func writeScenarioEndpoints(sb *strings.Builder, tree *flow.Tree, axis *flow.Dis
 }
 
 // writeCandidateEndpoints emits the non-axis fallback draft (legacy file
-// shapes): one condition/conditionRef endpoint per API candidate.
+// shapes): one condition/conditionRef endpoint per API candidate. When no
+// branch passes the census rubric but the condition inventory is non-empty
+// (the guard-only shape: one braced if carrying the whole body, its FML
+// reads sitting in the preamble), the lone conditions are suggested
+// commented — the census never passes them, silence would leave the file
+// unmappable.
 func writeCandidateEndpoints(sb *strings.Builder, f *ir.File, tree *flow.Tree, component, stem string) {
 	candidates := flow.Discover(tree, f.Conditions)
 	if len(candidates) == 0 {
-		fmt.Fprintf(sb, "\n# no API candidates found (%d conditions inspected, no dispatch axis) — map manually if you know better\n",
+		fmt.Fprintf(sb, "\n# no API candidates found (%d condition(s) inspected, no dispatch axis) — map manually if you know better\n",
 			len(f.Conditions))
+		for _, c := range f.Conditions {
+			if c.IsDefault {
+				continue
+			}
+			gets, adds, _ := flow.Census(&c)
+			fmt.Fprintf(sb, "# - condition: %-14s # lone arm, lines %d-%d | reads: %s | writes: %s\n",
+				strconv.Itoa(c.Index), c.StartLine, c.EndLine, capList(gets, 8), capList(adds, 8))
+		}
 		return
 	}
 	routeStem := routeStemOf(stem)

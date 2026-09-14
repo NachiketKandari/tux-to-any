@@ -214,6 +214,12 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 		if !seamEnabled {
 			continue
 		}
+		if armView(opts.Source, p, epDatas[i], svc) == "" {
+			res.Notes = append(res.Notes, epDatas[i].Name+
+				": arm view empty — the arm's slice kept no body lines (span "+
+				epDatas[i].Span+"); seam skipped, TODO placeholder kept")
+			continue
+		}
 		filled, calls, notes, err := fillArmBody(ctx, opts, p, epDatas[i], svc, i)
 		res.LLMCalls += calls
 		if err == nil {

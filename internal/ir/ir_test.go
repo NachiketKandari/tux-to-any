@@ -1,6 +1,7 @@
 package ir
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -281,6 +282,50 @@ func TestHelperFileNotFragment(t *testing.T) {
 	}
 	if len(f.Queries) != 1 || f.Queries[0].OwningFunction != "fn_is_demo_active" {
 		t.Fatalf("queries: %+v", f.Queries)
+	}
+}
+
+// TestGuardOnlyInventory pins the guard-only fallback: a whole file whose
+// top-level chains are all single-branch (one braced if carrying the whole
+// body, its FML reads in the preamble) still gets a condition inventory —
+// an empty one would leave the file unmappable. A file that also carries a
+// qualifying chain keeps the two-branch bar (lone ifs stay out).
+func TestGuardOnlyInventory(t *testing.T) {
+	src := `#include <atmi.h>
+
+void SVC_ONE_ARM(TPSVCINFO *rqst)
+{
+    char c_flag;
+    if (chk_session(rqst) == -1)
+    {
+        tpreturn(TPFAIL, 0, (char *)rqst->data, 0L, 0);
+    }
+    if (strcmp(c_flag, "CUSE") == 0)
+    {
+        EXEC SQL SELECT MAR_FORM_NO INTO :sql_form_no FROM MAR_MBL_ACCOPN_RQST;
+        Fadd32(ptr_fml_Obuffer, FML_FORM_NO, (char *)sql_form_no.arr, 0);
+    }
+    tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "SVC_ONE_ARM.pc")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := ExtractFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Fragment {
+		t.Fatal("guard-only service must stay a whole file")
+	}
+	if len(f.Conditions) != 2 {
+		t.Fatalf("conditions = %d, want 2 (both lone chains)", len(f.Conditions))
+	}
+	arm := &f.Conditions[1]
+	if arm.Expr != "strcmp(c_flag, \"CUSE\") == 0" || arm.StartLine >= arm.EndLine || len(arm.QueryIDs) != 1 {
+		t.Fatalf("query-bearing arm: %+v", arm)
 	}
 }
 

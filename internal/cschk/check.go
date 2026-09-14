@@ -25,6 +25,15 @@ type Issue struct {
 
 func (i Issue) Error() string { return fmt.Sprintf("%s: %s: %s", i.File, i.Kind, i.Detail) }
 
+// declaredNameRe captures the declared identifier of a member-style
+// declaration (`public string 17DIM_VAL { … }`, `private int n;`). The
+// capture is permissive on purpose — the gate's job is to catch the names
+// C# cannot declare, not to parse C#.
+var declaredNameRe = regexp.MustCompile(`\b(?:public|private|protected|internal)\s+\w+\s+([A-Za-z0-9_]+)\s*[;{=]`)
+
+// validIdentRe is the C# identifier shape: a letter or underscore first.
+var validIdentRe = regexp.MustCompile(`^[A-Za-z_]\w*$`)
+
 // Check runs the per-file structural gates. typeName is the one type the
 // file must declare ("" skips the check).
 func Check(file, content, typeName string) []Issue {
@@ -37,6 +46,18 @@ func Check(file, content, typeName string) []Issue {
 	}
 	if typeName != "" && !strings.Contains(content, typeName) {
 		issues = append(issues, Issue{File: file, Kind: "type", Detail: fmt.Sprintf("expected type %s not declared", typeName)})
+	}
+	// Declared identifiers must be C#-valid: a digit-leading name
+	// (`public string 17DIM_VAL`) compiles nowhere — loud here, not at
+	// the dotnet build.
+	seen := map[string]bool{}
+	for _, m := range declaredNameRe.FindAllStringSubmatch(content, -1) {
+		name := m[1]
+		if validIdentRe.MatchString(name) || seen[name] {
+			continue
+		}
+		seen[name] = true
+		issues = append(issues, Issue{File: file, Kind: "type", Detail: fmt.Sprintf("declared identifier %q is not a valid C# identifier", name)})
 	}
 	// Raw SQL stays inside NamedQueries only — every other generated file
 	// must be free of SELECT/INSERT/UPDATE/DELETE/MERGE statement heads.

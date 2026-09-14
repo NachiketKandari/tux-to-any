@@ -438,11 +438,17 @@ var prefixRe = regexp.MustCompile(`^(sql_|vc_|v_|c_|l_|d_|i_|f_)+`)
 
 // propNameOf derives a DTO property name from a row-shape host var:
 // prefixes stripped, snake segments upper-snake joined (sql_mar_form_no →
-// MAR_FORM_NO).
+// MAR_FORM_NO). A name C# cannot declare (a leading digit — sql_17dim_val)
+// takes the underscore escape (_17DIM_VAL): the derivation stays
+// deterministic and 1:1 with the source.
 func propNameOf(bind string) string {
 	name := prefixRe.ReplaceAllString(strings.TrimPrefix(bind, ":"), "")
 	name = strings.ReplaceAll(name, ".", "_")
-	return strings.ToUpper(name)
+	name = strings.ToUpper(name)
+	if name != "" && name[0] >= '0' && name[0] <= '9' {
+		name = "_" + name
+	}
+	return name
 }
 
 // pascalOf derives a parameter name from a host var when the mapping

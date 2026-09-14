@@ -87,6 +87,50 @@ func TestDraftRoundTrip(t *testing.T) {
 }
 
 // TestComponentOf pins the deterministic class-stem derivation.
+// TestDraftGuardOnlySuggestions pins the guard-only draft: no census-
+// qualifying candidate (the lone arm's FML reads sit in the preamble), no
+// dispatch axis — the draft still suggests the lone condition, commented,
+// so the file is never silently unmappable.
+func TestDraftGuardOnlySuggestions(t *testing.T) {
+	src := `#include <atmi.h>
+
+void SVC_ONE_ARM(TPSVCINFO *rqst)
+{
+    char c_flag;
+    if (strcmp(c_flag, "CUSE") == 0)
+    {
+        EXEC SQL SELECT MAR_FORM_NO INTO :sql_form_no FROM MAR_MBL_ACCOPN_RQST;
+        Fadd32(ptr_fml_Obuffer, FML_FORM_NO, (char *)sql_form_no.arr, 0);
+    }
+    tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "SVC_ONE_ARM.pc")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	irf, err := ir.ExtractFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := flow.ScanForIR(src, irf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := flow.Build([]byte(src), facts, irf.Entry, irf)
+
+	draft := Render(irf, tree, []byte(src), Options{})
+	for _, want := range []string{
+		"# no API candidates found (1 condition(s) inspected, no dispatch axis)",
+		"# - condition: 1              # lone arm, lines 6-10",
+	} {
+		if !strings.Contains(draft, want) {
+			t.Errorf("draft missing %q:\n%s", want, draft)
+		}
+	}
+}
+
 func TestComponentOf(t *testing.T) {
 	cases := map[string]string{
 		"SVC_CUST_GET_DTL": "CustGetDtl",

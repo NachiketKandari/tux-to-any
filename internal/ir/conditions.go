@@ -8,6 +8,9 @@ import (
 // buildConditions extracts the entry function's top-level dispatch chains.
 // Files keep chains of at least two branches; fragments keep single-branch
 // chains and synthesize a whole-span default condition when chainless.
+// A whole file whose chains all fall under that bar is not left with an
+// empty inventory: its single-branch chains are the only arms it has (a
+// guard-only service still converts), so they join as the fallback.
 func buildConditions(facts *tsscan.SourceFacts, f *File, ops []FmlOp) []Condition {
 	if f.Entry == "" && !f.Fragment {
 		return nil
@@ -16,6 +19,12 @@ func buildConditions(facts *tsscan.SourceFacts, f *File, ops []FmlOp) []Conditio
 	minChain := 2
 	if f.Fragment {
 		minChain = 1
+	}
+	qualifying, singles := splitChains(chains, minChain)
+	if len(qualifying) == 0 && !f.Fragment && len(singles) > 0 {
+		// No chain reaches the two-branch bar: include the single-branch
+		// chains — an empty inventory would leave the file unmappable.
+		qualifying = singles
 	}
 	decls := map[string]bool{}
 	for _, d := range facts.VarDecls {
@@ -28,10 +37,7 @@ func buildConditions(facts *tsscan.SourceFacts, f *File, ops []FmlOp) []Conditio
 
 	var out []Condition
 	index := 0
-	for _, chain := range chains {
-		if len(chain) < minChain {
-			continue
-		}
+	for _, chain := range qualifying {
 		for _, b := range chain {
 			index++
 			cond := Condition{
@@ -80,6 +86,20 @@ func buildConditions(facts *tsscan.SourceFacts, f *File, ops []FmlOp) []Conditio
 		})
 	}
 	return out
+}
+
+// splitChains partitions chains by the branch-count bar: qualifying chains
+// meet minChain; the rest (all single-branch chains when minChain is 2)
+// come back as singles.
+func splitChains(chains [][]tsscan.Branch, minChain int) (qualifying, singles [][]tsscan.Branch) {
+	for _, chain := range chains {
+		if len(chain) >= minChain {
+			qualifying = append(qualifying, chain)
+		} else {
+			singles = append(singles, chain)
+		}
+	}
+	return qualifying, singles
 }
 
 // chainsOf groups the entry function's depth-1 branch records into chains:

@@ -152,6 +152,62 @@ func TestDispatchAxisNone(t *testing.T) {
 	}
 }
 
+// membershipSrc pins the guard-only shape the real corpus carries (the
+// CUSE service): every value tested inside ONE compound strcmp guard —
+// flag derivation, not dispatch. The values never sit in the guards of
+// mutually exclusive arms, so no axis may fire (the phantom axis used to
+// slice every scenario to an empty body — all preamble, nothing kept).
+const membershipSrc = `void SVC_DEMO(TPSVCINFO *rqst) {
+	char c_rm_valid_flag;
+	if (strcmp(sql_emp_no.arr, "111111") != 0 &&
+		strcmp(sql_emp_no.arr, "222222") != 0 &&
+		strcmp(sql_emp_no.arr, "333333") != 0 &&
+		strcmp(sql_emp_no.arr, "777777") != 0 &&
+		strcmp(sql_emp_no.arr, "888888") != 0) {
+		c_rm_valid_flag = 'Y';
+	}
+	else {
+		c_rm_valid_flag = 'N';
+	}
+	tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+
+// The discriminator, not the value count: the same five values in the
+// guards of five separate ifs are a dispatch (direct-strcmp idiom).
+const membershipSeparateSrc = `void SVC_DEMO(TPSVCINFO *rqst) {
+	if (strcmp(sql_emp_no.arr, "111111") == 0) {
+		special();
+	}
+	if (strcmp(sql_emp_no.arr, "222222") == 0) {
+		special();
+	}
+	if (strcmp(sql_emp_no.arr, "333333") == 0) {
+		special();
+	}
+	if (strcmp(sql_emp_no.arr, "777777") == 0) {
+		special();
+	}
+	if (strcmp(sql_emp_no.arr, "888888") == 0) {
+		special();
+	}
+	tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+
+func TestDispatchAxisCompoundMembershipNotADispatch(t *testing.T) {
+	if a := dispatchAxisOf(t, membershipSrc); a != nil {
+		t.Errorf("axis = %s, want none — a compound membership strcmp is one guard, not a dispatch spine", a)
+	}
+	a := dispatchAxisOf(t, membershipSeparateSrc)
+	if a == nil {
+		t.Fatal("no axis for the same values in separate guards — the discriminator is guard structure")
+	}
+	if a.Ref != "sql_emp_no.arr" || len(a.Domain) != 5 {
+		t.Errorf("axis = %s, want sql_emp_no domain of 5", a)
+	}
+}
+
 func joinDomain(d []string) string {
 	out := ""
 	for i, v := range d {
