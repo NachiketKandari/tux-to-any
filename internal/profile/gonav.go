@@ -1,8 +1,6 @@
 package profile
 
 import (
-	"sync"
-
 	"tux-to-any/internal/common"
 )
 
@@ -11,53 +9,12 @@ import (
 // extracted verbatim (P1). The zero-config default.
 type gonav struct{}
 
-// Registry resolves config selections to profiles. Built-in profiles
-// register at init; nothing else writes the map after init.
-var (
-	mu       sync.RWMutex
-	registry = map[string]Profile{}
-)
-
-// Register adds a profile under its config selector. Reserved for the
-// registry table below (P4's dotnet profile registers here).
-func Register(p Profile) {
-	mu.Lock()
-	defer mu.Unlock()
-	registry[p.ID()] = p
-}
-
-// Resolve returns the profile for a config value; absent/empty selects the
-// gonav default; an unknown selector is a config error surfaced by Resolve
-// (validated in cmd, P3).
-func For(id string) (Profile, error) {
-	mu.RLock()
-	defer mu.RUnlock()
-	if id == "" {
-		return gonav{}, nil
-	}
-	p, ok := registry[id]
-	if !ok {
-		return nil, ErrUnknownProfile{ID: id}
-	}
-	return p, nil
-}
-
-// Default returns the zero-config profile (gonav). Callers that predate
-// profile wiring treat nil as Default.
+// Default returns the zero-config profile (gonav). The config selector
+// ("target.profile") routes nowhere today — the registry seam was deleted
+// as dead API (engine-wiring audit Tier-2); a second target reintroduces
+// selection deliberately, with its consumer.
 func Default() Profile {
-	p, err := For("")
-	if err != nil {
-		panic("profile: gonav default missing from the registry")
-	}
-	return p
-}
-
-// ErrUnknownProfile is a config-validation error (P3 wires it into
-// config.Validate).
-type ErrUnknownProfile struct{ ID string }
-
-func (e ErrUnknownProfile) Error() string {
-	return "profile: unknown target.profile " + e.ID
+	return gonav{}
 }
 
 // id implements Profile.ID for gonav.
@@ -78,21 +35,6 @@ func (gonav) Naming() Naming {
 			return methodName
 		},
 		Receiver: common.LowerFirst,
-	}
-}
-
-// Layout implements Profile.Layout with the reference service tree.
-func (gonav) Layout() Layout {
-	return Layout{
-		Layers: map[string]string{
-			"db":         "db",
-			"controller": "controller",
-			"handler":    "handler",
-			"models":     "models",
-		},
-		ServiceDir: func(module, service string) string {
-			return module + "/pkg/services/" + common.LowerFirst(service)
-		},
 	}
 }
 

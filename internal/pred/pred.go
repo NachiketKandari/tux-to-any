@@ -71,38 +71,6 @@ func Ident(name string) Expr { return Expr{Kind: KindIdent, Name: name} }
 // IsRaw reports whether the expression is the Raw degrade.
 func (e *Expr) IsRaw() bool { return e != nil && e.Kind == KindRaw }
 
-// Idents returns the expression's Ident leaves in appearance order,
-// deduplicated. Raw nodes contribute nothing — their content is untrusted
-// text (call args included, a Call's args stay raw strings).
-func Idents(e *Expr) []string {
-	var out []string
-	seen := map[string]bool{}
-	var walk func(x *Expr)
-	walk = func(x *Expr) {
-		if x == nil {
-			return
-		}
-		switch x.Kind {
-		case KindOr, KindAnd:
-			for i := range x.Items {
-				walk(&x.Items[i])
-			}
-		case KindNot:
-			walk(x.Inner)
-		case KindCmp:
-			walk(x.L)
-			walk(x.R)
-		case KindIdent:
-			if !seen[x.Name] {
-				seen[x.Name] = true
-				out = append(out, x.Name)
-			}
-		}
-	}
-	walk(e)
-	return out
-}
-
 // Substitute returns a copy of the expression whose Ident leaves become
 // Lit nodes wherever resolve(name) yields a literal value (the define
 // substitution seam, PRD-2026-09-10 defines pass DEF-D2: literal-only —

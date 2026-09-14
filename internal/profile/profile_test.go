@@ -2,27 +2,16 @@ package profile
 
 import "testing"
 
-func TestForDefaultsToGonav(t *testing.T) {
-	p, err := For("")
-	if err != nil {
-		t.Fatalf("For(empty): %v", err)
-	}
-	if p.ID() != "gonav" {
+func TestDefaultIsGonav(t *testing.T) {
+	if p := Default(); p.ID() != "gonav" {
 		t.Fatalf("default profile = %s, want gonav", p.ID())
-	}
-}
-
-func TestUnknownProfileErrors(t *testing.T) {
-	if _, err := For("nonexistent"); err == nil {
-		t.Fatal("unknown profile must error")
 	}
 }
 
 // TestGonavPinsTodayConventions pins profile #1 to the conventions P1 will
 // extract from gen/convert — the byte-identity contract's reference values.
 func TestGonavPinsTodayConventions(t *testing.T) {
-	p, _ := For("")
-	n := p.Naming()
+	n := Default().Naming()
 	if got := n.Request("NavList"); got != "NavListRequest" {
 		t.Errorf("Request = %q", got)
 	}
@@ -41,7 +30,7 @@ func TestGonavPinsTodayConventions(t *testing.T) {
 	if got := n.Receiver("Nav"); got != "nav" {
 		t.Errorf("Receiver = %q", got)
 	}
-	db := p.DB()
+	db := Default().DB()
 	if db.StoreReceiver != "s.store." {
 		t.Errorf("StoreReceiver = %q", db.StoreReceiver)
 	}
@@ -49,9 +38,5 @@ func TestGonavPinsTodayConventions(t *testing.T) {
 		if got := db.TxVariants(qt); got != want {
 			t.Errorf("TxVariants(%q) = %v", qt, got)
 		}
-	}
-	l := p.Layout()
-	if got := l.ServiceDir("mutual-fund-be", "Nav"); got != "mutual-fund-be/pkg/services/nav" {
-		t.Errorf("ServiceDir = %q", got)
 	}
 }

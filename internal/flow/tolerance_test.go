@@ -178,7 +178,7 @@ func TestResidueIsLoud(t *testing.T) {
 		t.Error("residue lines not reported")
 	}
 	// And the renderer turns residue into explicit TODOs, never silence.
-	out := RenderTree(tree, nil)
+	out := RenderSpan(tree, nil, 0, 1<<30, 1)
 	if !strings.Contains(out.Body, "TODO") {
 		t.Errorf("renderer dropped residue without a TODO:\n%s", out.Body)
 	}

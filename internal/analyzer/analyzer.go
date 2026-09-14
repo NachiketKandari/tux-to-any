@@ -173,6 +173,10 @@ type Report struct {
 	TpCallCount     int
 	FnLocalCount    int
 	FnExternalCount int
+	// LocalFns is the fn inventory computed per run. RESERVED as data —
+	// the CSV schema pins named columns and LocalFns is not one; the
+	// triage report surfaces fn counts instead. Add a column or drop the
+	// field in a later version (engine-wiring audit Tier-2).
 	LocalFns        []string
 	ExternalFns     []ExternalFn
 	ComplexityScore int

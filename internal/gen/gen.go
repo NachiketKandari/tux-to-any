@@ -38,13 +38,12 @@ type Options struct {
 type Service struct {
 	Mapping     *plan.Mapping
 	Main        *ir.File
-	ModelsPkg   string               // mutual-fund-be/pkg/services/nav/models
-	Module      string               // mutual-fund-be
-	If          string               // Nav — exported service name for interface names
-	WithGorm    bool                 // store carries the legacy gorm handle (db.withGorm)
-	structLower string               // navController / navHandler receiver base
-	queries     map[string]*ir.Query // namespaced ID → query (main + fn files)
-	hostVars    map[string]ir.HostVar
+	ModelsPkg   string                    // mutual-fund-be/pkg/services/nav/models
+	Module      string                    // mutual-fund-be
+	If          string                    // Nav — exported service name for interface names
+	WithGorm    bool                      // store carries the legacy gorm handle (db.withGorm)
+	structLower string                    // navController / navHandler receiver base
+	queries     map[string]*ir.Query      // namespaced ID → query (main + fn files)
 	source      string                    // entry source text (conditionRef/scenarioRef resolution)
 	flowTree    *flow.Tree                // lazily built when a ref endpoint appears
 	scenMemo    map[string]*flow.Scenario // endpoint name → resolved scenario slice
@@ -79,7 +78,6 @@ func NewService(o Options) (*Service, error) {
 	s.If = common.Export(s.Mapping.Service)
 	s.structLower = s.Mapping.Service
 	s.queries = make(map[string]*ir.Query, len(o.Main.Queries))
-	s.hostVars = make(map[string]ir.HostVar, len(o.Main.HostVars))
 	origin := map[string]string{} // query id → defining file path
 	index := func(id string, q *ir.Query, path string) error {
 		if prev, dup := s.queries[id]; dup {
@@ -117,9 +115,6 @@ func NewService(o Options) (*Service, error) {
 				return nil, err
 			}
 		}
-		for _, hv := range f.HostVars {
-			s.hostVars[hv.Name] = hv
-		}
 	}
 	for _, f := range o.FnFiles {
 		if handled[f.Path] {
@@ -132,9 +127,6 @@ func NewService(o Options) (*Service, error) {
 				return nil, err
 			}
 		}
-	}
-	for _, hv := range o.Main.HostVars {
-		s.hostVars[hv.Name] = hv
 	}
 	return s, nil
 }
@@ -252,22 +244,20 @@ func (s *Service) rowFields(q *ir.Query) ([]templates.FieldSpec, error) {
 			spec.DBTag = strings.ToUpper(strings.TrimPrefix(hvName, "sql_"))
 			spec.Name = common.Export(common.CamelLowerGo(strings.TrimPrefix(hvName, "sql_")))
 		}
-		spec.Type = s.hostType(hvName, spec.DBTag)
+		// The uniform field-format rule (user directive, 2026-09-07):
+		// every DB-backed model field is sql.NullString — no per-type
+		// guessing (NullTime/int64 derivations removed). Conversions
+		// happen in the controller layer where the business logic lives.
+		// The declared C types stay available in the IR (host_vars;
+		// csdraft/csplan consume CType) — gen's own host-var map was
+		// deleted as write-only (engine-wiring audit Tier-2).
+		spec.Type = "sql.NullString"
 		fields = append(fields, spec)
 	}
 	if len(fields) == 0 {
 		return nil, fmt.Errorf("gen: query %s has a row shape but no FETCH-INTO fields", q.ID)
 	}
 	return fields, nil
-}
-
-// hostType is the uniform field-format rule (user directive, 2026-09-07):
-// every DB-backed model field is sql.NullString — no per-type guessing
-// (NullTime/int64 derivations removed). Conversions happen in the controller
-// layer where the business logic lives. The declared C type stays available
-// in the IR for the controller prompt.
-func (s *Service) hostType(hostVar, dbTag string) string {
-	return "sql.NullString"
 }
 
 // requestFields / responseFields derive the endpoint's contract structs from

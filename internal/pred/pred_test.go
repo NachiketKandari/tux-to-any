@@ -247,29 +247,6 @@ func TestNegativeNumberSemantics(t *testing.T) {
 	}
 }
 
-func TestIdents(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  []string
-	}{
-		{"order and dedup", "a && (b || a) && !c", []string{"a", "b", "c"}},
-		{"cmp", "x == 1", []string{"x"}},
-		{"no idents", "1 == 2", nil},
-		{"raw contributes nothing", "x y z", nil},
-		{"call args opaque", "Fget32(buf,F,0,&x,0) == ret", []string{"ret"}},
-		{"nested with dup", "((a || b) && !(c && a))", []string{"a", "b", "c"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			e := Parse(tt.input)
-			if got := Idents(&e); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Idents = %#v, want %#v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestStringRoundTrip(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -340,9 +317,6 @@ func TestStringRendering(t *testing.T) {
 	}
 	if nilExpr.IsRaw() {
 		t.Errorf("nil IsRaw() = true, want false")
-	}
-	if got := Idents(nil); got != nil {
-		t.Errorf("Idents(nil) = %#v, want nil", got)
 	}
 }
 

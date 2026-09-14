@@ -92,14 +92,15 @@ var BufferRoleNames = map[string]bool{
 }
 
 // DefaultBuffers returns the project's buffer naming convention registry
-// (PF-4.1): matching is case-insensitive on the variable name or its last
-// `_`-delimited segment (ptr_fml_Ibuffer → Ibuffer → input).
+// (PF-4.1): keys are the lowercase name or last `_`-delimited segment
+// (ptr_fml_Ibuffer → ibuffer → input) — the spelling ir's resolver matches
+// case-insensitively, but the yaml convention here is the engine contract.
 func DefaultBuffers() Buffers {
 	return Buffers{Roles: map[string]string{
-		"Ibuffer": "input",
-		"Obuffer": "output",
-		"Sbuffer": "send",
-		"Rbuffer": "recv",
+		"ibuffer": "input",
+		"obuffer": "output",
+		"sbuffer": "send",
+		"rbuffer": "recv",
 	}}
 }
 
@@ -189,8 +190,11 @@ type Batchpy struct {
 	// Shape is the default shape rubric override: auto | repo.
 	Shape string `yaml:"shape"`
 	// DMLLoop is the default cursor-DML semantics: batch | rowbyrow.
+	// Applies to the SIMPLE shape only — repo-shape DML always renders
+	// row-by-row (the repository contract; engine-wiring audit Tier-2).
 	DMLLoop string `yaml:"dmlLoop"`
-	// ChunkSize is the executemany chunk size (batch mode).
+	// ChunkSize is the executemany chunk size (batch mode, simple shape
+	// only — repo-shape modules carry no CHUNK_SIZE).
 	ChunkSize int `yaml:"chunkSize"`
 	// OutDir is the default output directory for generated modules.
 	OutDir string `yaml:"outDir"`
@@ -341,13 +345,18 @@ func (c *Config) Merged(m *Model) (temperature float64, maxTokens int, stream bo
 	return temperature, maxTokens, stream, timeout, retries
 }
 
-// Retrieval toggles the deferred retriever seam (MVP: disabled, OQ1).
+// Retrieval toggles the deferred retriever seam (OQ1). RESERVED — no
+// engine reads this section; the schema is validated so existing configs
+// load, and the README documents it as disabled. Wiring it is a deliberate
+// later-version decision.
 type Retrieval struct {
 	Enabled          bool `yaml:"enabled"`
 	MaxContextTokens int  `yaml:"maxContextTokens"`
 }
 
-// Elision selects the body-elision mode (G3).
+// Elision selects the body-elision mode (G3). RESERVED — validated
+// ("safe" | "off") but no engine honors it yet; elision behavior is fixed
+// in the deterministic generators. Wire it or remove it in a later version.
 type Elision struct {
 	Mode string `yaml:"mode"`
 }
@@ -402,6 +411,9 @@ type ValidateCfg struct {
 // `conversion_logs/audit` are load-bearing conventions (gitignore, PRDs,
 // tooling) owned by the `-log-dir` global flag and the hardcoded audit root.
 type Paths struct {
+	// Target is RESERVED — no engine reads it (the convert target comes
+	// from the CLI positional / convert.input; Tier-B anchors on MainGo).
+	// Kept so existing configs load; defaulted to the documented layout.
 	Target string `yaml:"target"`
 	// MainGo is the target service's main.go (or any file inside the module)
 	// — the anchor Tier-B validation walks up from to the go.mod. Empty means

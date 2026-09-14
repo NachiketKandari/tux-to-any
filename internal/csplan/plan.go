@@ -25,9 +25,8 @@ type Param struct {
 // row shape (the INTO host var, indicator dropped, type prefixes stripped,
 // upper-snake named like the reference convention).
 type Prop struct {
-	Name  string `json:"name"`
-	Bind  string `json:"bind"`
-	Alias string `json:"alias,omitempty"`
+	Name string `json:"name"`
+	Bind string `json:"bind"`
 }
 
 // QueryPlan is one database unit's C# shape: the NamedQueries const, the
@@ -403,14 +402,13 @@ func buildQueryPlan(q *ir.Query, m *Mapping, hostVars map[string]bool) (QueryPla
 	if !qp.DML {
 		for _, rs := range q.RowShape {
 			bind := rs
-			alias := ""
 			if i := strings.Index(rs, "["); i >= 0 {
 				bind = rs[:i]
 			}
 			if bind == "" {
 				continue
 			}
-			qp.RowProps = append(qp.RowProps, Prop{Name: propNameOf(bind), Bind: bind, Alias: alias})
+			qp.RowProps = append(qp.RowProps, Prop{Name: propNameOf(bind), Bind: bind})
 		}
 	}
 	return qp, nil

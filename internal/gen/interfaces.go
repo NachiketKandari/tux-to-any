@@ -277,17 +277,3 @@ func (s *Service) Router() (string, error) {
 	}
 	return render(templates.RouterSnippet, data)
 }
-
-// ControllerSignature renders one controller method's interface line.
-func (s *Service) ControllerSignature(e plan.Endpoint) string {
-	return fmt.Sprintf("%s(ctx context.Context, request *models.%s) (data []*models.%s, err error)",
-		e.Name, s.requestType(e.Name), s.responseType(e.Name))
-}
-
-// sortedEndpoints returns the mapping endpoints in mapped order (stable).
-func sortedEndpoints(m *plan.Mapping) []plan.Endpoint {
-	out := make([]plan.Endpoint, len(m.Endpoints))
-	copy(out, m.Endpoints)
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Condition < out[j].Condition })
-	return out
-}

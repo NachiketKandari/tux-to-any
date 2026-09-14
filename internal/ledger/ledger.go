@@ -21,8 +21,12 @@ const (
 	StatusValidated UnitStatus = "validated"
 	StatusAppended  UnitStatus = "appended"
 	StatusFailed    UnitStatus = "failed"
-	StatusBlocked   UnitStatus = "blocked"
-	StatusSkipped   UnitStatus = "skipped"
+	// StatusBlocked is RESERVED — no pipeline stage sets it today (the
+	// audit inverse-pattern: the summary used to advertise a count that
+	// could never be non-zero). Kept for the later-version "blocked on
+	// unresolved dependency" state; the summaries no longer print it.
+	StatusBlocked UnitStatus = "blocked"
+	StatusSkipped UnitStatus = "skipped"
 	// StatusPlaceholder marks an unresolved construct rendered as a
 	// compilable placeholder (PF-4.6): a terminal state alongside blocked —
 	// the gap is known, greppable (tuxgo:TODO), and the build never breaks.
@@ -41,7 +45,10 @@ type Entry struct {
 	Status   UnitStatus `json:"status"`
 	Attempts int        `json:"attempts"`
 	Error    string     `json:"error,omitempty"`
-	Targets  []string   `json:"targets,omitempty"`
+	// Targets is the §4.6 provenance record ("what did this unit produce?").
+	// Its reader surface is the ledger JSON artifact itself — reviewed, not
+	// queried in-process (engine-wiring audit Tier-2 note).
+	Targets []string `json:"targets,omitempty"`
 }
 
 // MapEntry links one legacy section to its generated artifact (§4.6) — the
@@ -51,7 +58,10 @@ type MapEntry struct {
 	Target string `json:"target"`
 }
 
-// Ledger is the durable conversion state for one service.
+// Ledger is the durable conversion state for one service. Map is the §4.6
+// reverse index — its reader surface is the ledger JSON artifact itself
+// (reviewed after a run, not queried in-process; engine-wiring audit
+// Tier-2 note: a query CLI is a later-version decision, not a silent drop).
 type Ledger struct {
 	Service string            `json:"service"`
 	Units   map[string]*Entry `json:"units"`

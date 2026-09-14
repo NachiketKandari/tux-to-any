@@ -88,6 +88,10 @@ func (k SQLKind) String() string {
 // whitespace runs to single spaces. CursorName is uppercased (pinned
 // convention) for cursor choreography statements.
 type ExecSQLStatement struct {
+	// Raw is the byte-exact source statement — the audit-trail twin of
+	// Normalized. Every engine reads Normalized; Raw exists so the scan
+	// goldens/JSON can prove the normalization lost nothing
+	// (engine-wiring audit Tier-2 note).
 	Raw        string
 	Normalized string
 	Kind       SQLKind
@@ -125,6 +129,8 @@ type FunctionCall struct {
 }
 
 // Directive is a raw preprocessor fact, recorded but never interpreted.
+// IsHeader/IsSystem classify include directives; RESERVED as data — no
+// engine reads the classification yet (engine-wiring audit Tier-2 note).
 type Directive struct {
 	Kind     string
 	Arg      string

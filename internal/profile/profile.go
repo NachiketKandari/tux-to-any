@@ -16,6 +16,9 @@ package profile
 // Profile is one target's conversion conventions. Implementations are
 // data-shaped (values over interfaces' behavior) so a new project's
 // conventions are config + template assets, not a fork of the pipeline.
+// (The Layout surface — layer folder names, service dir — was deleted as
+// dead API: no engine read it; the tree shape lives in the plan emitter.
+// engine-wiring audit Tier-2.)
 type Profile interface {
 	// ID is the config selector ("target.profile"; absent config = gonav).
 	ID() string
@@ -23,8 +26,6 @@ type Profile interface {
 	// struct names for an endpoint, the row struct name for a query
 	// (fallback naming; mapping pins win before this is consulted).
 	Naming() Naming
-	// Layout resolves the service tree: target paths per layer.
-	Layout() Layout
 	// DB resolves the data-access rules: tx-variant policy and the store
 	// receiver the prompts/gates reference.
 	DB() DBRules
@@ -57,24 +58,4 @@ type DBRules struct {
 	// templates (`tx *sqlx.Tx` second parameter, decision 27); MERGE keeps
 	// its DML contract template (F2).
 	TxVariants func(queryType string) bool
-}
-
-// Layout carries the service-tree shape: the layer folder names and the
-// per-layer target paths the plan emitter writes.
-type Layout struct {
-	// Layers maps the semantic layer to its folder name under the service
-	// package ("db", "controller", "handler", "models" for gonav).
-	Layers map[string]string
-	// ServiceDir renders the service's package root inside the module
-	// ("mutual-fund-be" + "Nav" → ".../pkg/services/nav").
-	ServiceDir func(module, service string) string
-}
-
-// Folder returns the layer's folder name; the layer key itself when the
-// profile does not override it.
-func (l Layout) Folder(layer string) string {
-	if f, ok := l.Layers[layer]; ok {
-		return f
-	}
-	return layer
 }

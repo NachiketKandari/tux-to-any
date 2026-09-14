@@ -54,7 +54,7 @@ func TestRenderFetchIterate(t *testing.T) {
 		t.Fatalf("loop QueryIDs = %v, want [cur_q1] (cursor-flattened attach)", loop.QueryIDs)
 	}
 
-	out := RenderTree(tree, fakeResolver{})
+	out := RenderSpan(tree, fakeResolver{}, 0, 1<<30, 1)
 	for _, want := range []string{
 		"rows, err := s.store.GetDemoRows(c, request.CompCd)",
 		"if err != nil {",
@@ -81,7 +81,7 @@ func TestRenderFetchIterate(t *testing.T) {
 
 func TestRenderGuardsCollapse(t *testing.T) {
 	tree := buildDemoLinked(t)
-	out := RenderTree(tree, fakeResolver{})
+	out := RenderSpan(tree, fakeResolver{}, 0, 1<<30, 1)
 	if strings.Contains(out.Body, "FML_ERR_MSG") {
 		t.Errorf("request guard should collapse, but its error add leaked:\n%s", out.Body)
 	}
@@ -104,7 +104,7 @@ func TestRenderSpanIsolatesEndpoint(t *testing.T) {
 
 func TestRenderPlaceholdersWithoutResolver(t *testing.T) {
 	tree := buildDemoLinked(t)
-	out := RenderTree(tree, nil)
+	out := RenderSpan(tree, nil, 0, 1<<30, 1)
 	if !strings.Contains(out.Body, "TODO name for cur_q1") {
 		t.Errorf("missing store-call placeholder:\n%s", out.Body)
 	}
@@ -121,7 +121,7 @@ func TestRenderDoWhile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := RenderTree(Build([]byte(src), facts, "SVC_DW", nil), nil)
+	out := RenderSpan(Build([]byte(src), facts, "SVC_DW", nil), nil, 0, 1<<30, 1)
 	for _, want := range []string{"for {", "if !(a < b) {", "break"} {
 		if !strings.Contains(out.Body, want) {
 			t.Errorf("do-while draft missing %q:\n%s", want, out.Body)

@@ -39,11 +39,6 @@ var droppedCallees = map[string]bool{
 	"strcpy": true, "INITDBGLVL": true, "DEBUG_MSG_LVL": true,
 }
 
-// Render renders the whole tree at one tab of indentation.
-func RenderTree(tree *Tree, res Resolver) Render {
-	return RenderSpan(tree, res, 0, 1<<30, 1)
-}
-
 // RenderSpan renders the nodes whose span sits inside [from, to] — one
 // endpoint's condition slice — at the given indent level (1-based tabs).
 func RenderSpan(tree *Tree, res Resolver, from, to, indent int) Render {

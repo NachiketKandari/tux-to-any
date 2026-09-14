@@ -233,7 +233,7 @@ func TestRendererRetainsErrorCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	tree := Build([]byte(src), facts, "SVC_E", f)
-	out := RenderTree(tree, nil)
+	out := RenderSpan(tree, nil, 0, 1<<30, 1)
 	if !strings.Contains(out.Body, "legacy error code(s): S31005") {
 		t.Errorf("TPFAIL line missing the code comment:\n%s", out.Body)
 	}
