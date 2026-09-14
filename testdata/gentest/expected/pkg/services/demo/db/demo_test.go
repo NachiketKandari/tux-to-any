@@ -68,11 +68,11 @@ func (suite *DemoStoreSuite) TestGetOrderDetails() {
 			// Mocking and Setting Expected Result
 			if testCase.mockInput != nil {
 				suite.sqlMock.
-					ExpectQuery("^SELECT (.+) FROM DEMO_ORDER, DEMO_COMPANY WHERE (.+)$").
+					ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+DEMO_ORDER\\s*,\\s*DEMO_COMPANY(\\s+where\\s+(.+))?$").
 					WillReturnRows(testCase.mockInput)
 			} else {
 				suite.sqlMock.
-					ExpectQuery("^SELECT (.+) FROM DEMO_ORDER, DEMO_COMPANY WHERE (.+)$").
+					ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+DEMO_ORDER\\s*,\\s*DEMO_COMPANY(\\s+where\\s+(.+))?$").
 					WillReturnError(errors.New("ORA Error"))
 			}
 
@@ -110,7 +110,7 @@ func (suite *DemoStoreSuite) TestGetOrderCount() {
 		},
 		{
 			desc:           "Success",
-			mockInput:      sqlmock.NewRows([]string{"count"}).AddRow("count"),
+			mockInput:      sqlmock.NewRows([]string{"count"}).AddRow("0"),
 			expectedError:  "",
 			expectedOutput: 0,
 		},
@@ -121,11 +121,11 @@ func (suite *DemoStoreSuite) TestGetOrderCount() {
 			// Mocking and Setting Expected Result
 			if testCase.mockInput != nil {
 				suite.sqlMock.
-					ExpectQuery("^SELECT (.+) FROM DEMO_ORDER_MAP WHERE (.+)$").
+					ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+DEMO_ORDER_MAP(\\s+where\\s+(.+))?$").
 					WillReturnRows(testCase.mockInput)
 			} else {
 				suite.sqlMock.
-					ExpectQuery("^SELECT (.+) FROM DEMO_ORDER_MAP WHERE (.+)$").
+					ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+DEMO_ORDER_MAP(\\s+where\\s+(.+))?$").
 					WillReturnError(errors.New("ORA Error"))
 			}
 

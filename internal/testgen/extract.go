@@ -74,6 +74,12 @@ type modelsInfo struct {
 	Structs map[string][]fieldInfo
 }
 
+// ctrlIfaceSig is one controller interface method's request/response shape.
+type ctrlIfaceSig struct {
+	Request  string // models.NavHistoryRequest (pointer stripped)
+	Response string // []*models.NavHistoryResponse (first result, as written)
+}
+
 // layerFacts is one layer directory's extraction outcome.
 type layerFacts struct {
 	DB          map[string]*dbFact
@@ -168,6 +174,59 @@ func extractLayer(dir string, layer string) *layerFacts {
 		}
 	}
 	return lf
+}
+
+// extractCtrlIface parses the controller layer's interface declarations into
+// per-method signatures. Handler tests need the controller's response type;
+// interface-only trees (no-llm runs leave controller bodies as the LLM seam)
+// still carry it in the interface declaration, so the handler gate can stay
+// deterministic instead of degrading to unsupported.
+func extractCtrlIface(serviceDir string) map[string]ctrlIfaceSig {
+	out := map[string]ctrlIfaceSig{}
+	dir := filepath.Join(serviceDir, "controller")
+	fset := token.NewFileSet()
+	for _, name := range sourceFiles(dir) {
+		af, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			continue
+		}
+		for _, d := range af.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				it, ok := ts.Type.(*ast.InterfaceType)
+				if !ok {
+					continue
+				}
+				for _, m := range it.Methods.List {
+					ft, ok := m.Type.(*ast.FuncType)
+					if !ok || len(m.Names) == 0 {
+						continue
+					}
+					sig := ctrlIfaceSig{}
+					if ft.Params != nil && ft.Params.NumFields() > 0 {
+						last := ft.Params.List[len(ft.Params.List)-1]
+						if rt := renderExpr(last.Type, fset); strings.HasPrefix(rt, "*models.") {
+							sig.Request = strings.TrimPrefix(rt, "*")
+						}
+					}
+					if ft.Results != nil && ft.Results.NumFields() > 0 {
+						sig.Response = renderExpr(ft.Results.List[0].Type, fset)
+					}
+					if sig.Response != "" {
+						out[m.Names[0].Name] = sig
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // extractModels parses the service's models dir (model/ or models/).

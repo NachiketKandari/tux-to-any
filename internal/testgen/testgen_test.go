@@ -214,6 +214,30 @@ type NavHandler interface {
 
 func NewNavHandler(controller NavController) NavHandler { return &navHandler{controller: controller} }
 `
+
+	modHandlerIfaceWiring = `package handler
+
+import (
+	"context"
+
+	"mutual-fund-be/pkg/services/nav/db"
+	"mutual-fund-be/pkg/services/nav/models"
+
+	"github.com/gin-gonic/gin"
+)
+
+type NavController interface {
+	NavList(ctx context.Context, request *models.NavRequest) (data []*models.NavResponse, err error)
+}
+
+type NavHandler interface {
+	NavList(c *gin.Context)
+}
+
+func NewNavHandler(controller NavController) NavHandler { return &navHandler{controller: controller} }
+
+func NavController(store db.NavStore) NavController { return NewNavController(store) }
+`
 )
 
 // buildConvertedTree materializes the synthetic service under root.
@@ -341,7 +365,7 @@ func TestGenerateNoLLM(t *testing.T) {
 	for _, want := range []string{
 		"type NavStoreGenSuite struct {",
 		"func (suite *NavStoreGenSuite) TestGetNavDetails() {",
-		`ExpectQuery("^SELECT (.+) FROM DEMO_COMPANY, DEMO_PRICE WHERE (.+)$")`,
+		`ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+DEMO_COMPANY\\s*,\\s*DEMO_PRICE(\\s+where\\s+(.+))?$")`,
 		`sqlmock.NewRows([]string{"COMP_CD", "COMP_NAME"})`,
 		`GetNavDetails(suite.ctx, "compcd")`,
 		"func TestNavStoreGenSuite(t *testing.T) {",
@@ -383,6 +407,60 @@ func TestGenerateNoLLM(t *testing.T) {
 		"request := models.NavRequest{CompCode: testCase.CompCode}",
 		"utils.CreateTestGinContext(http.MethodPost, request, nil, nil, nil)",
 		"utils.TypeConverter[[]*models.NavResponse](httpResponse.Data)",
+	} {
+		if !strings.Contains(hOut, want) {
+			t.Errorf("handler test missing %q\n---\n%s", want, hOut)
+		}
+	}
+}
+
+// TestGenerateHandlerFromIfaceOnly pins the interface-fallback handler gate:
+// trees whose controller bodies are the LLM seam (interface-only controller
+// layer — the no-llm conversion shape) still yield deterministic handler
+// tests, with the response type resolved from the controller interface
+// declaration; the wiring constructor is skipped by design.
+func TestGenerateHandlerFromIfaceOnly(t *testing.T) {
+	root := t.TempDir()
+	svc := buildConvertedTree(t, root)
+	if err := os.Remove(filepath.Join(svc, "controller", "nav.go")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(svc, "handler", "interface.go"), []byte(modHandlerIfaceWiring), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(root, "_staged")
+
+	tgt, rep := scanTarget(t, svc)
+	res, err := Generate(context.Background(), tgt, rep, Options{BaseDir: out, Workers: 1, NoLLM: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Handler test generation rides the interface signature, not a body.
+	if got := unitStatus(res, "NavList"); got != StatusTemplate {
+		t.Errorf("NavList: got %s, want generated (interface fallback)", got)
+	}
+	if got := unitStatus(res, "NavController"); got != StatusDesign {
+		t.Errorf("NavController: got %s, want skipped-by-design (wiring constructor)", got)
+	}
+	if got := unitStatus(res, "NewNavController"); got != StatusDesign {
+		t.Errorf("NewNavController: got %s, want skipped-by-design", got)
+	}
+	if res.LLMCalls != 0 {
+		t.Errorf("no-llm run made %d llm calls", res.LLMCalls)
+	}
+	if len(res.Files) != 2 {
+		t.Fatalf("want 2 files (db, handler — controller has no bodies), got %v", res.Files)
+	}
+	parseAll(t, res.Files)
+
+	hOut := read(t, filepath.Join(out, "pkg", "services", "nav", "handler", "nav_test.go"))
+	for _, want := range []string{
+		"func (suite *NavHandlerSuite) TestNavList() {",
+		"utils.CreateTestGinContext(http.MethodPost, request, nil, nil, nil)",
+		// The response type came from the interface declaration.
+		"utils.TypeConverter[[]*models.NavResponse](httpResponse.Data)",
+		"[]*models.NavResponse{{CompCode: \"fmlcompcd\", CompName: \"fmlcompname\"}}, nil}",
 	} {
 		if !strings.Contains(hOut, want) {
 			t.Errorf("handler test missing %q\n---\n%s", want, hOut)

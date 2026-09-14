@@ -138,7 +138,15 @@ repo) with 0 sql deviations.
 Also included: `analyze` (`internal/analyzer` — triage rubric + CSV, with
 the `# tuxgo marks:` marker kept verbatim so CSVs stay interchangeable) and
 `gentest` (`internal/testscan` + `internal/testgen` — post-conversion test
-generation). The flow machinery drives convert/discover and the scenario
+generation, verified end-to-end over the nav fixture: db stores render
+sqlmock suites whose `ExpectQuery` regexes are case-insensitive,
+whitespace-tolerant and WHERE-optional (so lowercase `select … from dual`
+queries match) with typed scalar placeholders; handler bodies render gin
+suite tests against a gomock'd controller, the controller's response type
+resolved from the controller *interface declaration* when controller bodies
+are the LLM seam; passthrough controllers render directly, field-mapping
+controllers ride the LLM seam; `New*` and wiring constructors skip by
+design). The flow machinery drives convert/discover and the scenario
 artifacts.
 
 ## The .NET Core target (convertcs)

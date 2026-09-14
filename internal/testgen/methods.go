@@ -4,6 +4,8 @@
 package testgen
 
 import (
+	"regexp"
+
 	"fmt"
 	"strings"
 
@@ -54,9 +56,18 @@ func structBase(t string) string {
 	return strings.TrimPrefix(t, "models.")
 }
 
-// dbRegex builds the ExpectQuery regex over the FROM table list.
+// dbRegex builds the ExpectQuery regex over the FROM table list. It is
+// case-insensitive and whitespace-tolerant — converted SQL keeps the
+// source's casing and line breaks (`select ... from dual` with no WHERE is
+// legal) — so the mock matches what the store actually executes instead of
+// failing the SQLError case and cascading stale expectations through the
+// suite. Backslashes are doubled for the generated Go string literal.
 func dbRegex(f *dbFact) string {
-	return "^SELECT (.+) FROM " + strings.Join(f.Tables, ", ") + " WHERE (.+)$"
+	tables := make([]string, len(f.Tables))
+	for i, t := range f.Tables {
+		tables[i] = regexp.QuoteMeta(t)
+	}
+	return `(?i)^select\\s+(.+)\\s+from\\s+` + strings.Join(tables, `\\s*,\\s*`) + `(\\s+where\\s+(.+))?$`
 }
 
 // dbExpectType renders the expectedOutput Go type.
@@ -125,6 +136,17 @@ func renderDBMethod(u *unit) (string, error) {
 	sc := u.sc
 	f := u.db
 	cols := dbCols(sc, f)
+	row := sc.fixtures.RowValues(cols)
+	if f.RowType == "" {
+		// Scalar scan: the placeholder column name is not a scan-compatible
+		// value ("count" cannot convert to int64); the zero of the scan
+		// type is, and it matches the ZeroExpr expectation exactly.
+		if f.Scalar == "string" {
+			row = []string{""}
+		} else {
+			row = []string{"0"}
+		}
+	}
 	prov := templates.NewEmbeddedProvider()
 	return prov.Render(templates.TestDBMethod, templates.TestDBMethodData{
 		SuiteName:  u.suite,
@@ -132,7 +154,7 @@ func renderDBMethod(u *unit) (string, error) {
 		Name:       f.Name,
 		Regex:      dbRegex(f),
 		Cols:       cols,
-		Row:        sc.fixtures.RowValues(cols),
+		Row:        row,
 		NoRows:     f.Shape == "scalar",
 		NoRowsExpr: sc.fixtures.ZeroExpr(f.Scalar),
 		ExpectType: dbExpectType(f),
@@ -184,21 +206,27 @@ func isGoLiteral(a string) bool {
 }
 
 // responseLiteral renders a response-struct literal (one element) from
-// fixture values.
+// fixture values. A response struct unknown to the models inventory (and
+// carrying no json fields) degrades to nil — a literal over an unknown type
+// would never compile.
 func responseLiteral(sc *serviceCtx, responseType string) string {
 	base := structBase(responseType)
-	var fields []string
+	fields, known := sc.models.Structs[base]
+	if len(fields) == 0 && !known {
+		return "nil"
+	}
+	var rendered []string
 	for _, fv := range sc.fixtures.FieldValues(base) {
-		fields = append(fields, fv[0]+": "+fmt.Sprintf("%q", fv[1]))
+		rendered = append(rendered, fv[0]+": "+fmt.Sprintf("%q", fv[1]))
 	}
 	switch {
 	case strings.HasPrefix(responseType, "[]*"):
-		inner := "{" + strings.Join(fields, ", ") + "}"
+		inner := "{" + strings.Join(rendered, ", ") + "}"
 		return responseType + "{" + inner + "}"
 	case strings.HasPrefix(responseType, "*"):
-		return "&" + responseType[1:] + "{" + strings.Join(fields, ", ") + "}"
+		return "&" + responseType[1:] + "{" + strings.Join(rendered, ", ") + "}"
 	default:
-		return responseType + "{" + strings.Join(fields, ", ") + "}"
+		return responseType + "{" + strings.Join(rendered, ", ") + "}"
 	}
 }
 
@@ -255,7 +283,7 @@ func renderCtrlMethod(u *unit) (string, error) {
 func renderHandlerMethod(u *unit) (string, error) {
 	sc := u.sc
 	f := u.handler
-	cf := sc.ctrlFacts.Ctrl[f.CtrlCall]
+	resp := u.respType
 	reqBase := structBase(f.RequestType)
 	var reqFields []templates.ReqField
 	var caseRefs []string
@@ -271,7 +299,7 @@ func renderHandlerMethod(u *unit) (string, error) {
 		Name:         f.Name,
 		ReqFields:    reqFields,
 		ReqInit:      "models." + reqBase + "{" + strings.Join(caseRefs, ", ") + "}",
-		SuccessInput: "[]any{" + responseLiteral(sc, cf.ResponseType) + ", nil}",
-		RespType:     cf.ResponseType,
+		SuccessInput: "[]any{" + responseLiteral(sc, resp) + ", nil}",
+		RespType:     resp,
 	})
 }

@@ -72,15 +72,16 @@ type Result struct {
 
 // unit is one function's generation work item.
 type unit struct {
-	sc      *serviceCtx
-	layer   testscan.Layer
-	dir     string
-	outFile string // base name, e.g. nav_test.go
-	suite   string // suite struct name for the block
-	fn      testscan.Func
-	db      *dbFact
-	ctrl    *ctrlFact
-	handler *handlerFact
+	sc       *serviceCtx
+	layer    testscan.Layer
+	dir      string
+	outFile  string // base name, e.g. nav_test.go
+	suite    string // suite struct name for the block
+	fn       testscan.Func
+	db       *dbFact
+	ctrl     *ctrlFact
+	handler  *handlerFact
+	respType string // controller response type the handler test asserts on
 }
 
 // block is one rendered unit outcome.
@@ -98,6 +99,7 @@ type serviceCtx struct {
 	moduleRoot   string
 	module       string
 	models       *modelsInfo
+	ctrlIface    map[string]ctrlIfaceSig
 	fixtures     FixtureSource
 	dbFacts      *layerFacts
 	ctrlFacts    *layerFacts
@@ -265,6 +267,12 @@ func buildUnit(sc *serviceCtx, layer testscan.Layer, dir, outFile, suite string,
 	if fn.Ctor {
 		return skip(StatusDesign, "constructor (mocks cover construction)")
 	}
+	// The wiring constructor (NavController(repo repo.DataObject) — same
+	// name as the controller interface) composes the service; it carries no
+	// testable branching, mocks cover construction.
+	if fn.Recv == "" && fn.Name == ctrlIfaceName(sc) {
+		return skip(StatusDesign, "wiring constructor (mocks cover construction)")
+	}
 	u := &unit{sc: sc, layer: layer, dir: dir, outFile: outFile, suite: suite, fn: fn}
 	switch layer {
 	case testscan.LayerDB:
@@ -287,10 +295,21 @@ func buildUnit(sc *serviceCtx, layer testscan.Layer, dir, outFile, suite string,
 		if f == nil {
 			return skip(StatusUnsupported, "no handler shape recognized")
 		}
-		if cf := sc.ctrlFacts.Ctrl[f.CtrlCall]; cf == nil || cf.ResponseType == "" {
+		// Response type: the controller body fact is authoritative; the
+		// controller interface declaration is the fallback for trees whose
+		// controller bodies are the LLM seam (no-llm runs) — handler bodies
+		// and shapes are deterministic either way.
+		resp := ""
+		if cf := sc.ctrlFacts.Ctrl[f.CtrlCall]; cf != nil && cf.ResponseType != "" {
+			resp = cf.ResponseType
+		} else if sig, ok := sc.ctrlIface[f.CtrlCall]; ok {
+			resp = sig.Response
+		}
+		if resp == "" {
 			return skip(StatusUnsupported, "controller signature for "+f.CtrlCall+" not found (response type unknown)")
 		}
 		u.handler = f
+		u.respType = resp
 	default:
 		return skip(StatusUnsupported, "layer not testable")
 	}
@@ -493,6 +512,7 @@ func buildServiceCtxs(rep *testscan.Report) []*serviceCtx {
 		sc := &serviceCtx{name: sr.Name, dir: sr.Dir, moduleRoot: moduleRootOf(sr.Dir)}
 		sc.module = moduleName(sc.moduleRoot, sr.Dir)
 		sc.models = extractModels(sr.Dir)
+		sc.ctrlIface = extractCtrlIface(sr.Dir)
 		sc.fixtures = &AssumedFixtureSource{Models: sc.models}
 		sc.dbFacts = extractLayer(filepath.Join(sr.Dir, "db"), "db")
 		sc.ctrlFacts = extractLayer(filepath.Join(sr.Dir, "controller"), "controller")
