@@ -120,6 +120,7 @@ Commands (`cmd/tuxconv`):
 go run ./cmd/tuxconv extract <file|dir>     # IR JSON; archived per run
 go run ./cmd/tuxconv plan <file> -mapping <yaml>
 go run ./cmd/tuxconv discover <file|dir> [-stdout] [-target go|cs]
+go run ./cmd/tuxconv ainames <file> -mapping <yaml> [-all]   # AI-name only the surviving endpoints, in place
 go run ./cmd/tuxconv convertgo <file|dir> [-mapping <yaml|dir>] [-no-llm] [-base dir]
 go run ./cmd/tuxconv convertbatchpy <file|dir> [-no-llm] [-shape auto|repo] [-dml-loop batch|rowbyrow] [-out dir]
 go run ./cmd/tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir] [-config path]

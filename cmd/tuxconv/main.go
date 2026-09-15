@@ -56,6 +56,7 @@ func main() {
 		"convertgo":      runConvert,
 		"convertcs":      runConvertcs,
 		"discover":       runDiscover,
+		"ainames":        runAINames,
 		"convertbatchpy": runBatchpy,
 		"analyze":        runAnalyze,
 		"gentest":        runGentest,
@@ -191,6 +192,12 @@ Available Commands:
                (<name>.cs.mapping.yaml: namespace/area/component
                placeholders, scenario endpoints, requestFields/paramNames,
                dbMethods pins)
+  ainames      AI naming pass over an edited mapping yaml: names ONLY the surviving
+               endpoints (name/route + dbMethods pins) and patches the yaml in
+               place, preserving all comments and user edits. Skips entries
+               already named ai-suggested (-all re-names); requires run.llm.
+               Pairs with "discover -no-llm": deterministic draft, prune,
+               ainames, convertgo
   analyze      Analyze Pro*C/Tuxedo complexity (+1/+5/+10/+20 rubric) and export CSV
                (selectors: analyze folder/file.pc, analyze folder file.pc,
                analyze folder "a.pc, b.pc" / a b c, or a .txt file list)

@@ -454,13 +454,21 @@ func (s *Service) DBMethod(u plan.Unit) (body, signature string, needsSQL bool, 
 	if err != nil {
 		return "", "", false, err
 	}
+	// BP-8 at the render site: the host-var INTO list is Pro*C, not SQL —
+	// the IR keeps it in q.SQL (goldens pin the IR), the row struct scans
+	// by column name, so the emitted query string drops the clause.
+	sql := q.SQL
+	switch q.Type {
+	case ir.QuerySelectSingle, ir.QuerySelectMulti:
+		sql = stripInto(sql)
+	}
 	d := templates.DBMethodData{
 		Receiver:  "g",
 		StoreType: "store",
 		Name:      u.Name,
 		CtxName:   "c",
 		Params:    params,
-		Query:     strings.TrimRight(q.SQL, " \t\n;"),
+		Query:     strings.TrimRight(sql, " \t\n;"),
 	}
 	needsSQL = q.Type == ir.QuerySelectSingle
 
