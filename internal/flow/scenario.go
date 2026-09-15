@@ -65,6 +65,14 @@ var (
 	charAssignRe   = regexp.MustCompile(`(?:^|[^\w=!<>+\-*/&|.'"])([A-Za-z_]\w*)\s*=\s*'([^'])'\s*;`)
 	charCompareRe  = regexp.MustCompile(`(?:^|[^\w=!<>+\-*/&|.'"])([A-Za-z_]\w*)\s*(?:==|!=)\s*'([^'])'`)
 	charAssignSemi = regexp.MustCompile(`([A-Za-z_]\w*)\s*=\s*'([^'])'\s*;`)
+	// identCompareRe harvests `ident == K` / `ident != K` comparisons —
+	// the symbolic-dispatch idiom (`c_rqst_typ == MF_LINK`). The RHS
+	// counts only when it is a defined constant of the file
+	// (facts.DefineNames — membership, not case shape: determinism, no
+	// ALL_CAPS guessing); the LHS candidate must not itself be a defined
+	// constant (a constant==constant comparison folds at compile time,
+	// never dispatches).
+	identCompareRe = regexp.MustCompile(`(?:^|[^\w=!<>+\-*/&|.'"])([A-Za-z_][\w.]*)\s*(?:==|!=)\s*([A-Za-z_]\w*)`)
 )
 
 // axisStats accumulates the harvest for one candidate ref/ident.
@@ -82,13 +90,54 @@ func newAxisStats(ref string) *axisStats {
 	return &axisStats{ref: ref, vals: map[string]bool{}, cvals: map[string]bool{}, guards: map[int]bool{}}
 }
 
+// axisSymbolValue resolves one defined constant to the axis value the
+// predicate fold will meet — the G-DEF3 universe, so the domain and the
+// fold share one define resolution: the DefineAt chain (literal →
+// unquoted; bare-ident alias → recurse; cycle → the name), and the
+// DEF-D2 compound rule (a macro whose value never resolves keeps its
+// NAME — the cond keeps the ident too, so the fold degrades to mixed,
+// loud). Defined is membership: a name with no usable in-scope define
+// (never defined, #undef'd, or a function-like macro) is not an axis
+// constant.
+func axisSymbolValue(f *ir.File, fn string, line int, name string) (string, bool) {
+	if f == nil {
+		return "", false
+	}
+	d, ok := f.DefineAt(fn, line, name)
+	if !ok {
+		return "", false
+	}
+	seen := map[string]bool{name: true}
+	for {
+		v := strings.TrimSpace(d.Value)
+		switch {
+		case pred.IsLitText(v):
+			return unquote(v), true
+		case pred.IsBareIdent(v):
+			if seen[v] {
+				return name, true
+			}
+			seen[v] = true
+			d, ok = f.DefineAt(fn, line, v)
+			if !ok {
+				return name, true // alias to an undef'd/compound name — the name stands
+			}
+		default:
+			return name, true // compound value (DEF-D2) — the name stands
+		}
+	}
+}
+
 // DispatchAxisFor detects the entry's dispatch spine (SCEN-1). Recognizers, in
 // priority order (SCEN-D3 — the list a new idiom joins):
 //  1. normalize-chain: `strcmp(<ref>, "<v>") == 0` (or `!strcmp`) guarding a
 //     `<alias> = '<v>'` char assignment — ref + alias + domain from the
 //     linked values (e.g. sql_trn_cd.arr → trn_cd, P/R/S/A/W/I).
-//  2. direct-strcmp: predicates strcmp the ref directly, domain from the
-//     distinct literals (e.g. sql_trn_cd.arr, no alias).
+//  2. direct compare: predicates strcmp the ref directly (domain from the
+//     distinct literals, e.g. sql_trn_cd.arr, no alias) or compare a
+//     scalar against the file's defined constants (`c_rqst_typ ==
+//     MF_LINK`); both compete on the same rubric — most distinct values,
+//     the file's main if-chain wins whatever spelling its tests use.
 //  3. char-compare: predicates compare a scalar against char literals,
 //     domain from the distinct compares.
 //
@@ -97,7 +146,7 @@ func newAxisStats(ref string) *axisStats {
 // the whole function (never a silent no-op). Harvest is line-based over the
 // entry's body span with comment masking (facts.InComment) so commented-out
 // predicates never pollute the domain.
-func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string) *DispatchAxis {
+func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string, irFile *ir.File) *DispatchAxis {
 	span, ok := entrySpan(facts, entry)
 	if !ok {
 		return nil
@@ -116,6 +165,7 @@ func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string) *Disp
 
 	refs := map[string]*axisStats{}
 	idents := map[string]*axisStats{}
+	symbs := map[string]*axisStats{}     // ident == defined-constant compares
 	links := map[string]map[string]int{} // ref → alias → linked count
 
 	// Pass 1: strcmp + normalize + char-compare harvest (comment-masked).
@@ -156,6 +206,23 @@ func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string) *Disp
 			st.compares++
 			st.cvals[ch] = true
 		}
+		for _, m := range identCompareRe.FindAllStringSubmatch(text, -1) {
+			ident, konst := m[1], m[2]
+			val, defined := axisSymbolValue(irFile, entry, i, konst)
+			if !defined {
+				continue
+			}
+			if _, isConst := axisSymbolValue(irFile, entry, i, ident); isConst {
+				continue // constant==constant folds at compile time — never dispatch
+			}
+			st, ok := symbs[ident]
+			if !ok {
+				st = newAxisStats(ident)
+				symbs[ident] = st
+			}
+			st.sites++
+			st.vals[val] = true
+		}
 	}
 
 	// Pass 2: guard structure. An axis is dispatch structure, not string
@@ -178,6 +245,11 @@ func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string) *Disp
 				st.guards[b.StartLine] = true
 			}
 		}
+		for _, m := range identCompareRe.FindAllStringSubmatch(b.Cond, -1) {
+			if st := symbs[m[1]]; st != nil {
+				st.guards[b.StartLine] = true
+			}
+		}
 	}
 
 	// Recognizer 1: the ref with the most normalization links (its alias
@@ -195,14 +267,21 @@ func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string) *Disp
 		return maxAlias, maxN
 	})
 
-	// Recognizer 2: direct-strcmp — ref with the most distinct values.
+	// Recognizer 2: direct compare — strcmp refs and defined-constant
+	// compares compete on the same rubric, most distinct values first
+	// (the file's main if-chain is the dispatcher, whatever spelling its
+	// tests use); ties break by site count, then identifier.
 	if best == nil {
-		best = pickAxis(refs, links, idents, func(st *axisStats) (alias string, weight int) {
+		byValues := func(st *axisStats) (alias string, weight int) {
 			return "", len(st.vals)
-		})
+		}
+		refBest := pickAxis(refs, links, idents, byValues)
+		symbBest := pickAxis(symbs, links, idents, byValues)
+		best = betterDirectAxis(refBest, symbBest)
 	}
 
-	// Recognizer 3: char-compare scalar (no strcmp anywhere).
+	// Recognizer 3: char-compare scalar (no strcmp or defined-constant
+	// compare anywhere).
 	if best == nil {
 		best = pickAxis(idents, links, idents, func(st *axisStats) (alias string, weight int) {
 			return st.ref, st.compares
@@ -212,6 +291,34 @@ func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string) *Disp
 		return nil
 	}
 	return best
+}
+
+// betterDirectAxis resolves recognizer 2's contest between the direct-
+// strcmp candidate and the defined-constant-compare candidate: more
+// distinct values wins; ties break by more predicate sites, then the
+// lexically smaller identifier (deterministic on every input). The
+// DispatchAxis carries its own alias — nothing to return beside it.
+func betterDirectAxis(refBest, symbBest *DispatchAxis) *DispatchAxis {
+	if refBest == nil {
+		return symbBest
+	}
+	if symbBest == nil {
+		return refBest
+	}
+	switch {
+	case len(symbBest.Domain) > len(refBest.Domain):
+		return symbBest
+	case len(refBest.Domain) > len(symbBest.Domain):
+		return refBest
+	case symbBest.Sites > refBest.Sites:
+		return symbBest
+	case refBest.Sites > symbBest.Sites:
+		return refBest
+	case symbBest.RefName < refBest.RefName:
+		return symbBest
+	default:
+		return refBest
+	}
 }
 
 // pickAxis selects the qualifying stats with the recognizer's weight,
@@ -414,7 +521,7 @@ func (a *DispatchAxis) String() string {
 // never re-derive facts). A tree built without facts (hand-built in tests)
 // yields nil — honest none. The default-arm mark reads the tree itself.
 func (t *Tree) DispatchAxisFor(src []byte) *DispatchAxis {
-	axis := DispatchAxisFor(src, t.facts, t.Function)
+	axis := DispatchAxisFor(src, t.facts, t.Function, t.irFile)
 	if axis == nil {
 		return nil
 	}

@@ -78,6 +78,10 @@ type Tree struct {
 	// record the scenario layer reads for call-site spans (unexported: not
 	// part of the serialized IR).
 	facts *scanner.SourceFacts
+	// irFile is the extracted IR the tree was built from — the scoped
+	// define table (G-DEF3) the scenario layer resolves constants through,
+	// so the axis harvest and the predicate fold share one define universe.
+	irFile *ir.File
 }
 
 // Build derives the flow tree of one function (fn == "" on a fragment file
@@ -86,7 +90,7 @@ type Tree struct {
 // FETCH span.
 func Build(src []byte, facts *scanner.SourceFacts, fn string, irFile *ir.File) *Tree {
 	def, entry := pickFunction(facts, fn)
-	tree := &Tree{Function: entry, facts: facts}
+	tree := &Tree{Function: entry, facts: facts, irFile: irFile}
 	if def == nil {
 		return tree
 	}

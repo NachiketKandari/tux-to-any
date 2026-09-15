@@ -92,7 +92,7 @@ func dispatchAxisOf(t *testing.T, src string) *DispatchAxis {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return DispatchAxisFor([]byte(src), facts, "SVC_DEMO")
+	return DispatchAxisFor([]byte(src), facts, "SVC_DEMO", nil)
 }
 
 func TestDispatchAxisNormalizeChain(t *testing.T) {
@@ -286,7 +286,7 @@ func scenarioFromFile(t *testing.T, path, value string) *Scenario {
 		t.Fatal(err)
 	}
 	tree := Build(src, facts, f.Entry, f)
-	axis := DispatchAxisFor(src, facts, f.Entry)
+	axis := DispatchAxisFor(src, facts, f.Entry, nil)
 	if axis == nil {
 		t.Fatal("no axis detected")
 	}
@@ -432,7 +432,7 @@ func TestScenarioResidueLoud(t *testing.T) {
 		t.Fatal(err)
 	}
 	tree := Build([]byte(src), facts, "SVC_DEMO", nil)
-	axis := DispatchAxisFor([]byte(src), facts, "SVC_DEMO")
+	axis := DispatchAxisFor([]byte(src), facts, "SVC_DEMO", nil)
 	if axis == nil {
 		t.Fatal("no axis")
 	}
@@ -467,7 +467,7 @@ func TestScenarioMixedSubstitution(t *testing.T) {
 		t.Fatal(err)
 	}
 	tree := Build([]byte(src), facts, "SVC_DEMO", nil)
-	axis := DispatchAxisFor([]byte(src), facts, "SVC_DEMO")
+	axis := DispatchAxisFor([]byte(src), facts, "SVC_DEMO", nil)
 	sc := ScenarioFor(tree, axis, "A")
 	mixed := findFold(sc.Body, FoldMixed)
 	if mixed == nil {
@@ -533,7 +533,7 @@ func scenarioFromFileTree(t *testing.T, path, value string) (*Scenario, *Tree) {
 		t.Fatal(err)
 	}
 	tree := Build(src, facts, f.Entry, f)
-	axis := DispatchAxisFor(src, facts, f.Entry)
+	axis := DispatchAxisFor(src, facts, f.Entry, nil)
 	if axis == nil {
 		t.Fatal("no axis detected")
 	}
@@ -672,7 +672,7 @@ func respScenario(t *testing.T) *Scenario {
 		t.Fatal(err)
 	}
 	tree := Build(src, facts, f.Entry, f)
-	axis := DispatchAxisFor(src, facts, f.Entry)
+	axis := DispatchAxisFor(src, facts, f.Entry, nil)
 	if axis == nil {
 		t.Fatal("no axis")
 	}
