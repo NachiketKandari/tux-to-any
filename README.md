@@ -24,14 +24,16 @@ byte-level pre-scan, and the two join into one `SourceFacts` record.
 
 Raw `.pc` → grammar errors; masked `.pc` → clean AST. The 22,519-line
 production monolith from the local corpus parses with **zero** error nodes
-in ~0.3s (exercised by the skip-guarded smoke test).
+(exercised by the skip-guarded smoke test).
 
 ## Layout
 
 - `internal/tsscan` — pre-scan + mask + AST walk → `SourceFacts`
   (functions, branches, loops, calls, decls, returns, directives, SQL
   statements, comments, unbalanced; additive: `Params`, `ParseErrors`,
-  `Switches`).
+  `Switches`). The parse runs on `internal/tsscan/grammars/wasitter-c.wasm`
+  (vendored tree-sitter runtime + tree-sitter-c v0.24.2, sha256
+  `5044f382…286b2`) executed by pure-Go wazero — no cgo.
 - `internal/pred` — the condition parser (C-precedence boolean trees,
   literal-only define substitution, Raw degrade).
 - `internal/ir` — the extraction fold: entry pick, branching factor,
@@ -312,6 +314,11 @@ Logging and artifacts (every run):
 
 ## Dependency note
 
-tree-sitter (runtime + C grammar) is the single dependency — cgo-compiled,
-deterministic, no network at test time. Everything else is stdlib: the C
-side goes to one real grammar, at the cost of a vendored C compilation step.
+The parse stack is tree-sitter (runtime + C grammar, v0.24.2 — same grammar as
+before), embedded as `internal/tsscan/grammars/wasitter-c.wasm` and executed by
+the pure-Go wazero runtime via `github.com/zema1/wasitter`. No cgo and no C
+compiler on any platform — plain `go build` works everywhere, including
+Windows (`CGO_ENABLED=0` is implicit). Deterministic, no network at test
+time. Everything else is stdlib. To refresh the grammar, download the
+matching `wasitter-c.wasm` from the wasitter release that matches the Go
+package version and verify the published sha256.

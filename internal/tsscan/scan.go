@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"os"
 
-	sitter "github.com/tree-sitter/go-tree-sitter"
+	"github.com/zema1/wasitter"
 )
 
 // ScanFile scans a Pro*C source file from disk.
@@ -43,7 +43,15 @@ func ScanBytes(src []byte, path string) (*SourceFacts, error) {
 		}
 		masked = padded
 	}
-	tree := parseTree(masked)
+	sess, err := newScanSession()
+	if err != nil {
+		return nil, err
+	}
+	tree, err := sess.parser.Parse(masked)
+	if err != nil {
+		sess.close(nil)
+		return nil, err
+	}
 
 	w := &walker{
 		src:       masked,
@@ -51,6 +59,10 @@ func ScanBytes(src []byte, path string) (*SourceFacts, error) {
 		unmatched: pr.unmatched,
 	}
 	w.walk(tree.RootNode())
+	w.facts.ParseErrors = collectParseErrors(tree.RootNode())
+	tree.Close()
+	sess.close(nil)
+
 	if len(pr.directives) > 0 {
 		w.facts.Directives = append(w.facts.Directives, pr.directives...)
 		sortDirectives(w.facts.Directives)
@@ -75,7 +87,6 @@ func ScanBytes(src []byte, path string) (*SourceFacts, error) {
 	}
 	assignIfNesting(w.facts.Branches)
 	assignLoopNesting(w.facts.Loops, w.facts.Branches)
-	w.facts.ParseErrors = collectParseErrors(tree.RootNode())
 	return w.facts, nil
 }
 
@@ -255,31 +266,26 @@ func containsSpan(sL, sC, eL, eC, l, c int) bool {
 
 // collectParseErrors surfaces every node the grammar could not recover from
 // (fail-loud: a parse error is a recorded fact, never a silent drop).
-func collectParseErrors(root *sitter.Node) []ParseError {
-	if root == nil {
+func collectParseErrors(root wasitter.Node) []ParseError {
+	if root.IsNull() {
 		return nil
 	}
 	var out []ParseError
-	var visit func(n *sitter.Node)
-	visit = func(n *sitter.Node) {
+	var visit func(n wasitter.Node)
+	visit = func(n wasitter.Node) {
 		if n.IsError() {
-			sp := n.StartPosition()
-			out = append(out, ParseError{Kind: "error", Node: n.Kind(), Line: int(sp.Row) + 1, Col: int(sp.Column) + 1})
+			sp := n.StartPoint()
+			out = append(out, ParseError{Kind: "error", Node: n.Type(), Line: int(sp.Row) + 1, Col: int(sp.Column) + 1})
 		} else if n.IsMissing() {
-			sp := n.StartPosition()
-			out = append(out, ParseError{Kind: "missing", Node: n.Kind(), Line: int(sp.Row) + 1, Col: int(sp.Column) + 1})
+			sp := n.StartPoint()
+			out = append(out, ParseError{Kind: "missing", Node: n.Type(), Line: int(sp.Row) + 1, Col: int(sp.Column) + 1})
 		}
-		for i := uint(0); i < n.ChildCount(); i++ {
+		for i := 0; i < n.ChildCount(); i++ {
 			visit(n.Child(i))
 		}
 	}
 	visit(root)
 	return out
-}
-
-func parseTree(masked []byte) (tree *sitter.Tree) {
-	parser := newParser()
-	return parser.Parse(masked, nil)
 }
 
 // sortDirectives orders directives by line (stable) after merging facts
