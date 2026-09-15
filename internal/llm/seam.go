@@ -109,6 +109,8 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		archived, messages := in.Prompt(notes)
 		inputTokens := in.Budget.Count(archived)
+		telemetry.Log(ctx).Info("llm attempt",
+			"name", in.Name, "attempt", attempt+1, "max", maxAttempts, "prompt_tokens_est", inputTokens)
 		if in.Budget.MaxPromptTokens > 0 {
 			if berr := in.Budget.CheckInput(archived); berr != nil {
 				return "", calls, notes, berr
@@ -138,6 +140,8 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 		calls++
 		if cerr != nil {
 			lastErr = cerr
+			telemetry.Log(ctx).Warn("llm call failed",
+				"name", in.Name, "attempt", attempt+1, "max", maxAttempts, "error", cerr.Error())
 			record(attempt, archived, Response{}, []string{cerr.Error()})
 			if in.AbortOnChatError {
 				return "", calls, notes, fmt.Errorf("llm chat: %w", cerr)
@@ -159,6 +163,8 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 		if cap > 0 {
 			if berr := in.Budget.CheckOutputCap(resp.Content, cap); berr != nil {
 				lastErr = berr
+				telemetry.Log(ctx).Warn("llm output over cap",
+					"name", in.Name, "attempt", attempt+1, "max", maxAttempts, "error", berr.Error())
 				record(attempt, archived, resp, []string{berr.Error()})
 				notes = append(notes, "output over budget: "+berr.Error())
 				continue
@@ -171,6 +177,9 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 		}
 		if len(gateErrs) > 0 {
 			lastErr = errors.New(strings.Join(gateErrs, "; "))
+			telemetry.Log(ctx).Warn("llm attempt rejected — retrying",
+				"name", in.Name, "attempt", attempt+1, "max", maxAttempts,
+				"errors", len(gateErrs), "first", firstErrSummary(gateErrs))
 			record(attempt, archived, resp, gateErrs)
 			notes = append(notes, gateErrs...)
 			continue
@@ -182,4 +191,15 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 		lastErr = errors.New("all attempts rejected")
 	}
 	return "", calls, notes, lastErr
+}
+
+// firstErrSummary keeps the rejection log line readable: the first gate
+// error, truncated — the full list lives in the audit exchange and the
+// next attempt's notes.
+func firstErrSummary(errs []string) string {
+	s := strings.Join(errs, "; ")
+	if len(s) > 300 {
+		s = s[:300] + "…"
+	}
+	return s
 }

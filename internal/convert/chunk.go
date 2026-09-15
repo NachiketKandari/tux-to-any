@@ -14,6 +14,7 @@ import (
 	"tux-to-any/internal/ledger"
 	"tux-to-any/internal/llm"
 	"tux-to-any/internal/plan"
+	"tux-to-any/internal/telemetry"
 	"tux-to-any/internal/validate"
 )
 
@@ -524,8 +525,12 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 
 	chunks := groupFragments(splitStatements(cx.view.Source), sliceBudget, extrasOf)
 	n := len(chunks)
+	telemetry.Log(cx.ctx).Info("fragment plan",
+		"unit", cx.unit.Name, "fragments", n, "slice_budget_chars", sliceBudget)
 	var bodies []string
 	for k, chunkText := range chunks {
+		telemetry.Log(cx.ctx).Info("fragment dispatch",
+			"unit", cx.unit.Name, "fragment", k+1, "of", n, "chars", len(chunkText))
 		chunkMethods := requiredCalls(chunkText, receiver)
 		dbContract := dbSignaturesFor(opts.Plan, cx.db, chunkMethods)
 		prompt := buildChunkPrompt(cx, k, n, chunkText, dbContract, contract,

@@ -200,7 +200,7 @@ func runConvertFnLib(ctx context.Context, w *convertWiring, main *ir.File, baseR
 	log.Info("convert fn library completed",
 		"service", svcName, "base", base,
 		"files", len(res.Files), "llm_calls", res.LLMCalls,
-		"duration_ms", time.Since(start).Milliseconds())
+		"duration_s", elapsedSeconds(start))
 	printServiceSummary(os.Stdout, svcName, res, led, base, degrade)
 	return nil
 }
@@ -294,7 +294,7 @@ func convertOneService(ctx context.Context, w *convertWiring, main *ir.File, fil
 	log.Info("convert service completed",
 		"service", mapping.Service, "base", base,
 		"files", len(res.Files), "llm_calls", res.LLMCalls,
-		"duration_ms", time.Since(start).Milliseconds())
+		"duration_s", elapsedSeconds(start))
 	return res, led, nil
 }
 

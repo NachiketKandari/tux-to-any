@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -77,7 +78,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("run completed", "command", rest[0], "duration_ms", time.Since(started).Milliseconds())
+	log.Info("run completed", "command", rest[0], "duration_s", elapsedSeconds(started))
+}
+
+// elapsedSeconds is the end-of-run duration in seconds, rounded to two
+// decimals (millisecond precision logged as 5-digit raw numbers was
+// unreadable in the run summaries).
+func elapsedSeconds(t time.Time) float64 {
+	return math.Round(time.Since(t).Seconds()*100) / 100
 }
 
 // newRunID returns the run identifier: local time as DDMMYYYY_HHMMSS (easy

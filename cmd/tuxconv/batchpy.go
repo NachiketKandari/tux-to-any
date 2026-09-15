@@ -165,7 +165,7 @@ func runBatchpy(ctx context.Context, args []string) error {
 		}
 		if r.err != nil {
 			log.Error("batchpy file failed", "source", r.path, "error", r.err,
-				"duration_ms", time.Since(r.start).Milliseconds())
+				"duration_s", elapsedSeconds(r.start))
 			if firstErr == nil {
 				firstErr = r.err
 			}
@@ -183,7 +183,7 @@ func runBatchpy(ctx context.Context, args []string) error {
 			"shape", r.res.Retention.Shape, "dml_loop", r.res.Retention.DMLLoop,
 			"retention_pct", fmt.Sprintf("%.1f", r.res.Retention.Percent()),
 			"sql_deviations", r.res.Retention.SQLDeviations, "llm_calls", r.res.LLMCalls,
-			"duration_ms", time.Since(r.start).Milliseconds())
+			"duration_s", elapsedSeconds(r.start))
 		archiveBatchArtifacts(ctx, rec, r.name, r.plan, r.res)
 		summary += r.res.Retention.SQLDeviations
 		writeBatchModuleReport(os.Stdout, r.name, r.res, out)
