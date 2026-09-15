@@ -135,12 +135,15 @@ type ControllerInterfaceData struct {
 	Methods    []string
 }
 
-// FnStub is one panicking placeholder for an unresolved external fn
-// (stub-and-carry-on, 2026-09-10): variadic args, int return matching the
-// corpus's -1 error convention.
+// FnStub is one placeholder for an unresolved external fn (stub-and-carry-on,
+// 2026-09-10): variadic args, int return matching the corpus's -1 error
+// convention. Body carries an LLM-synthesized implementation when the stub
+// synthesis seam accepted one (2026-09-16) — otherwise the panicking
+// placeholder renders.
 type FnStub struct {
 	Name     string // Go name, e.g. fnLongToInt
 	Original string // corpus symbol, e.g. fn_long_to_int
+	Body     string // synthesized Go func decl; "" = panicking stub
 }
 
 // FnStubFileData renders controller/fnstubs.go.

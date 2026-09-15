@@ -76,7 +76,9 @@ type Skipped struct {
 // the calling endpoints generate against it — visible in the plan, the
 // ledger, and the run summary, never silent. Implementing the stub is the
 // operator's follow-up; the panicking body keeps guessed semantics out of
-// the generated tree.
+// the generated tree. (In LLM mode the convert seam first attempts a
+// one-shot synthesis per stub — pure helpers may land as real Go; anything
+// declined keeps this placeholder.)
 type Stub struct {
 	Fn        string   `json:"fn"`
 	Reason    string   `json:"reason"`

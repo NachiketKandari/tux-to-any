@@ -154,12 +154,16 @@ func TestConvertGateEndToEnd(t *testing.T) {
 	}
 
 	// LLM: all four controller bodies (fn_long_to_int rides the stub), and
-	// no raw SQL ever reached the prompts.
-	if fake.RequestCount() != 4 {
-		t.Errorf("llm calls = %d, want 4 (stub-and-carry-on)", fake.RequestCount())
+	// no raw SQL ever reached the prompts — plus the one best-effort stub
+	// synthesis attempt, which the canned body fails (panic stub kept).
+	if fake.RequestCount() != 5 {
+		t.Errorf("llm calls = %d, want 5 (4 controllers + 1 stub synthesis)", fake.RequestCount())
 	}
 	for i, req := range fake.Requests {
 		prompt := promptOf(t, req)
+		if strings.Contains(prompt, "Unresolved legacy helper") {
+			continue // stub synthesis seam — own contract, checked below
+		}
 		// The branch view legitimately keeps non-query EXEC constructs
 		// (COMMIT/ROLLBACK tx markers) and dead SQL inside C comments
 		// (the demo commented block targets :i_cnt_demos — never extracted); the
@@ -213,6 +217,11 @@ func TestConvertGateEndToEnd(t *testing.T) {
 			t.Errorf("fnstubs.go missing %q\n---\n%s", want, stubSrc)
 		}
 	}
+	// The canned stub body fails the synthesis gate, so the summary marks
+	// the fallback visibly while the file keeps the panicking stub.
+	if !strings.Contains(res.Stubs[0], "stubbed:") {
+		t.Errorf("stubs = %v, want the synthesis-fallback mark", res.Stubs)
+	}
 	// The NavList prompt must tell the model about the stub it can call.
 	var navListPrompt string
 	for _, req := range fake.Requests {
@@ -247,22 +256,106 @@ func TestConvertGateEndToEnd(t *testing.T) {
 // is rejected by Tier A and retried; the second attempt lands.
 func TestConvertRetryFeedsTrimmedErrors(t *testing.T) {
 	opts, fake := convertFixture(t)
-	// Script: first response broken (unbalanced brace), then the good one
+	// Script: the stub synthesis attempt declines, the first controller
+	// response is broken (unbalanced brace) and retried, then the good one
 	// repeats (the fake repeats its last entry).
-	fake.Reset(llm.FakeResponse{Content: "\tfunc oops( {\n"}, llm.FakeResponse{Content: fakeBody})
+	fake.Reset(
+		llm.FakeResponse{Content: "CANNOT_SYNTHESIZE: test decline"},
+		llm.FakeResponse{Content: "\tfunc oops( {\n"},
+		llm.FakeResponse{Content: fakeBody},
+	)
 
 	res, err := Run(context.Background(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fake.RequestCount() != 5 { // 4 endpoints, one needed a retry
-		t.Errorf("llm calls = %d, want 5 (4 + 1 retry)", fake.RequestCount())
+	if fake.RequestCount() != 6 { // 1 stub decline + 4 endpoints, one needed a retry
+		t.Errorf("llm calls = %d, want 6 (1 stub + 4 + 1 retry)", fake.RequestCount())
 	}
 	if len(res.Failed) != 0 {
 		t.Errorf("failed = %v, want none", res.Failed)
 	}
 }
 
+// TestStubSynthesisLandsPureHelper: when the stub seam returns a gate-clean
+// pure implementation, fnstubs.go carries the real body (no panic) and the
+// summary marks it synthesized. Controllers still convert on the same run.
+func TestStubSynthesisLandsPureHelper(t *testing.T) {
+	opts, fake := convertFixture(t)
+	const synthBody = "func fnLongToInt(lSizeof int64, iOut *int64, cErrmsg string) int {\n\tif lSizeof < 0 {\n\t\treturn -1\n\t}\n\t*iOut = lSizeof\n\t_ = cErrmsg\n\treturn 1\n}"
+	fake.Reset(
+		llm.FakeResponse{Content: synthBody},
+		llm.FakeResponse{Content: fakeBody},
+	)
+
+	res, err := Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.RequestCount() != 5 { // 1 stub synthesis + 4 controllers
+		t.Errorf("llm calls = %d, want 5 (1 stub + 4 controllers)", fake.RequestCount())
+	}
+	stubSrc, _ := os.ReadFile(filepath.Join(opts.BaseDir, "pkg/services/nav/controller/fnstubs.go"))
+	for _, want := range []string{"func fnLongToInt(lSizeof int64", ") int {", "*iOut = lSizeof"} {
+		if !strings.Contains(string(stubSrc), want) {
+			t.Errorf("fnstubs.go missing %q\n---\n%s", want, stubSrc)
+		}
+	}
+	if strings.Contains(string(stubSrc), "panic(") {
+		t.Errorf("fnstubs.go keeps a panic after synthesis\n---\n%s", stubSrc)
+	}
+	if len(res.Stubs) != 1 || !strings.Contains(res.Stubs[0], "synthesized") {
+		t.Errorf("stubs = %v, want the synthesized mark", res.Stubs)
+	}
+	ctrl, _ := os.ReadFile(filepath.Join(opts.BaseDir, "pkg/services/nav/controller/nav.go"))
+	for _, m := range []string{"NavHistory", "SipFreedem", "SipInsurance", "NavList"} {
+		if !strings.Contains(string(ctrl), "func (s *navController) "+m+"(") {
+			t.Errorf("controller file missing method %s", m)
+		}
+	}
+}
+
+// TestStubEvidenceInference pins the call-site evidence the synthesis seam
+// shows the model for fn_long_to_int: raw lines, arg split, and the
+// host-declaration-backed signature (long→int64, int→*int for &i_out,
+// char[]→string).
+func TestStubEvidenceInference(t *testing.T) {
+	files, err := ir.ExtractDir("../../testdata/nav")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var main *ir.File
+	for _, f := range files {
+		if strings.HasSuffix(f.Path, "SVC_DEMO_LIST.pc") {
+			main = f
+		}
+	}
+	src, err := os.ReadFile(main.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := collectStubEvidence(main, strings.Split(string(src), "\n"), hostTypeIndex(main), "fn_long_to_int")
+	if len(ev.calls) != 1 {
+		t.Fatalf("callsites = %d, want 1", len(ev.calls))
+	}
+	if got := ev.calls[0].text; !strings.Contains(got, "fn_long_to_int(l_sizeof,&i_out,c_errmsg)") {
+		t.Errorf("callsite text = %q", got)
+	}
+	if len(ev.calls[0].args) != 3 {
+		t.Fatalf("args = %v, want 3", ev.calls[0].args)
+	}
+	if !strings.Contains(ev.signature, "func fnLongToInt(") || !strings.HasSuffix(ev.signature, ") int") {
+		t.Errorf("signature = %q", ev.signature)
+	}
+	for _, want := range []string{"int64", "*int", "string"} {
+		if !strings.Contains(ev.signature, want) {
+			t.Errorf("signature = %q, want %s", ev.signature, want)
+		}
+	}
+	if !strings.Contains(ev.returnNote, "-1") {
+		t.Errorf("return note = %q, want the -1 convention", ev.returnNote)
+	}
+}
 // TestConvertConcurrentDBUnitsByteIdentical: workers>1 must produce the same
 // bytes as workers=1 — the pool renders in parallel, the merge stays in unit
 // order. Run under `go test -race` for the data-race check.

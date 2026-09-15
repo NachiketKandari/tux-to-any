@@ -152,6 +152,37 @@ controllers ride the LLM seam; `New*` and wiring constructors skip by
 design). The flow machinery drives convert/discover and the scenario
 artifacts.
 
+## Run configuration (.tuxgo.yaml)
+
+Every command resolves the run config the same way
+(`cmd/tuxconv/extract.go:100-115`): `-config <path>` wins; else `./.tuxgo.yaml`
+when present in the working directory; else the stock defaults
+(`internal/config.Default()`). The filename is only that default-lookup
+convention — any path works via `-config`. Unknown keys fail at load (strict
+decoding), and relative paths resolve against the working directory. Start
+from [`configs/.tuxgo.example.yaml`](configs/.tuxgo.example.yaml).
+
+The `run.*` budget engine (`internal/budget`, `internal/llm/seam.go`):
+
+- **Estimator** — tokens ≈ chars / `charsPerToken`. Dense Pro*C measured
+  ~2.8 chars/token at the provider; the default 4 undercounts, which the
+  chunking margins absorb.
+- **Prompt ceiling** — `maxPromptTokens` is a hard per-call check; an endpoint
+  whose assembled prompt exceeds it (or whose projected body reaches 80% of
+  the output ceiling) splits into statement fragments. Slices are sized at 70%
+  of the prompt ceiling and ¾ of `maxOutputTokens`' char equivalent, with the
+  projected Go translation inflated 130%.
+- **Output ceiling** — `tokenPolicy: dynamic` sizes each call as
+  `min(modelContextTokens − estInput − outputReserveTokens,
+  modelMaxOutputTokens)` (a room under 256 tokens fails loudly); `static` keeps
+  `maxOutputTokens`, and the request falls back to
+  `models[].requestOptions.maxTokens`. Under static mode keep
+  `requestOptions.maxTokens <= run.maxOutputTokens` — the output gate reads the
+  run value.
+- **Inert/reserved** — `run.maxContextTokens` is validated (≥
+  `maxPromptTokens`) but never read; `retrieval`, `elision.mode`, and
+  `paths.target` are reserved.
+
 ## The .NET Core target (convertcs)
 
 `convertcs` converts a Tuxedo service into the seven-file C# component
@@ -254,7 +285,8 @@ Every command has two modes, switched by **one knob**: `run.llm: false` in
 the yaml, or `-no-llm` on any single run (CLI wins). With the knob unset,
 the LLM is used only where a profile actually resolves: copy
 [`configs/.tuxgo.example.yaml`](configs/.tuxgo.example.yaml) to the
-working-directory root as `.tuxgo.yaml` and edit — `run.profile` selects the
+working-directory root as `.tuxgo.yaml` (or point any command at it with
+`-config`) and edit — `run.profile` selects the
 `models[]` entry (`onprem-vllm` on-prem by default, `local-dev-openrouter` for
 local dev), keys resolve via `apiKeyEnv` (env first, the gitignored `apiKey`
 literal as local-dev fallback — never commit a key). A profile whose key
@@ -269,6 +301,7 @@ exactly one template-shaped gap per unit — and only in LLM mode:
 | Command | The LLM seam | `-no-llm` degradation |
 |---|---|---|
 | `convert` | controller body per endpoint (from the query-replaced branch view + flow draft — never raw SQL) | body marked `skipped` in the ledger; an LLM-enabled re-run resumes exactly those |
+| `convert` | one stub-synthesis attempt per unresolved external fn (call-site lines + inferred in/out signature shown; pure helpers land as idiomatic Go, declines keep the panicking stub) | all stubs stay panicking; synthesis runs first-run-only, a resume never re-calls |
 | `batchpy` | stateful-batch service body | `# tuxgo:TODO service body` placeholder (simple shape is 100% deterministic either way) |
 | `convertcs` | residual arm logic per endpoint (from the query-replaced arm view — never raw SQL); ledger resume never re-generates filled bodies | `tuxgo:TODO` residual-block placeholder, kept on seam exhaustion |
 | `gentest` | field-mapping controller tests | `llm-required` notes (db/handler/passthrough are template-deterministic) |
@@ -292,6 +325,34 @@ Bodies ride the LLM seam with the same gates as controllers (parse, fixed
 receiver/name, required store calls, no raw SQL); `-no-llm` leaves them
 `skipped` in the ledger for an LLM-enabled resume. The output subtree
 roots at the file stem (`foo.pc` → `foo/`).
+
+Stub synthesis: unresolved external fns (`plan.Stubs`) render into
+`controller/fnstubs.go` as panicking placeholders by default
+(stub-and-carry-on). In LLM mode each stub first gets **one** best-effort
+seam call showing its call-site lines plus the inferred input/output
+signature (arg shapes + host declarations + the `-1`-on-failure return
+convention), and the model either implements it as real idiomatic Go or
+declines with `CANNOT_SYNTHESIZE`. The gate (fixed name, parse-clean, no
+panic, no SQL/Tuxedo/FML, int return) decides; anything declined or
+rejected keeps the panicking stub, never a guessed body. The run summary
+marks each stub `(synthesized)` or `(stubbed: <reason>)`, and synthesis is
+first-run-only — a resume whose `fnstubs.go` already landed makes no stub
+calls. `-no-llm` keeps every stub panicking with a bare summary entry.
+
+Mapping renames across runs: ledger unit IDs are positional, so renaming an
+endpoint/method reuses its ID for a different unit. The ledger detects the
+mismatch, resets those units to `planned` so they regenerate, and warns
+(`mapping rename detected …`); files already on disk still carry the old
+generation, so for a clean tree clear the staged dir and the service ledger
+and re-run. The from-scratch recipe (default `./.tuxgo.yaml`, `-config` to
+override, `-no-llm` for the deterministic draft):
+
+```
+rm -f mappings/mainTux.mapping.yaml
+rm -rf conversion_logs/_staged/maintux conversion_logs/ledger/maintux.ledger.json
+go run ./cmd/tuxconv convertgo tuxExamples/mainTux.pc -no-llm   # drafts mappings/, defers conversion
+go run ./cmd/tuxconv convertgo tuxExamples/mainTux.pc -no-llm   # consumes the mapping, stages code + logs
+```
 
 `analyze` and `extract` never call the LLM at all. Egress note: live calls
 send **derived** content only (query-replaced views, struct contracts); for

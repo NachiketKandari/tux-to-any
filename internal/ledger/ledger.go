@@ -96,8 +96,31 @@ func Load(dir, service string) (*Ledger, error) {
 func (l *Ledger) Fresh() bool { return len(l.Units) == 0 }
 
 // Get returns the unit's entry, creating a planned one on first touch.
+// Generation-change guard (audit 2026-09-16): plan unit IDs are positional,
+// so a mapping rename reuses an ID for a different endpoint/method. When the
+// recorded kind/name differs from the plan's, the entry is updated and any
+// terminal status resets to planned — the unit regenerates instead of a
+// resume silently mixing two generations in one tree.
 func (l *Ledger) Get(id, kind, name string) *Entry {
 	if e, ok := l.Units[id]; ok {
+		// Entries created by Set carry no kind/name yet — backfill them.
+		// Only a recorded kind/name that DIFFERS signals a mapping rename
+		// (generation change) worth resetting to planned.
+		if e.Kind == "" && e.Name == "" {
+			e.Kind, e.Name = kind, name
+			return e
+		}
+		if e.Kind != kind || e.Name != name {
+			e.Kind = kind
+			e.Name = name
+			switch e.Status {
+			case StatusAppended, StatusValidated, StatusGenerated,
+				StatusSkipped, StatusFailed, StatusDeviated, StatusPlaceholder:
+				e.Status = StatusPlanned
+				e.Error = ""
+				e.Targets = nil
+			}
+		}
 		return e
 	}
 	e := &Entry{ID: id, Kind: kind, Name: name, Status: StatusPlanned}
@@ -120,8 +143,15 @@ func (l *Ledger) Set(id string, status UnitStatus, errMsg string, targets ...str
 }
 
 // AddMap records one source→target link (§4.6). Completeness: the convert
-// pipeline adds one entry per generated artifact.
+// pipeline adds one entry per generated artifact. Identical pairs dedup — a
+// resume re-records the same links, and a mapping rename must not stack the
+// old generation's links under the new one.
 func (l *Ledger) AddMap(source, target string) {
+	for _, m := range l.Map {
+		if m.Source == source && m.Target == target {
+			return
+		}
+	}
 	l.Map = append(l.Map, MapEntry{Source: source, Target: target})
 }
 

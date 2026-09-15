@@ -1,6 +1,13 @@
 package {{.Package}}
 
 {{range .Stubs}}
+{{if .Body}}
+// {{.Name}} is a tuxgo-synthesized helper: {{.Original}} is undefined in the
+// source corpus, so conversion asked the LLM to implement it from its call
+// sites (input/output signatures shown, one dedicated seam call). Review the
+// body against the legacy call sites before relying on it.
+{{.Body}}
+{{else}}
 // {{.Name}} is a tuxgo-generated stub: {{.Original}} is undefined in the
 // source corpus, so conversion stubbed it and carried on. Implement it
 // before relying on any endpoint that calls it — every call panics until
@@ -8,4 +15,5 @@ package {{.Package}}
 func {{.Name}}(args ...any) int {
 	panic("tuxgo: {{.Original}} is undefined in the source corpus (stubbed by tuxgo convert)")
 }
+{{end}}
 {{end}}

@@ -211,11 +211,19 @@ func (s *Service) ControllerInterface(p *plan.Plan) (string, error) {
 // controller bodies call these symbols; variadic any keeps the signature
 // honest (nothing is invented about the fn's real parameters).
 func (s *Service) FnStubFile(p *plan.Plan) (string, error) {
+	return s.FnStubFileWithSynth(p, nil)
+}
+
+// FnStubFileWithSynth renders controller/fnstubs.go with LLM-synthesized
+// bodies where the stub synthesis seam accepted one (keyed by legacy fn
+// name); every other stub keeps the panicking placeholder.
+func (s *Service) FnStubFileWithSynth(p *plan.Plan, synth map[string]string) (string, error) {
 	data := templates.FnStubFileData{Package: "controller"}
 	for _, st := range p.Stubs {
 		data.Stubs = append(data.Stubs, templates.FnStub{
 			Name:     common.CamelLowerGo(st.Fn),
 			Original: st.Fn,
+			Body:     synth[st.Fn],
 		})
 	}
 	return render(templates.FnStubFile, data)

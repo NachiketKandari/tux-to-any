@@ -153,11 +153,39 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 	}
 
+	// Generation-change advisory (audit 2026-09-16): plan unit IDs are
+	// positional, so a mapping rename reuses an ID for a different
+	// endpoint/method. Ledger.Get resets such units to planned, but files
+	// already on disk (controller bodies, the conversion map) still carry
+	// the old generation. Say so loudly — for a clean tree, clear the
+	// staged dir and the service ledger and re-run.
+	if renamed := renamedUnits(opts.Plan, opts.Ledger); len(renamed) > 0 {
+		msg := "mapping rename detected since the last run (" + strings.Join(renamed, ", ") + ") — stale artifacts from the old generation may remain in the staged tree; for a clean tree clear the staged dir and the service ledger and re-run"
+		telemetry.Log(ctx).Warn("generation change", "units", strings.Join(renamed, ", "))
+		res.Warnings = append(res.Warnings, msg)
+	}
+
 	// Stubbed helpers (unresolved external fns, stub-and-carry-on
 	// 2026-09-10): the endpoints that call them generate against the
-	// panicking stub, visibly.
+	// stub in controller/fnstubs.go, visibly. Each stub first gets one
+	// best-effort LLM synthesis attempt (own seam, input/output signatures
+	// shown — easy pure helpers like fn_long_to_int land as real idiomatic
+	// Go; anything the model declines or that fails the gate keeps the
+	// panicking stub, never a guessed body). A resume whose fnstubs.go
+	// already landed skips the seam outright — synthesis is a first-run
+	// cost, never a per-resume LLM call.
+	var stubSynth, stubMarks map[string]string
+	if fnStubLanded(opts) {
+		stubSynth, stubMarks = map[string]string{}, map[string]string{}
+	} else {
+		stubSynth, stubMarks = synthesizeStubs(ctx, opts, res)
+	}
 	for _, st := range opts.Plan.Stubs {
-		res.Stubs = append(res.Stubs, st.Fn+" → "+strings.Join(st.Endpoints, ", "))
+		entry := st.Fn + " → " + strings.Join(st.Endpoints, ", ")
+		if m, ok := stubMarks[st.Fn]; ok && m != "" {
+			entry += " (" + m + ")"
+		}
+		res.Stubs = append(res.Stubs, entry)
 	}
 	// Arm-coverage advisories ride the result summary — omission is the
 	// user's choice; silence about an unmapped arm is not.
@@ -218,6 +246,15 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Rebuild the interface from scratch every run (audit 2026-09-16):
+		// AccumulateDBInterface dedups same-name/same-signature lines, but a
+		// mapping rename leaves the old generation's methods in the file
+		// alongside the new ones (observed: 12 methods after a rename), and
+		// a resume would restack them. Rebuilding from the skeleton keeps
+		// single-run and resume bytes identical.
+		if err := os.Remove(ifacePath); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("convert: clear stale db interface: %w", err)
+		}
 		for _, u := range unitsOf(opts.Plan, plan.KindDBMethod) {
 			if err := svc.AccumulateDBInterface(ifacePath, dbBodies[u.ID].sig); err != nil {
 				return nil, fmt.Errorf("convert: accumulate db interface: %w", err)
@@ -243,7 +280,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		if len(opts.Plan.Stubs) > 0 {
 			artifacts = append(artifacts, fileArtifact{unitID(opts.Plan, plan.KindFnStub), "fnstubs.go",
 				svc.Mapping.ImportPath("controller") + "/fnstubs.go",
-				func() (string, error) { return svc.FnStubFile(opts.Plan) }})
+				func() (string, error) { return svc.FnStubFileWithSynth(opts.Plan, stubSynth) }})
 		}
 		artifacts = append(artifacts,
 			fileArtifact{handlerIfaceID, "handler-interface.go",
@@ -273,7 +310,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, err
 		}
 		if err := generateFile(ctx, opts, res, unitID(opts.Plan, plan.KindFnStub), "file", "fnstubs.go", path,
-			func() (string, error) { return svc.FnStubFile(opts.Plan) }); err != nil {
+			func() (string, error) { return svc.FnStubFileWithSynth(opts.Plan, stubSynth) }); err != nil {
 			return nil, err
 		}
 	}
@@ -1220,6 +1257,13 @@ func appendControllerMethod(ctx context.Context, opts Options, res *Result, svc 
 		if rerr != nil {
 			return rerr
 		}
+		// Resume guard (audit 2026-09-16): the ledger is the resume record,
+		// but a cleared/stale ledger against an existing file would restack
+		// the same method. A method with this name already present wins —
+		// generation is deterministic, so bytes would be identical.
+		if strings.Contains(string(existing), ") "+u.Name+"(") {
+			return nil
+		}
 		merged = string(existing) + "\n" + strings.TrimRight(method, "\n") + "\n"
 	} else {
 		header := "package controller\n\nimport (\n\t\"context\"\n\t\"errors\"\n\t\"fmt\"\n\n\t\"" + svc.Module + "/pkg/logger\"\n\t\"" + svc.ModelsPkg + "\"\n)\n"
@@ -1370,6 +1414,41 @@ func unitID(p *plan.Plan, k plan.Kind) string {
 		}
 	}
 	return ""
+}
+
+// renamedUnits lists plan units whose ledger entry already exists under a
+// different kind/name — the mapping-rename signal. Callers warn; Ledger.Get
+// resets those units to planned so they regenerate. Only semantic units
+// (db/controller/fn-helper/tpcall) are compared: whole-file artifacts
+// (models, interfaces, handlers, router, fnstubs) register in the ledger
+// under their display kind/name ("file"/filename), so comparing them
+// against the plan identity would flag every run.
+func renamedUnits(p *plan.Plan, l *ledger.Ledger) []string {
+	var out []string
+	for _, u := range p.Units {
+		switch u.Kind {
+		case plan.KindDBMethod, plan.KindControllerMethod, plan.KindFnHelper, plan.KindTPCall:
+		default:
+			continue
+		}
+		if e, ok := l.Units[u.ID]; ok && e.Kind != "" && e.Name != "" &&
+			(e.Kind != string(u.Kind) || e.Name != u.Name) {
+			out = append(out, u.ID+" ("+e.Name+"→"+u.Name+")")
+		}
+	}
+	return out
+}
+
+// fnStubLanded reports whether the fnstub file unit already converted — the
+// resume shortcut that keeps stub synthesis a first-run cost. It reads the
+// ledger map directly (no Get) so the probe never mutates resume state.
+func fnStubLanded(opts Options) bool {
+	id := unitID(opts.Plan, plan.KindFnStub)
+	if id == "" {
+		return true // no stubs — nothing to synthesize
+	}
+	e, ok := opts.Ledger.Units[id]
+	return ok && e.Status == ledger.StatusAppended
 }
 
 // generateFile renders a deterministic artifact, writes it (unless the
