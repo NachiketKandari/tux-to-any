@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"tux-to-any/internal/ir"
+	"tux-to-any/internal/pred"
 	scanner "tux-to-any/internal/tsscan"
 )
 
@@ -742,7 +743,6 @@ func TestScenarioResponseUnstableLoud(t *testing.T) {
 	}
 }
 
-
 // TestScenarioTxAbortsCensus pins the abort census: aborts never pair into
 // spans but register as sites (SCEN-D8) — one helper abort in the txPairsSrc
 // fixture.
@@ -805,6 +805,29 @@ func TestLineIsTxPlumbingCall(t *testing.T) {
 	} {
 		if lineIsTxPlumbingCall(bad, name) {
 			t.Errorf("%q must NOT classify as tx plumbing", bad)
+		}
+	}
+}
+
+// TestExprTouchesAxisRawWholeIdent pins the Raw-text axis test: whole
+// identifier matches touch the axis, a match inside a longer identifier
+// (trn_cd inside trn_cd_arr) is a different variable and never does.
+func TestExprTouchesAxisRawWholeIdent(t *testing.T) {
+	touch := func(text, ref, alias string) bool {
+		return exprTouchesAxis(&pred.Expr{Kind: pred.KindRaw, Text: text}, ref, alias)
+	}
+	if !touch("trn_cd == c_x", "trn_cd", "") {
+		t.Error("whole-ident mention must touch the axis")
+	}
+	if !touch("strcmp(sql_trn_cd.arr, \"P\") != 0", "sql_trn_cd.arr", "trn_cd") {
+		t.Error("ref mention must touch the axis")
+	}
+	for _, bad := range []string{
+		"trn_cd_arr != 0",
+		"my_trn_cd == 1",
+	} {
+		if touch(bad, "trn_cd", "") {
+			t.Errorf("%q must not touch axis trn_cd", bad)
 		}
 	}
 }

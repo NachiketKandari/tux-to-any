@@ -859,7 +859,27 @@ func exprTouchesAxis(e *pred.Expr, ref, alias string) bool {
 	case pred.KindLit:
 		return false
 	case pred.KindRaw:
-		return ref != "" && strings.Contains(e.Text, ref) || alias != "" && strings.Contains(e.Text, alias)
+		return ref != "" && containsIdent(e.Text, ref) || alias != "" && containsIdent(e.Text, alias)
+	}
+	return false
+}
+
+// containsIdent reports whether name appears in text as a complete
+// identifier (an ident byte on neither side) — the Raw-text axis test: a
+// match inside a longer identifier (trn_cd inside trn_cd_arr) is a
+// different variable, never the axis.
+func containsIdent(text, name string) bool {
+	for i := 0; i+len(name) <= len(text); i++ {
+		if text[i:i+len(name)] != name {
+			continue
+		}
+		if i > 0 && isIdentByte(text[i-1]) {
+			continue
+		}
+		if i+len(name) < len(text) && isIdentByte(text[i+len(name)]) {
+			continue
+		}
+		return true
 	}
 	return false
 }

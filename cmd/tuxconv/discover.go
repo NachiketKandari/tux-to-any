@@ -166,6 +166,7 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *con
 				fmt.Printf("- %s: no API candidates found (%d conditions inspected, no dispatch axis)\n", f.Entry, len(f.Conditions))
 				continue
 			}
+			fmt.Printf("- %s: no dispatch axis — condition-based discovery\n", f.Entry)
 			aiNames := aiNameEndpoints(ctx, log, client, bd, f, tree, candidates, src, rec)
 			draft = renderDraft(f, candidates, dirMode, aiNames)
 			printDiscoverSummary(f, tree, candidates)

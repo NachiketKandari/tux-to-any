@@ -307,7 +307,10 @@ func startsExec(src []byte, i int) bool {
 // ';' outside string/comment contexts; without one, the region closes
 // leniently at the next EXEC SQL keyword, and only when that also never
 // arrives does the region run to EOF — recorded as an unbalanced exec_sql
-// fact and never passed off as a statement. Comments found inside the region
+// fact and never passed off as a statement. A lenient close is itself a
+// defect fact (exec_sql_lenient): the region's span may absorb content
+// between the two statements, so downstream consumers see it, never a
+// silent merge. Comments found inside the region
 // are recorded in the comment inventory and replaced by a single space in
 // the statement's Raw text (pinned convention).
 func scanExecSQL(src []byte, i int, r *prescanResult) int {
@@ -372,7 +375,10 @@ func scanExecSQL(src []byte, i int, r *prescanResult) int {
 		end = k
 		endLine = posAt(r.lineStarts, k-1).line
 	case lenient:
-		// end/endLine already set to the next EXEC keyword
+		// end/endLine already set to the next EXEC keyword. Loud: without
+		// the ';', this region's span absorbs whatever sits between the two
+		// statements, so the close is recorded as a defect fact.
+		r.unbalanced = append(r.unbalanced, UnbalancedRegion{Kind: "exec_sql_lenient", StartLine: sPos.line, StartCol: sPos.col})
 	default:
 		r.unbalanced = append(r.unbalanced, UnbalancedRegion{Kind: "exec_sql", StartLine: sPos.line, StartCol: sPos.col})
 		r.regions = append(r.regions, sqlRegion{start: i, end: end, unbalanced: true, startLine: sPos.line, startCol: sPos.col})

@@ -71,6 +71,35 @@ func TestScanBannerCommentDebris(t *testing.T) {
 	}
 }
 
+func TestScanLenientExecClose(t *testing.T) {
+	// A missing ';' leniently closes the region at the next EXEC keyword:
+	// the two statements stay two regions, and the close is recorded as an
+	// unbalanced defect fact (never a silent merge).
+	src := []byte("void SVC_DEMO(TPSVCINFO* rqst)\n{\n" +
+		"    EXEC SQL SELECT A FROM T\n" +
+		"    EXEC SQL COMMIT;\n" +
+		"}\n")
+	facts, err := ScanBytes(src, "lenient")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.AllSQL) != 2 {
+		t.Fatalf("allSQL = %d want 2 (statements must not merge): %+v", len(facts.AllSQL), facts.AllSQL)
+	}
+	if facts.AllSQL[0].Kind != SQLSelect || facts.AllSQL[1].Kind != SQLCommit {
+		t.Fatalf("kinds = %s, %s want select, commit", facts.AllSQL[0].Kind, facts.AllSQL[1].Kind)
+	}
+	found := false
+	for _, u := range facts.Unbalanced {
+		if u.Kind == "exec_sql_lenient" && u.StartLine == 3 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("lenient close not recorded: %+v", facts.Unbalanced)
+	}
+}
+
 // TestGoldenFixtures runs the scanner over the vendored synthetic fixtures
 // and pins the vocabulary's structural numbers (testdata/goldens).
 func TestGoldenFixtures(t *testing.T) {
