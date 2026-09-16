@@ -215,9 +215,16 @@ func splitStatements(view string) []string {
 			// Lookahead: an else-chain continuation (`} else ...`) belongs
 			// to this statement's unit, so the unit stays open. Provenance
 			// markers prefix every flattened line (`/*L21716*/}`), so the
-			// peek strips them before classifying.
-			if i+1 < len(lines) {
-				next := stripLeadingComments(lines[i+1])
+			// peek strips them before classifying. Blank lines between the
+			// close and the continuation must not break the glue — peek
+			// past them, else the next unit starts mid-chain and its
+			// fragment makes the model emit a dangling `else`.
+			j := i + 1
+			for j < len(lines) && strings.TrimSpace(stripLeadingComments(lines[j])) == "" {
+				j++
+			}
+			if j < len(lines) {
+				next := stripLeadingComments(lines[j])
 				if strings.HasPrefix(next, "}") || strings.HasPrefix(next, "else") {
 					continue
 				}
@@ -252,6 +259,48 @@ func dropTrailingMethodBrace(units []string) []string {
 	}
 	units[len(units)-1] = strings.Join(last, "\n")
 	return units
+}
+
+// startsChainContinuation reports whether a statement unit continues an
+// if/elseif/else chain opened by an earlier unit: its first code line
+// (provenance markers and blanks skipped) opens with `else`, or with `}`
+// carrying an `else` on the same line (`} else {`). Such a unit can never
+// stand alone — a fragment starting there makes the model emit a dangling
+// `else` (audit 2026-09-16: `expected statement, found 'else'`). A lone
+// closing `}` (genuine block end, no else) is NOT a continuation: cutting
+// before it is the mid-block case bracePads already covers.
+func startsChainContinuation(unit string) bool {
+	for _, line := range strings.Split(unit, "\n") {
+		s := stripLeadingComments(line)
+		if s == "" {
+			continue
+		}
+		if strings.HasPrefix(s, "else") {
+			return true
+		}
+		if strings.HasPrefix(s, "}") && strings.Contains(s, "else") {
+			return true
+		}
+		return false
+	}
+	return false
+}
+
+// glueChainUnits merges chain-continuation units into the unit that opened
+// their chain, so groupFragments (which only cuts BETWEEN units) can never
+// split an if/elseif/else chain across fragments. Merging preserves the
+// byte-for-byte reassembly contract; a merged chain larger than the slice
+// budget rides alone and fails loudly downstream like any oversized unit.
+func glueChainUnits(units []string) []string {
+	var out []string
+	for _, u := range units {
+		if len(out) > 0 && startsChainContinuation(u) {
+			out[len(out)-1] += "\n" + u
+			continue
+		}
+		out = append(out, u)
+	}
+	return out
 }
 
 // braceOnlyLine reports whether a line's code content (block comments
@@ -572,7 +621,7 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 			opts.Budget.Count(cx.prompt), opts.Budget.MaxPromptTokens, opts.Budget.MaxOutputTokens)
 	}
 
-	chunks := groupFragments(splitStatements(cx.view.Source), sliceBudget, extrasOf)
+	chunks := groupFragments(glueChainUnits(splitStatements(cx.view.Source)), sliceBudget, extrasOf)
 	n := len(chunks)
 	telemetry.Log(cx.ctx).Info("fragment plan",
 		"unit", cx.unit.Name, "fragments", n, "slice_budget_chars", sliceBudget)

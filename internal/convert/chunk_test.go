@@ -154,6 +154,112 @@ func TestSplitStatements(t *testing.T) {
 	}
 }
 
+// TestSplitStatementsBlankLineChain pins the chain-glue lookahead: blank
+// lines between a block close and its `else` continuation must not break
+// the unit — the next unit starting mid-chain makes the model emit a
+// dangling `else` (audit 2026-09-16).
+func TestSplitStatementsBlankLineChain(t *testing.T) {
+	view := "if (a) {\n  s.store.One(c);\n}\n\nelse {\n  s.store.Two(c);\n}\ns.store.Three(c);\n}"
+	units := splitStatements(view)
+	if got, want := strings.Join(units, "\n"), view[:strings.LastIndex(view, "\n")]; got != want {
+		t.Errorf("split lost bytes:\n got %q\nwant %q", got, want)
+	}
+	for _, u := range units {
+		if startsChainContinuation(u) {
+			t.Errorf("unit starts mid-chain despite blank-line glue: %q", firstLine(strings.TrimSpace(u)))
+		}
+	}
+	var sawElse bool
+	for _, u := range units {
+		if strings.Contains(u, "s.store.Two(c)") {
+			sawElse = true
+			if !strings.Contains(u, "s.store.One(c)") {
+				t.Errorf("else arm split from its chain head:\n%s", u)
+			}
+		}
+	}
+	if !sawElse {
+		t.Errorf("else arm missing from units: %v", units)
+	}
+}
+
+// TestGlueChainUnits pins chain-atomic merging: continuation units join
+// their head, lone block closes and fresh statements stand alone, and the
+// merge preserves byte-for-byte reassembly.
+func TestGlueChainUnits(t *testing.T) {
+	if startsChainContinuation("else {\n  s.store.Two(c);\n}") != true {
+		t.Errorf("else-led unit not a continuation")
+	}
+	if startsChainContinuation("/*L24*/  else\n/*L25*/  {") != true {
+		t.Errorf("provenance-marked else not a continuation")
+	}
+	if startsChainContinuation("} else {\n  s.store.Two(c);") != true {
+		t.Errorf("} else-led unit not a continuation")
+	}
+	if startsChainContinuation("}\n}") {
+		t.Errorf("lone block close misread as continuation")
+	}
+	if startsChainContinuation("s.store.One(c);") {
+		t.Errorf("plain statement misread as continuation")
+	}
+	if startsChainContinuation("") {
+		t.Errorf("empty unit misread as continuation")
+	}
+
+	units := []string{
+		"if (a) {\n  s.store.One(c);",
+		"else {\n  s.store.Two(c);",
+		"}",
+		"s.store.Three(c);",
+	}
+	glued := glueChainUnits(units)
+	if len(glued) != 3 {
+		t.Fatalf("glued %d units, want 3 (head+else, close, fresh): %q", len(glued), glued)
+	}
+	if !strings.Contains(glued[0], "s.store.One(c)") || !strings.Contains(glued[0], "s.store.Two(c)") {
+		t.Errorf("chain head missing its else arm: %q", glued[0])
+	}
+	if glued[2] != "s.store.Three(c);" {
+		t.Errorf("fresh statement merged: %q", glued[2])
+	}
+	if got, want := strings.Join(glued, "\n"), strings.Join(units, "\n"); got != want {
+		t.Errorf("glue lost bytes:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestGroupFragmentsChainAtomic pins the packing invariant: even under a
+// budget that forces many chunks, no chunk starts mid-chain.
+func TestGroupFragmentsChainAtomic(t *testing.T) {
+	units := glueChainUnits(splitStatements(chunkView))
+	chunks := groupFragments(units, 220, func(string) int { return 0 })
+	if len(chunks) < 2 {
+		t.Fatalf("budget 220 produced %d chunks, want several", len(chunks))
+	}
+	for _, c := range chunks {
+		first := ""
+		for _, line := range strings.Split(c, "\n") {
+			if s := stripLeadingComments(line); strings.TrimSpace(s) != "" {
+				first = s
+				break
+			}
+		}
+		trimmed := strings.TrimSpace(first)
+		if strings.HasPrefix(trimmed, "else") {
+			t.Errorf("chunk starts mid-chain: %q", firstLine(c))
+		}
+	}
+	var re string
+	for i, c := range chunks {
+		if i > 0 {
+			re += "\n"
+		}
+		re += c
+	}
+	if want := chunkView[:strings.LastIndex(chunkView, "\n")]; re != want {
+		t.Errorf("chunks do not reassemble the view")
+	}
+}
+
 func TestGroupFragmentsBudget(t *testing.T) {
 	units := splitStatements(chunkView)
 	chunks := groupFragments(units, 220, func(string) int { return 0 })
