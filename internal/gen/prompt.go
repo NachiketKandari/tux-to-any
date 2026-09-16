@@ -480,7 +480,7 @@ func responseShaping(s *Service, c *ir.Condition, p *plan.Plan, endpoint string,
 	if !mapped {
 		fmt.Fprintf(&sb, "  init: data = make([]*models.%s, 0), then append the shaped element directly (no loop)\n", s.responseType(endpoint))
 	} else {
-		fmt.Fprintf(&sb, "  init: data = make([]*models.%s, 0); then for _, row := range result { data = append(data, &models.%s{...}) }\n", s.responseType(endpoint), s.responseType(endpoint))
+		fmt.Fprintf(&sb, "  init: data = make([]*models.%s, 0); then append the shaped element once per returned row\n  (range over the slice you captured from the s.store call above; declare the capture)\n", s.responseType(endpoint))
 	}
 	return sb.String()
 }

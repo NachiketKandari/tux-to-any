@@ -440,7 +440,6 @@ func TestGenControllerPromptContext(t *testing.T) {
 		"Label ← StrDesc.String",
 		"matchAccount ← request.Account",
 		"data = make([]*models.SipFreedemResponse, 0)",
-		"for _, row := range result",
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("prompt context missing %q:\n%s", want, ctx)
@@ -451,6 +450,12 @@ func TestGenControllerPromptContext(t *testing.T) {
 		if strings.Contains(ctx, absent) {
 			t.Errorf("prompt context carries bloat %q:\n%s", absent, ctx)
 		}
+	}
+	// No phantom placeholder names: the shaping block must not name a
+	// loop target the view never declares (the model copies it verbatim
+	// and the gate rejects `undefined identifier`).
+	if strings.Contains(ctx, "range result") {
+		t.Errorf("prompt context invents loop target `result`:\n%s", ctx)
 	}
 	// Only the endpoint's own rows: other units' structs stay out (the
 	// shaping block names the endpoint's own store methods only).
