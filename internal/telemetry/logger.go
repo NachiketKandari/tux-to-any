@@ -85,14 +85,14 @@ type Config struct {
 	Verbose       bool
 }
 
-// shortTime renders log timestamps as DDMMYYYY_HH:MM:SS on the
-// human-readable surfaces (console, .log file) — the same day-first shape
-// the run id uses, with a readable clock; the JSONL machine copy keeps
-// full precision.
+// shortTime renders log timestamps as HH:MM:SS on the human-readable
+// surfaces (console, .log file): the run's date and id already live in the
+// log file name (run-<DDMMYYYY_HHMMSS>.log), so repeating the date per line
+// is noise. The JSONL machine copy keeps full precision.
 func shortTime(groups []string, a slog.Attr) slog.Attr {
 	if a.Key == slog.TimeKey && len(groups) == 0 {
 		if t, ok := a.Value.Any().(time.Time); ok {
-			a.Value = slog.StringValue(t.Format("02012006_15:04:05"))
+			a.Value = slog.StringValue(t.Format("15:04:05"))
 		}
 	}
 	return a
@@ -183,7 +183,10 @@ func Init(cfg Config) (func(), error) {
 			AddSource:   true,
 			ReplaceAttr: callerAttr, // keep full-precision time on the machine copy
 		})
-		handlers = append(handlers, jsonHandler)
+		// The run id is in every log file name; the human surfaces drop it
+		// per line, but the machine copy keeps it in-record so concatenated
+		// JSONL stays attributable.
+		handlers = append(handlers, jsonHandler.WithAttrs([]slog.Attr{slog.String("run_id", cfg.RunID)}))
 
 		textFile, err := os.OpenFile(filepath.Join(cfg.LogDir, "run-"+cfg.RunID+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
@@ -211,19 +214,11 @@ func Init(cfg Config) (func(), error) {
 	return cleanup, nil
 }
 
-// Log returns the logger enriched with run_id from context if present.
+// Log returns the default logger. Run scoping rides the log file names
+// (and the in-record run_id on the JSONL machine copy), so no per-line
+// run_id is attached here anymore.
 func Log(ctx context.Context) *slog.Logger {
 	mu.RLock()
-	l := defaultLogger
-	mu.RUnlock()
-
-	if ctx == nil {
-		return l
-	}
-
-	runID := RunIDFromContext(ctx)
-	if runID != "" {
-		return l.With(slog.String("run_id", runID))
-	}
-	return l
+	defer mu.RUnlock()
+	return defaultLogger
 }

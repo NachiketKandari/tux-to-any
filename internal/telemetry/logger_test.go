@@ -54,11 +54,14 @@ func TestTelemetryLogging(t *testing.T) {
 	if !strings.Contains(consoleOut, "hello world message") {
 		t.Fatalf("console output missing message: %s", consoleOut)
 	}
-	if !strings.Contains(consoleOut, "run_id=run-abc-999") {
-		t.Fatalf("console output missing run_id: %s", consoleOut)
+	if strings.Contains(consoleOut, "run_id") {
+		t.Fatalf("console output must not repeat the run id (it is in the file name): %s", consoleOut)
 	}
 	if !strings.Contains(consoleOut, "caller=") || !strings.Contains(consoleOut, "logger_test.go:") {
 		t.Fatalf("console output missing caller location: %s", consoleOut)
+	}
+	if !stampRe.MatchString(consoleOut) {
+		t.Fatalf("console output should carry a bare HH:MM:SS stamp, got: %s", consoleOut)
 	}
 
 	// 2. Verify JSON file output
@@ -89,25 +92,28 @@ func TestTelemetryLogging(t *testing.T) {
 		t.Errorf("caller rewrite must not clobber a source attribute, got %v", entry["source"])
 	}
 
-	// 3. The human-readable twin .log file mirrors the record with the
-	// DDMMYYYY_HH:MM:SS stamp. (This check once used a "time=2" substring
-	// heuristic to detect long timestamps — which false-positived on every
-	// run between 20:00 and 23:59, since those hours start with "2".)
+	// 3. The human-readable twin .log file mirrors the record with a bare
+	// HH:MM:SS stamp and no per-line run_id — the run-<id> file name owns
+	// both. (This check once used a "time=2" substring heuristic to detect
+	// long timestamps — which false-positived on every run between 20:00
+	// and 23:59, since those hours start with "2".)
 	logText, err := os.ReadFile(filepath.Join(tempDir, "run-"+runID+".log"))
 	if err != nil {
 		t.Fatalf("failed reading .log twin: %v", err)
 	}
-	if !strings.Contains(string(logText), "hello world message") || !strings.Contains(string(logText), "run_id=run-abc-999") {
-		t.Errorf(".log twin missing message or run_id: %s", string(logText))
+	if !strings.Contains(string(logText), "hello world message") {
+		t.Errorf(".log twin missing message: %s", string(logText))
+	}
+	if strings.Contains(string(logText), "run_id") {
+		t.Errorf(".log twin must not repeat the run id (it is in the file name): %s", string(logText))
 	}
 	if !strings.Contains(string(logText), "caller=") || !strings.Contains(string(logText), "logger_test.go:") {
 		t.Errorf(".log twin missing caller location: %s", string(logText))
 	}
 	if !stampRe.MatchString(string(logText)) {
-		t.Errorf(".log twin should carry a DDMMYYYY_HH:MM:SS stamp, got: %s", strings.Split(string(logText), "\n")[0])
+		t.Errorf(".log twin should carry a bare HH:MM:SS stamp, got: %s", strings.Split(string(logText), "\n")[0])
 	}
 }
 
-// stampRe matches the human-surface log stamp: day-first date, underscore,
-// clock ("13092026_22:44:46").
-var stampRe = regexp.MustCompile(`time=\d{8}_\d{2}:\d{2}:\d{2}\b`)
+// stampRe matches the human-surface log stamp: bare clock ("22:44:46").
+var stampRe = regexp.MustCompile(`time=\d{2}:\d{2}:\d{2}\b`)
