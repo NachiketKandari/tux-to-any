@@ -2,10 +2,12 @@ package telemetry
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,7 +20,9 @@ var (
 func init() {
 	// Fallback text logger to stderr before explicit initialization.
 	defaultLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level:       slog.LevelInfo,
+		AddSource:   true,
+		ReplaceAttr: humanize,
 	}))
 }
 
@@ -94,6 +98,47 @@ func shortTime(groups []string, a slog.Attr) slog.Attr {
 	return a
 }
 
+// callerAttr turns the built-in source attribute into a traditional caller
+// location, "pkg.Func file.go:123", under the caller= key. The key is not
+// "source" because call sites already use source= for the input file path.
+func callerAttr(groups []string, a slog.Attr) slog.Attr {
+	if a.Key != slog.SourceKey || len(groups) != 0 {
+		return a
+	}
+	src, ok := a.Value.Any().(*slog.Source)
+	if !ok {
+		return a
+	}
+	a.Key = "caller"
+	a.Value = slog.StringValue(fmt.Sprintf("%s %s:%d", shortFunc(src.Function), shortFile(src.File), src.Line))
+	return a
+}
+
+// humanize applies the human-surface tweaks: the short day-first stamp plus
+// the caller location.
+func humanize(groups []string, a slog.Attr) slog.Attr {
+	return callerAttr(groups, shortTime(groups, a))
+}
+
+// shortFunc trims a fully-qualified function name to its package-qualified
+// form, e.g. "github.com/x/y/cmd/run.Main" -> "run.Main".
+func shortFunc(fn string) string {
+	if i := strings.LastIndexByte(fn, '/'); i >= 0 {
+		return fn[i+1:]
+	}
+	return fn
+}
+
+// shortFile keeps the last two path elements of a source file, e.g.
+// "/home/x/proj/cmd/run.go" -> "cmd/run.go".
+func shortFile(file string) string {
+	parts := strings.Split(filepath.ToSlash(file), "/")
+	if len(parts) >= 2 {
+		return strings.Join(parts[len(parts)-2:], "/")
+	}
+	return file
+}
+
 // Init configures the global logger and optional file logging.
 // Every run writes three surfaces: console (live human view), a JSONL file
 // (machine copy for the audit/tuning loop), and a .log text file (human
@@ -117,7 +162,8 @@ func Init(cfg Config) (func(), error) {
 
 	consoleHandler := slog.NewTextHandler(consoleOut, &slog.HandlerOptions{
 		Level:       consoleLevel,
-		ReplaceAttr: shortTime,
+		AddSource:   true,
+		ReplaceAttr: humanize,
 	})
 	handlers = append(handlers, consoleHandler)
 
@@ -133,7 +179,9 @@ func Init(cfg Config) (func(), error) {
 		closers = append(closers, jsonFile)
 
 		jsonHandler := slog.NewJSONHandler(jsonFile, &slog.HandlerOptions{
-			Level: slog.LevelDebug, // machine copy always captures full debug detail
+			Level:       slog.LevelDebug, // machine copy always captures full debug detail
+			AddSource:   true,
+			ReplaceAttr: callerAttr, // keep full-precision time on the machine copy
 		})
 		handlers = append(handlers, jsonHandler)
 
@@ -145,7 +193,8 @@ func Init(cfg Config) (func(), error) {
 
 		textHandler := slog.NewTextHandler(textFile, &slog.HandlerOptions{
 			Level:       slog.LevelDebug,
-			ReplaceAttr: shortTime,
+			AddSource:   true,
+			ReplaceAttr: humanize,
 		})
 		handlers = append(handlers, textHandler)
 	}
