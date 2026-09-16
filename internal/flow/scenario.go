@@ -61,10 +61,9 @@ func (a *DispatchAxis) Key() string {
 }
 
 var (
-	strcmpSiteRe   = regexp.MustCompile(`\bstrn?cmp\s*\(\s*([A-Za-z_][\w.]*)\s*,\s*"([^"]*)"`)
-	charAssignRe   = regexp.MustCompile(`(?:^|[^\w=!<>+\-*/&|.'"])([A-Za-z_]\w*)\s*=\s*'([^'])'\s*;`)
-	charCompareRe  = regexp.MustCompile(`(?:^|[^\w=!<>+\-*/&|.'"])([A-Za-z_]\w*)\s*(?:==|!=)\s*'([^'])'`)
-	charAssignSemi = regexp.MustCompile(`([A-Za-z_]\w*)\s*=\s*'([^'])'\s*;`)
+	strcmpSiteRe  = regexp.MustCompile(`\bstrn?cmp\s*\(\s*([A-Za-z_][\w.]*)\s*,\s*"([^"]*)"`)
+	charAssignRe  = regexp.MustCompile(`(?:^|[^\w=!<>+\-*/&|.'"])([A-Za-z_]\w*)\s*=\s*'([^'])'\s*;`)
+	charCompareRe = regexp.MustCompile(`(?:^|[^\w=!<>+\-*/&|.'"])([A-Za-z_]\w*)\s*(?:==|!=)\s*'([^'])'`)
 	// identCompareRe harvests `ident == K` / `ident != K` comparisons —
 	// the symbolic-dispatch idiom (`c_rqst_typ == MF_LINK`). The RHS
 	// counts only when it is a defined constant of the file
@@ -82,7 +81,6 @@ type axisStats struct {
 	sites    int             // strcmp predicate lines
 	compares int             // char-compare predicate lines (alias-scoped)
 	cvals    map[string]bool // char-compare values (alias-scoped)
-	normals  map[string]int  // normalization links: alias → count
 	guards   map[int]bool    // distinct branch guards touching the candidate
 }
 

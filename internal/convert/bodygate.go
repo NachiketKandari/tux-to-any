@@ -1,0 +1,326 @@
+package convert
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"go/ast"
+	"go/importer"
+	"go/parser"
+	"go/token"
+	"go/types"
+	"strings"
+
+	"tux-to-any/internal/common"
+	"tux-to-any/internal/telemetry"
+)
+
+// The seam's parse-only body gate (validateBody) let bodies through that
+// parse but cannot compile: an unused local, a leaked legacy C identifier,
+// a rune literal, or a missing terminal return only surfaces on a wired
+// target's Tier B, which the local syntax-only runs skip entirely. The
+// checks below close that gap stage-time, over the same synthetic wrap
+// validateBody uses, so line numbers come back body-relative.
+
+// parseBodyWrapped parses the wrapped body with object resolution and
+// returns the method's block plus the prelude line offset.
+func parseBodyWrapped(body string) (*token.FileSet, *ast.BlockStmt, int, bool) {
+	wrapped := bodyParseWrap(body)
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "body.go", wrapped, 0)
+	if err != nil {
+		return nil, nil, 0, false // validateBody owns parse errors
+	}
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		return fset, fd.Body, wrapPrefixLines(wrapped, body), true
+	}
+	return nil, nil, 0, false
+}
+
+// unusedLocalErrs keeps go/types' declared-and-not-used findings for the
+// body. Unresolvable imports (models, the store receiver) produce their own
+// errors and are ignored; the compiler's unused rule is independent of
+// them.
+func unusedLocalErrs(body string) []string {
+	wrapped := bodyParseWrap(body)
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "body.go", wrapped, 0)
+	if err != nil {
+		return nil
+	}
+	offset := wrapPrefixLines(wrapped, body)
+	var errs []string
+	conf := types.Config{
+		Importer: importer.Default(),
+		Error: func(err error) {
+			var terr types.Error
+			if !errors.As(err, &terr) || !strings.Contains(terr.Msg, "declared and not used") {
+				return
+			}
+			errs = append(errs, fmt.Sprintf("line %d: %s", fset.Position(terr.Pos).Line-offset, terr.Msg))
+		},
+	}
+	_, _ = conf.Check("controller", fset, []*ast.File{f}, nil)
+	return errs
+}
+
+// nonConstFormatErrs rejects fmt.Errorf calls whose format argument is not
+// a string literal: go vet (Tier B) fails those, and a variable containing
+// format verbs corrupts the error. errors.New is the variable-message home.
+func nonConstFormatErrs(body string) []string {
+	fset, block, offset, ok := parseBodyWrapped(body)
+	if !ok {
+		return nil
+	}
+	var errs []string
+	ast.Inspect(block, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Errorf" || len(call.Args) == 0 {
+			return true
+		}
+		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "fmt" {
+			return true
+		}
+		if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			return true
+		}
+		errs = append(errs, fmt.Sprintf("line %d: fmt.Errorf uses a non-constant format string — use errors.New(<message>) for a variable message",
+			fset.Position(call.Pos()).Line-offset))
+		return true
+	})
+	return errs
+}
+
+// runeLiteralErrs rejects rune literals: FML flags and status values are
+// strings/ints in Go, and `cFlag == 'Y'` (a rune) never compares against a
+// string — the classic transliteration slip.
+func runeLiteralErrs(body string) []string {
+	fset, block, offset, ok := parseBodyWrapped(body)
+	if !ok {
+		return nil
+	}
+	var errs []string
+	ast.Inspect(block, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.CHAR {
+			return true
+		}
+		errs = append(errs, fmt.Sprintf("line %d: rune literal %s — use a double-quoted string (\"Y\") or an int", fset.Position(lit.Pos()).Line-offset, lit.Value))
+		return true
+	})
+	return errs
+}
+
+// terminatingReturnErr rejects a body whose last statement cannot terminate
+// the method: named results do not make falling off the end legal.
+func terminatingReturnErr(body string) []string {
+	fset, block, offset, ok := parseBodyWrapped(body)
+	if !ok || len(block.List) == 0 {
+		return nil
+	}
+	last := block.List[len(block.List)-1]
+	if terminates(last) {
+		return nil
+	}
+	return []string{fmt.Sprintf("line %d: the body can fall off the end — end every path with return data, err / return nil, err",
+		fset.Position(last.End()).Line-offset)}
+}
+
+// terminates reports whether s is a terminating statement (the Go spec's
+// conservative subset the controller template produces).
+func terminates(s ast.Stmt) bool {
+	switch x := s.(type) {
+	case *ast.ReturnStmt:
+		return true
+	case *ast.ExprStmt:
+		if call, ok := x.X.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "panic" {
+				return true
+			}
+		}
+	case *ast.BlockStmt:
+		return len(x.List) > 0 && terminates(x.List[len(x.List)-1])
+	case *ast.IfStmt:
+		if x.Else == nil || len(x.Body.List) == 0 {
+			return false
+		}
+		return terminates(x.Body.List[len(x.Body.List)-1]) && terminates(x.Else)
+	case *ast.ForStmt:
+		return x.Cond == nil // for {} never falls through
+	case *ast.LabeledStmt:
+		return terminates(x.Stmt)
+	}
+	return false
+}
+
+// undeclaredIdentErrs reports identifiers the parser cannot resolve to a
+// declaration in the body or the wrap — exactly the leaked legacy C names
+// (`c_flag`, `c_errmsg`) and typos. allow carries the package-level seam
+// names the generated package declares outside the body (fn stubs).
+func undeclaredIdentErrs(body string, allow map[string]bool) []string {
+	fset, block, offset, ok := parseBodyWrapped(body)
+	if !ok {
+		return nil
+	}
+	// Field/method names, struct-literal keys and labels are not uses.
+	skip := map[*ast.Ident]bool{}
+	ast.Inspect(block, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			skip[x.Sel] = true
+		case *ast.KeyValueExpr:
+			if id, ok := x.Key.(*ast.Ident); ok {
+				skip[id] = true
+			}
+		case *ast.LabeledStmt:
+			skip[x.Label] = true
+		case *ast.BranchStmt:
+			if x.Label != nil {
+				skip[x.Label] = true
+			}
+		}
+		return true
+	})
+	var errs []string
+	seen := map[string]bool{}
+	ast.Inspect(block, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok || id.Obj != nil || skip[id] || id.Name == "_" || seen[id.Name] {
+			return true
+		}
+		seen[id.Name] = true
+		if identAllowed(id.Name, allow) {
+			return true
+		}
+		errs = append(errs, fmt.Sprintf("line %d: undefined identifier %q — legacy C names do not exist here; read request.<Field> or declare a local",
+			fset.Position(id.Pos()).Line-offset, id.Name))
+		return true
+	})
+	return errs
+}
+
+// identAllowed is the identifier allowlist for the body wrap: predeclared
+// names plus the packages the controller file assembly can import (context,
+// models, logger, errors, fmt, sqlx, utils) and the receiver.
+func identAllowed(name string, allow map[string]bool) bool {
+	if types.Universe.Lookup(name) != nil || allow[name] {
+		return true
+	}
+	switch name {
+	case "s", "context", "models", "logger", "errors", "fmt", "sqlx", "utils":
+		return true
+	}
+	return false
+}
+
+// stubNames lists the fn-stub helper functions the generated package
+// declares (fnstubs.go): bodies may call them, the wrap cannot resolve them.
+func stubNames(opts Options) map[string]bool {
+	out := map[string]bool{}
+	if opts.Plan == nil {
+		return out
+	}
+	for _, st := range opts.Plan.Stubs {
+		out[common.CamelLowerGo(st.Fn)] = true
+	}
+	return out
+}
+
+// repairControllerBody is the extract-side deterministic repair for
+// controller bodies: cleanBody, the arm-wrapper unwrap, and the terminal
+// return. The repairs run before the gates so the model is not asked to fix
+// shapes the pipeline can own deterministically.
+func repairControllerBody(ctx context.Context, unit, axisVar, content string) string {
+	body := cleanBody(content)
+	if axisVar != "" {
+		if fixed, ok := repairArmWrapper(body, axisVar); ok {
+			telemetry.Log(ctx).Info("arm wrapper unwrapped", "unit", unit, "axis", axisVar)
+			body = fixed
+		}
+	}
+	return ensureTerminalReturn(body)
+}
+
+// ensureTerminalReturn appends the terminal `return data, err` when the
+// body's last statement cannot terminate the method: named results do not
+// make falling off the end legal, and the return is a no-op on the paths
+// that already returned. Idempotent.
+func ensureTerminalReturn(body string) string {
+	if len(terminatingReturnErr(body)) == 0 {
+		return body
+	}
+	return strings.TrimRight(body, " \t\n") + "\nreturn data, err"
+}
+
+// repairArmWrapper removes a leading `if <axisVar> == '<value>' { … }`
+// wrapper the model occasionally re-adds around a scenario arm (the method
+// already represents that arm) and appends the terminal `return data, err`
+// the unwrap exposes. Returns the body unchanged when no wrapper matches.
+func repairArmWrapper(body, axisVar string) (string, bool) {
+	if axisVar == "" {
+		return body, false
+	}
+	wrapped := bodyParseWrap(body)
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "body.go", wrapped, 0)
+	if err != nil {
+		return body, false
+	}
+	var block *ast.BlockStmt
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil {
+			block = fd.Body
+			break
+		}
+	}
+	if block == nil || len(block.List) != 1 {
+		return body, false
+	}
+	ifs, ok := block.List[0].(*ast.IfStmt)
+	if !ok || ifs.Else != nil || ifs.Init != nil || !condMentions(ifs.Cond, axisVar) {
+		return body, false
+	}
+	start := fset.Position(ifs.Body.Lbrace).Offset + 1
+	end := fset.Position(ifs.Body.Rbrace).Offset
+	if start < 0 || end > len(wrapped) || start >= end {
+		return body, false
+	}
+	inner := strings.TrimSpace(wrapped[start:end])
+	if inner == "" {
+		return body, false
+	}
+	if len(terminatingReturnErr(inner)) > 0 {
+		inner += "\nreturn data, err"
+	}
+	return inner, true
+}
+
+// condMentions reports whether the condition references the identifier.
+func condMentions(e ast.Expr, name string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// wrapPrefixLines counts the wrapper's prelude lines so reported positions
+// map back to the body's own line numbers.
+func wrapPrefixLines(wrapped, body string) int {
+	i := strings.Index(wrapped, body)
+	if i < 0 {
+		return 0
+	}
+	return strings.Count(wrapped[:i], "\n")
+}

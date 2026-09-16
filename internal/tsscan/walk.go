@@ -221,14 +221,6 @@ func firstDeclaratorIndex(n wasitter.Node) int {
 	return int(n.ChildCount())
 }
 
-// childAt returns the child at index i, or the null node when out of range.
-func childAt(n wasitter.Node, i int) wasitter.Node {
-	if i < 0 || i >= int(n.ChildCount()) {
-		return wasitter.Node{}
-	}
-	return n.Child(i)
-}
-
 // nextNonComment returns the first child at or after index i that is not a
 // comment node (comments are extra named children in the tree).
 func nextNonComment(n wasitter.Node, i int) wasitter.Node {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/token"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"tux-to-any/internal/audit"
@@ -123,7 +124,55 @@ func aiNameScenarios(ctx context.Context, log *slog.Logger, client llm.Client, b
 		}
 		seen[sug.Name] = sc.Key
 	}
+	dedupeRowNames(out, queriesByID, log)
 	return out
+}
+
+// dedupeRowNames clears a suggested row name that another query already
+// claimed with a different shape — two generated structs under one name do
+// not compile. The cleared pin falls back to the deterministic profile row
+// name (derived from the unique method name); identical shapes may share the
+// name (gen emits one struct). Sorted iteration keeps the outcome
+// deterministic.
+func dedupeRowNames(sugs map[string]aiSuggestion, queriesByID map[string]*ir.Query, log *slog.Logger) {
+	shape := map[string]string{} // row name → shape fingerprint
+	owner := map[string]string{} // row name → first query id
+	keys := make([]string, 0, len(sugs))
+	for k := range sugs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		sug := sugs[k]
+		ids := make([]string, 0, len(sug.Methods))
+		for id := range sug.Methods {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			pin := sug.Methods[id]
+			if pin.Row == "" {
+				continue
+			}
+			q := queriesByID[id]
+			if q == nil {
+				continue
+			}
+			fp := strings.Join(q.RowShape, "|")
+			if prev, ok := shape[pin.Row]; ok {
+				if prev != fp {
+					log.Warn("row name collision — deterministic row name used",
+						"row", pin.Row, "query", id, "claimed_by", owner[pin.Row])
+					pin.Row = ""
+					sug.Methods[id] = pin
+				}
+				continue
+			}
+			shape[pin.Row] = fp
+			owner[pin.Row] = id
+		}
+		sugs[k] = sug
+	}
 }
 
 // scenarioQueryIDs lists the scenario's census query ids.

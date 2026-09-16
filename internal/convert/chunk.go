@@ -85,17 +85,18 @@ const chunkFramingChars = 600
 // chunkCtx carries everything the chunked path needs from controllerBody —
 // the single-call path already computed these pieces.
 type chunkCtx struct {
-	ctx    context.Context
-	opts   Options
-	res    *Result
-	svc    *gen.Service
-	unit   plan.Unit
-	db     map[string]dbOut
-	cond   *ir.Condition
-	view   budget.View
-	scen   *scenPrompt
-	prompt string // the full single-call prompt (base-scaffold accounting)
-	calls  map[string]budget.DBCall
+	ctx     context.Context
+	opts    Options
+	res     *Result
+	svc     *gen.Service
+	unit    plan.Unit
+	db      map[string]dbOut
+	cond    *ir.Condition
+	view    budget.View
+	scen    *scenPrompt
+	axisVar string // dispatch axis variable (arm-wrapper repair; "" = no scenario)
+	prompt  string // the full single-call prompt (base-scaffold accounting)
+	calls   map[string]budget.DBCall
 }
 
 // systemPromptFragment is the fragment-framed system prompt: the same rules
@@ -110,7 +111,7 @@ INPUTS: request.<Field> exactly as defined.
 STORE: every s.store.* call shown appears exactly once, exact params in order, results captured. No other s.* calls. Never SQL.
 FIELDS: verbatim struct/row names; sql.NullString via row.X.String.
 LITERALS (Go only): "Y" never 'Y'; 0 never '\0'; == never =.
-ERRORS: after every err-returning call: if err != nil { return nil, err }. Return (return data, err / return nil, err) ONLY where this fragment's view shows one; otherwise fall through.
+ERRORS: after every err-returning call: if err != nil { return nil, err }. A variable error message uses errors.New(msg) — never fmt.Errorf(variable). Return (return data, err / return nil, err) ONLY where this fragment's view shows one; otherwise fall through.
 JOINTS: a closing brace closes an earlier fragment's block; an if header open at the end is closed later. Listed earlier-fragment locals are reused, never redeclared; := only on first use in THIS fragment.
 LEGACY MAP (intent, never spelling): FML pack (Fadd32) → append shaped rows to data; tpreturn(TPSUCCESS) → return data, err (only where shown); error legs → return nil + S-code; CLOSE/SETNULL/SETLEN/MEMSET/buffer-math/DEBUG userlog → drop; session prologue (Fget32/chk_sssn/tpalloc) → drop. Never emit tpreturn/tpalloc/Fadd32/Fget32/errlog/userlog/EXEC SQL/FBFR32/unsafe.
 FLOW: same loops/branches/order; dead-looking branches still implemented; every shown store call appears under its condition.`
@@ -126,7 +127,7 @@ KEEP: every shown s.store.* call exactly once, same condition and order, exact p
 UNIFY: one declaration per local (reuse earlier, := on first use only); brace joints join without adding/dropping braces; data/err never shadowed with :=.
 SIGNATURE: c, request, data and err; return nil, err on error paths, data, err on success — where shown, else fall through.
 LEGACY MAP (intent, never spelling): FML pack → append shaped rows to data; tpreturn(TPSUCCESS) → return data, err; error legs → return nil + S-code; CLOSE/SETNULL/buffer bookkeeping/userlog → drop. Never emit tpreturn/tpalloc/Fadd32/Fget32/errlog/userlog/EXEC SQL/FBFR32/unsafe.
-FIELDS verbatim; sql.NullString via row.X.String. LITERALS Go-only: "Y", 0 for \0, ==. No logging. Check every error before use.`
+FIELDS verbatim; sql.NullString via row.X.String. LITERALS Go-only: "Y", 0 for \0, ==. No logging. Check every error before use. A variable error message uses errors.New(msg), never fmt.Errorf(variable).`
 
 // sliceScanner tracks brace/string/comment state across the flattened view's
 // lines so statement boundaries land only at true depth-0 statement ends —
@@ -716,6 +717,13 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 			combined = composed
 		}
 	}
+	if cx.axisVar != "" {
+		if fixed, ok := repairArmWrapper(combined, cx.axisVar); ok {
+			telemetry.Log(cx.ctx).Info("arm wrapper unwrapped", "unit", cx.unit.Name, "axis", cx.axisVar)
+			combined = fixed
+		}
+	}
+	combined = ensureTerminalReturn(combined)
 	opts.Ledger.Set(cx.unit.ID, ledger.StatusValidated, "")
 	return combined, nil
 }

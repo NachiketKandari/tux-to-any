@@ -13,6 +13,7 @@ import (
 	"tux-to-any/internal/batchflow"
 	"tux-to-any/internal/common"
 	"tux-to-any/internal/ir"
+	"tux-to-any/internal/sqltext"
 )
 
 // Wrapper carries the configurable db-router conventions (BP-7): the import
@@ -257,95 +258,9 @@ func emitSQL(q *ir.Query) string {
 	sql := q.SQL
 	switch q.Type {
 	case ir.QuerySelectSingle, ir.QuerySelectMulti:
-		sql = stripInto(sql)
+		sql = sqltext.StripInto(sql)
 	}
-	return collapseBinds(sql)
-}
-
-// stripInto removes the `INTO :a, :b …` span from a SELECT (the host-var
-// output list — rows come back as tuples in oracledb).
-func stripInto(sql string) string {
-	lower := strings.ToLower(sql)
-	for i := 0; i+4 <= len(lower); i++ {
-		if lower[i:i+4] != "into" || !wordBoundary(sql, i, 4) {
-			continue
-		}
-		j := i + 4
-		for j < len(sql) && (sql[j] == ' ' || sql[j] == '\t' || sql[j] == '\n' || sql[j] == '\r') {
-			j++
-		}
-		if j >= len(sql) || sql[j] != ':' {
-			continue // INSERT INTO t — not a host-var list
-		}
-		depth := 0
-		for k := j; k < len(sql); k++ {
-			switch sql[k] {
-			case '\'':
-				k = skipLit(sql, k)
-			case '(':
-				depth++
-			case ')':
-				depth--
-			case 'f', 'F':
-				if depth == 0 && k+4 < len(sql) && strings.EqualFold(sql[k:k+4], "from") && wordBoundary(sql, k, 4) {
-					return strings.TrimSpace(sql[:i] + sql[k:])
-				}
-			}
-		}
-		return strings.TrimSpace(sql[:i])
-	}
-	return sql
-}
-
-func wordBoundary(sql string, i, n int) bool {
-	before := i == 0 || !isIdentByte(sql[i-1])
-	after := i+n >= len(sql) || !isIdentByte(sql[i+n])
-	return before && after
-}
-
-func isIdentByte(b byte) bool {
-	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
-}
-
-func skipLit(sql string, i int) int {
-	for j := i + 1; j < len(sql); j++ {
-		if sql[j] == '\'' {
-			if j+1 < len(sql) && sql[j+1] == '\'' {
-				j++
-				continue
-			}
-			return j
-		}
-	}
-	return len(sql) - 1
-}
-
-// collapseBinds rewrites `: name` → `:name` (Pro*C tolerates the space;
-// oracledb named binds do not).
-func collapseBinds(sql string) string {
-	var b strings.Builder
-	for i := 0; i < len(sql); i++ {
-		c := sql[i]
-		if c == ':' && i+1 < len(sql) {
-			j := i + 1
-			for j < len(sql) && (sql[j] == ' ' || sql[j] == '\t') {
-				j++
-			}
-			if j > i+1 && j < len(sql) && isIdentByte(sql[j]) {
-				b.WriteByte(':')
-				i = j - 1
-				continue
-			}
-		}
-		if c == '\'' {
-			k := skipLit(sql, i)
-			b.WriteString(sql[i : k+1])
-			i = k
-			continue
-		}
-		b.WriteByte(c)
-	}
-	return b.String()
+	return sqltext.CollapseBinds(sql)
 }
 
 // bindsOf returns the bind names of the EXECUTABLE SQL (emitSQL: the INTO

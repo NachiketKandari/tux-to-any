@@ -1,0 +1,11 @@
+source: SVC_MIN_DEDUP.pc
+service: MinDedup
+module: mutual-fund-be/pkg/services/mindedup
+routeGroup: /mindedup
+endpoints:
+  - condition: 1
+    name: DedupAlpha
+    route: /mindedup/alpha
+  - condition: 2
+    name: DedupBeta
+    route: /mindedup/beta

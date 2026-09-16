@@ -345,13 +345,14 @@ mismatch, resets those units to `planned` so they regenerate, and warns
 (`mapping rename detected …`); files already on disk still carry the old
 generation, so for a clean tree clear the staged dir and the service ledger
 and re-run. The from-scratch recipe (default `./.tuxgo.yaml`, `-config` to
-override, `-no-llm` for the deterministic draft):
+override, `-no-llm` for the deterministic draft; `<entry>`/`<stem>` are the
+entry file and its stem):
 
 ```
-rm -f mappings/mainTux.mapping.yaml
-rm -rf conversion_logs/_staged/maintux conversion_logs/ledger/maintux.ledger.json
-go run ./cmd/tuxconv convertgo tuxExamples/mainTux.pc -no-llm   # drafts mappings/, defers conversion
-go run ./cmd/tuxconv convertgo tuxExamples/mainTux.pc -no-llm   # consumes the mapping, stages code + logs
+rm -f mappings/<entry>.mapping.yaml
+rm -rf conversion_logs/_staged/<stem> conversion_logs/ledger/<stem>.ledger.json
+go run ./cmd/tuxconv convertgo <dir>/<entry>.pc -no-llm   # drafts mappings/, defers conversion
+go run ./cmd/tuxconv convertgo <dir>/<entry>.pc -no-llm   # consumes the mapping, stages code + logs
 ```
 
 `analyze` and `extract` never call the LLM at all. Egress note: live calls

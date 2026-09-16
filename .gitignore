@@ -1,8 +1,10 @@
-# runtime outputs (per-run artifacts, never committed)
-conversion_logs/
-python_out/
-mappings/
-scenarios/
+# runtime outputs (repo-root, per-run artifacts, never committed — anchored:
+# the unanchored forms also swallowed the fixture mappings tracked tests
+# require, e.g. testdata/stripped/mappings)
+/conversion_logs/
+/python_out/
+/mappings/
+/scenarios/
 
 # build artifacts (anchored — the unanchored forms used to ignore the
 # whole cmd/tuxconv and cmd/xtux source trees)

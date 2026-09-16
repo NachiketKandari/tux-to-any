@@ -1,16 +1,20 @@
-package gen
+// Package sqltext carries the Pro*C SQL text transforms shared by the Go
+// and Python emitters: the SELECT host-variable INTO list is stripped (the
+// IR's RowShape carries the targets; the emitted query must be executable
+// SQL) and `: name` bind spellings collapse to `:name` (Pro*C tolerates the
+// space, oracledb named binds do not).
+package sqltext
 
 import "strings"
 
-// stripInto removes the `INTO :a, :b …` span from a SELECT's SQL text.
+// StripInto removes the `INTO :a, :b …` span from a SELECT's SQL text.
 // The host-var INTO list is a Pro*C construct, not SQL (BP-8, the same
-// tolerance the fidelity gate applies): the Go driver scans columns into
-// the row struct by name, and the IR's RowShape already carries the INTO
+// tolerance the fidelity gate applies): the driver scans columns into the
+// row struct by name, and the IR's RowShape already carries the INTO
 // targets, so the emitted query string must not contain the clause. The
 // leading-`:` guard keeps `INSERT INTO t` untouched; the FROM scan is
-// paren-aware and literal-aware. Port of the python planner's proven
-// stripInto (pyplan.stripInto).
-func stripInto(sql string) string {
+// paren-aware and literal-aware.
+func StripInto(sql string) string {
 	lower := strings.ToLower(sql)
 	for i := 0; i+4 <= len(lower); i++ {
 		if lower[i:i+4] != "into" || !wordBoundary(sql, i, 4) {
@@ -41,6 +45,34 @@ func stripInto(sql string) string {
 		return strings.TrimSpace(sql[:i])
 	}
 	return sql
+}
+
+// CollapseBinds rewrites `: name` → `:name` (Pro*C tolerates the space;
+// oracledb named binds do not). String literals are left untouched.
+func CollapseBinds(sql string) string {
+	var b strings.Builder
+	for i := 0; i < len(sql); i++ {
+		c := sql[i]
+		if c == ':' && i+1 < len(sql) {
+			j := i + 1
+			for j < len(sql) && (sql[j] == ' ' || sql[j] == '\t') {
+				j++
+			}
+			if j > i+1 && j < len(sql) && isIdentByte(sql[j]) {
+				b.WriteByte(':')
+				i = j - 1
+				continue
+			}
+		}
+		if c == '\'' {
+			k := skipLit(sql, i)
+			b.WriteString(sql[i : k+1])
+			i = k
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 func wordBoundary(sql string, i, n int) bool {

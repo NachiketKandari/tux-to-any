@@ -25,7 +25,6 @@ func AddImports(path string, importPaths ...string) error {
 	if err != nil {
 		return err
 	}
-	type imp struct{ name, p string }
 	existing := map[string]string{}
 	var decl *ast.GenDecl
 	for _, d := range f.ast.Decls {

@@ -69,6 +69,35 @@ func genNavFixture(t *testing.T) (*Service, *plan.Plan, []*ir.File) {
 	return s, p, fns
 }
 
+// TestModelFileRowNameCollision pins the models-file guard: a row name
+// pinned for two different shapes is a loud error (the file would declare
+// the type twice); identical shapes share one declaration.
+func TestModelFileRowNameCollision(t *testing.T) {
+	s, p, _ := genNavFixture(t)
+	pin := s.Mapping.DBMethods["cur_demo_featured"]
+	pin.Row = "NavHistoryDetail" // cur_demo_hist's shape differs
+	s.Mapping.DBMethods["cur_demo_featured"] = pin
+	if _, err := s.ModelFile(p); err == nil || !strings.Contains(err.Error(), "row struct name") {
+		t.Fatalf("ModelFile = %v, want row-name collision error", err)
+	}
+	pin.Row = "SipFreedemDetail"
+	s.Mapping.DBMethods["cur_demo_featured"] = pin
+
+	// Identical shapes share one struct declaration.
+	hist, list := s.Query("cur_demo_hist"), s.Query("cur_demo_list")
+	list.RowShape = append([]string(nil), hist.RowShape...)
+	listPin := s.Mapping.DBMethods["cur_demo_list"]
+	listPin.Row = "NavHistoryDetail"
+	s.Mapping.DBMethods["cur_demo_list"] = listPin
+	out, err := s.ModelFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(out, "type NavHistoryDetail struct"); got != 1 {
+		t.Errorf("identical shapes must share one declaration, got %d", got)
+	}
+}
+
 func TestGenModels(t *testing.T) {
 	s, p, _ := genNavFixture(t)
 	models, err := s.ModelFile(p)

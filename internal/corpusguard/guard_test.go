@@ -6,6 +6,8 @@
 package corpusguard
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +47,9 @@ func TestNoCorpusReferencesInTrackedFiles(t *testing.T) {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(root, path))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // deletion in progress: no working-tree content to guard
+		}
 		if err != nil {
 			t.Fatalf("read tracked file %s: %v", path, err)
 		}

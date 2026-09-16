@@ -80,24 +80,15 @@ type openaiClient struct {
 }
 
 // New builds the OpenAI-compatible client for one endpoint.
-func New(endpoint Endpoint, opts ...Option) Client {
+func New(endpoint Endpoint) Client {
 	c := &openaiClient{endpoint: endpoint}
 	if endpoint.Timeout > 0 {
 		c.http = &http.Client{Timeout: endpoint.Timeout}
 	} else {
 		c.http = &http.Client{}
 	}
-	for _, o := range opts {
-		o(c)
-	}
 	return c
 }
-
-// Option customizes the client (transport overrides for tests).
-type Option func(*openaiClient)
-
-// WithHTTPClient replaces the underlying HTTP client.
-func WithHTTPClient(h *http.Client) Option { return func(c *openaiClient) { c.http = h } }
 
 type chatCompletionPayload struct {
 	Model         string    `json:"model"`

@@ -1,0 +1,11 @@
+source: SVC_MIN_KITCHEN.pc
+service: MinKitchen
+module: mutual-fund-be/pkg/services/minkitchen
+routeGroup: /minkitchen
+endpoints:
+  - condition: 1
+    name: KitchenAlpha
+    route: /minkitchen/alpha
+  - condition: 2
+    name: KitchenBeta
+    route: /minkitchen/beta

@@ -1,0 +1,14 @@
+source: SVC_MIN_DML.pc
+service: MinDml
+module: mutual-fund-be/pkg/services/mindml
+routeGroup: /mindml
+endpoints:
+  - condition: 1
+    name: DmlUpdate
+    route: /mindml/update
+  - condition: 2
+    name: DmlDelete
+    route: /mindml/delete
+  - condition: 3
+    name: DmlMerge
+    route: /mindml/merge

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"math"
 	"os"
@@ -210,7 +209,7 @@ Available Commands:
 
 // reorderArgs separates flag tokens (with their values) from positional
 // arguments so flags may appear before or after the target path. Value flags
-// are derived from the subcommand FlagSets.
+// come from the declarative table in flags.go.
 func reorderArgs(args []string) (flagArgs, positional []string) {
 	valueFlags := deriveValueFlags()
 	for i := 0; i < len(args); i++ {
@@ -233,73 +232,15 @@ func reorderArgs(args []string) (flagArgs, positional []string) {
 	return flagArgs, positional
 }
 
-// deriveValueFlags registers every subcommand's flags into throwaway
-// FlagSets and reports the names whose values are not boolean.
+// deriveValueFlags reports the flag names that consume a following value,
+// from the declarative table in flags.go (the one home of that knowledge —
+// keep it in sync when adding a flag).
 func deriveValueFlags() map[string]bool {
 	valueFlags := map[string]bool{}
-	register := func(fs *flag.FlagSet) {
-		fs.VisitAll(func(f *flag.Flag) {
-			if f.DefValue != "false" && f.DefValue != "true" {
-				valueFlags[f.Name] = true
-			}
-		})
-	}
-	registerFlags := map[string]func(*flag.FlagSet){
-		"extract": func(fs *flag.FlagSet) {
-			fs.String("out", "", "")
-			fs.String("config", "", "")
-			fs.Bool("fragment", false, "")
-		},
-		"plan": func(fs *flag.FlagSet) {
-			fs.String("mapping", "", "")
-			fs.String("config", "", "")
-			fs.String("ledger", "", "")
-			fs.Bool("fragment", false, "")
-		},
-		"convertgo": func(fs *flag.FlagSet) {
-			fs.String("mapping", "", "")
-			fs.String("config", "", "")
-			fs.String("base", "", "")
-			fs.Bool("no-llm", false, "")
-			fs.Bool("fragment", false, "")
-		},
-		"discover": func(fs *flag.FlagSet) {
-			fs.String("out", "", "")
-			fs.Bool("stdout", false, "")
-			fs.Bool("no-llm", false, "")
-			fs.String("config", "", "")
-			fs.String("target", "", "")
-		},
-		"convertbatchpy": func(fs *flag.FlagSet) {
-			fs.String("out", "", "")
-			fs.String("config", "", "")
-			fs.Bool("no-llm", false, "")
-			fs.String("shape", "", "")
-			fs.String("dml-loop", "", "")
-		},
-		"convertcs": func(fs *flag.FlagSet) {
-			fs.String("out", "", "")
-			fs.String("mapping", "", "")
-			fs.Bool("no-llm", false, "")
-			fs.String("config", "", "")
-		},
-		"analyze": func(fs *flag.FlagSet) {
-			fs.String("csv", "", "")
-			fs.String("weights", "", "")
-			fs.String("pattern", "", "")
-		},
-		"gentest": func(fs *flag.FlagSet) {
-			fs.String("layers", "", "")
-			fs.Bool("check-only", false, "")
-			fs.String("base", "", "")
-			fs.Bool("no-llm", false, "")
-			fs.String("config", "", "")
-		},
-	}
-	for _, fn := range registerFlags {
-		fs := flag.NewFlagSet("derive", flag.ContinueOnError)
-		fn(fs)
-		register(fs)
+	for _, names := range commandFlags {
+		for _, name := range names {
+			valueFlags[name] = true
+		}
 	}
 	return valueFlags
 }

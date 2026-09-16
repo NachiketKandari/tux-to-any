@@ -44,7 +44,8 @@ func isStopWord(t sqlToken) bool {
 // tokenize splits SQL into normalized tokens: keywords and unquoted
 // identifiers case-folded, binds rewritten to first-appearance ordinals (so
 // positional and named styles become the same canonical sequence), string
-// literals and quoted identifiers verbatim, comments dropped.
+// literals and quoted identifiers verbatim, comments dropped. A bind may
+// carry Pro*C's spaced spelling (`: name`) — the name is what compares.
 func tokenize(sql string) []sqlToken {
 	var toks []sqlToken
 	bindOrd := map[string]int{}
@@ -90,19 +91,30 @@ func tokenize(sql string) []sqlToken {
 				i += j + 2
 			}
 		case c == ':':
+			// Pro*C tolerates whitespace between the colon and the host-var
+			// name (`: c_from_date`); the canonical spelling is contiguous.
 			j := i + 1
+			for j < len(sql) && (sql[j] == ' ' || sql[j] == '\t') {
+				j++
+			}
+			nameStart := j
 			for j < len(sql) && isWordChar(sql[j]) {
 				j++
 			}
-			raw := sql[i:j]
-			name := raw[1:]
+			if nameStart == j {
+				// A colon with no name (`:=`, `::`, a stray `:`) is punctuation.
+				toks = append(toks, sqlToken{Kind: tokPunct, Text: ":"})
+				i++
+				continue
+			}
+			name := sql[nameStart:j]
 			ord, seen := bindOrd[name]
 			if !seen {
 				ord = next
 				next++
 				bindOrd[name] = ord
 			}
-			toks = append(toks, sqlToken{Kind: tokBind, Text: ":" + strconv.Itoa(ord), Raw: raw})
+			toks = append(toks, sqlToken{Kind: tokBind, Text: ":" + strconv.Itoa(ord), Raw: ":" + name})
 			i = j
 		default:
 			switch {

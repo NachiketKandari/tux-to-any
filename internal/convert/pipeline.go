@@ -434,6 +434,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	}
 	view := budget.View{Source: branchSource(opts.Source, c.StartLine, c.EndLine)}
 	scen := (*scenPrompt)(nil)
+	axisVar := ""
 	draft := ""
 	if sr != nil {
 		if sc := svc.ScenarioOf(u.Name); sc != nil {
@@ -441,6 +442,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 			if err != nil {
 				return "", "", err
 			}
+			axisVar = sc.Var
 			scen = scenPromptOf(sc, sr.diff)
 			// The flattened slice IS the deterministic base for a scenario
 			// endpoint — a span-limited Go draft would render dropped
@@ -516,7 +518,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		// combined body through the full gates.
 		body, cerr := controllerBodyChunked(chunkCtx{
 			ctx: ctx, opts: opts, res: res, svc: svc, unit: u, db: dbBodies,
-			cond: c, view: view, scen: scen, prompt: prompt, calls: calls,
+			cond: c, view: view, scen: scen, axisVar: axisVar, prompt: prompt, calls: calls,
 		})
 		if cerr != nil {
 			return "", prompt, cerr
@@ -544,7 +546,9 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		Prompt: func(attemptNotes []string) (string, []llm.Message) {
 			return prompt, messages(attemptNotes)
 		},
-		Extract: cleanBody,
+		Extract: func(content string) string {
+			return repairControllerBody(ctx, u.Name, axisVar, content)
+		},
 		Gate: func(body string) []string {
 			verr := validateBody(opts, body)
 			verr = append(verr, requiredCallErrs(view.Source, body, receiverOf(opts))...)
@@ -574,7 +578,7 @@ INPUTS: request.<Field> exactly as defined — the only input source.
 STORE: every s.store.* call in the view appears exactly once, exact params in order, results captured to locals. No other s.* calls. Never SQL.
 FIELDS: verbatim struct/row names (CToDateString is not CToDate + String); sql.NullString via its .String field.
 LITERALS (Go only): "Y" never 'Y'; 0 never '\0'; == never =.
-ERRORS: after every err-returning call: if err != nil { return nil, err }. Every path ends return data, err / return nil, err.
+ERRORS: after every err-returning call: if err != nil { return nil, err }. Every path ends return data, err / return nil, err. A variable error message uses errors.New(msg) — fmt.Errorf takes a constant format string, never a variable.
 LEGACY MAP (intent, never spelling): FML pack (Fadd32) → append shaped rows to data; tpreturn(TPSUCCESS) → return data, err; error legs → return nil + S-code; CLOSE/SETNULL/SETLEN/MEMSET/buffer-math/DEBUG userlog → drop; session prologue (Fget32/chk_sssn/tpalloc/INCLUDEs) → drop. Never emit tpreturn/tpalloc/Fadd32/Fget32/errlog/userlog/EXEC SQL/FBFR32/unsafe.
 FLOW: same loops/branches/order; dead-looking branches still implemented.`
 
@@ -1418,7 +1422,9 @@ func branchSource(src string, from, to int) string {
 // parse gate compiles — one home for the wrap both validateBody and
 // validateFragment reuse.
 func bodyParseWrap(body string) string {
-	return "package controller\n\nimport (\n\t\"context\"\n\tmodels \"mutual-fund-be/pkg/services/nav/models\"\n)\n\ntype t struct{}\n\nfunc (t) Check(ctx context.Context) (err error) {\n" + body + "\n}\n"
+	// The signature mirrors the rendered method (request/data/err declared)
+	// so the undeclared-identifier gate sees only genuinely unknown names.
+	return "package controller\n\nimport (\n\t\"context\"\n\tmodels \"mutual-fund-be/pkg/services/nav/models\"\n)\n\ntype t struct{}\n\nfunc (t) Check(c context.Context, request *models.Request) (data []*models.Response, err error) {\n" + body + "\n}\n"
 }
 
 // validateBody checks the body wrapped in a synthetic method. gofmt
@@ -1432,7 +1438,13 @@ func validateBody(opts Options, body string) []string {
 	if _, ferr := goast.Emit("convert: controller body", bodyParseWrap(body)); ferr != nil {
 		return validate.TrimGoErrors(ferr.Error())
 	}
-	return nil
+	// Parse-clean is not compile-clean: reject the compiler-level shapes the
+	// local syntax-only runs cannot see (Tier B absent), so the retry loop
+	// pays them out in notes instead of staging broken code.
+	errs := nonConstFormatErrs(body)
+	errs = append(errs, runeLiteralErrs(body)...)
+	errs = append(errs, undeclaredIdentErrs(body, stubNames(opts))...)
+	return append(errs, unusedLocalErrs(body)...)
 }
 
 // nullStringCallRe matches a two-level .String() call (row.X.String(),
@@ -1494,7 +1506,11 @@ func appendControllerMethod(ctx context.Context, opts Options, res *Result, svc 
 		}
 		merged = string(existing) + "\n" + strings.TrimRight(method, "\n") + "\n"
 	} else {
-		header := "package controller\n\nimport (\n\t\"context\"\n\t\"errors\"\n\t\"fmt\"\n\n\t\"" + svc.Module + "/pkg/logger\"\n\t\"" + svc.ModelsPkg + "\"\n)\n"
+		// The base header carries only what every method needs; errors/fmt
+		// (and the tx/sqlx pair below) are added content-gated so a body
+		// that never uses them cannot stage an unused import — the local
+		// syntax-only runs would keep the gap latent until Tier B.
+		header := "package controller\n\nimport (\n\t\"context\"\n\n\t\"" + svc.Module + "/pkg/logger\"\n\t\"" + svc.ModelsPkg + "\"\n)\n"
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
@@ -1513,6 +1529,12 @@ func appendControllerMethod(ctx context.Context, opts Options, res *Result, svc 
 	// are syntax-only, so the gap stayed latent). Content-gated — files
 	// without tx shapes keep their exact header.
 	var wantImports []string
+	if strings.Contains(merged, "errors.") {
+		wantImports = append(wantImports, "errors")
+	}
+	if strings.Contains(merged, "fmt.") {
+		wantImports = append(wantImports, "fmt")
+	}
 	if strings.Contains(merged, "ExecTransaction(") {
 		wantImports = append(wantImports, svc.Module+"/pkg/utils")
 	}

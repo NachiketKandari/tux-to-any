@@ -30,22 +30,5 @@ func TestBindOrder(t *testing.T) {
 	}
 }
 
-func TestStripInto(t *testing.T) {
-	sql := "SELECT A, B INTO :h_a, :h_b FROM DEMO_T WHERE A = :bind_a"
-	got := stripInto(sql)
-	if got != "SELECT A, B FROM DEMO_T WHERE A = :bind_a" {
-		t.Errorf("stripInto = %q", got)
-	}
-	insert := "INSERT INTO DEMO_T (A) (SELECT A FROM OTHER_T)"
-	if got := stripInto(insert); got != insert {
-		t.Errorf("stripInto rewrote an INSERT: %q", got)
-	}
-}
-
-func TestCollapseBinds(t *testing.T) {
-	got := collapseBinds("UPDATE T SET A = : x_a WHERE B =:x_b AND C = 'x: y'")
-	want := "UPDATE T SET A = :x_a WHERE B =:x_b AND C = 'x: y'"
-	if got != want {
-		t.Errorf("collapseBinds = %q, want %q", got, want)
-	}
-}
+// stripInto/collapseBinds moved to internal/sqltext (shared with the Go
+// emitter); their table tests live there.

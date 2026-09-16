@@ -157,6 +157,7 @@ func runAINames(ctx context.Context, args []string) error {
 		suggestions[key] = sug
 		log.Info("ai naming proposal", "ref", key, "name", sug.Name, "route", sug.Route, "db_pins", len(sug.Methods))
 	}
+	dedupeRowNames(suggestions, queriesByID, log)
 
 	if len(suggestions) == 0 {
 		fmt.Println("ainames: nothing to name — every mapped entry already carries an ai-suggested name (-all to re-name)")

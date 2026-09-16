@@ -621,7 +621,7 @@ func TestWrapTxBodyTail(t *testing.T) {
 	calls := map[string]budget.DBCall{
 		"q9": {Receiver: "s.store", Name: "InsertDev", CtxName: "c", Tx: "tx"},
 	}
-	body := "if err := s.store.InsertDev(c, a); err != nil {\nreturn nil, err\n}\n" +
+	body := "a := 1\nif err := s.store.InsertDev(c, a); err != nil {\nreturn nil, err\n}\n" +
 		"data = append(data, &models.R{})\n"
 	fixed, ok := wrapTxBody(body, calls, "s.store.")
 	if !ok {

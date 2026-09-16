@@ -16,6 +16,7 @@ import (
 	"tux-to-any/internal/ir"
 	"tux-to-any/internal/plan"
 	"tux-to-any/internal/profile"
+	"tux-to-any/internal/sqltext"
 	"tux-to-any/internal/templates"
 )
 
@@ -314,38 +315,72 @@ func (s *Service) ModelFile(p *plan.Plan) (string, error) {
 			Fields: contractFields(c.FmlOps, ir.FmlAdd),
 		})
 	}
-	for _, u := range p.Units {
-		if u.Kind != plan.KindDBMethod || len(u.QueryIDs) == 0 {
-			continue
-		}
-		q := s.Query(u.QueryIDs[0])
-		if q == nil || q.Type != ir.QuerySelectMulti {
-			continue
-		}
+	// One struct per row name: identical shapes dedup; a name pinned for two
+	// different shapes is a loud mapping error — emitting both declares the
+	// type twice, which only surfaces where a target module compiles
+	// (syntax-only runs would stage broken code silently).
+	rowSig := map[string]string{}
+	rowOwner := map[string]string{}
+	addRow := func(u plan.Unit, q *ir.Query, hard bool) error {
 		fields, err := s.rowFields(q)
 		if err != nil {
-			return "", err
+			if hard {
+				// Host vars declared in Pro*C table headers may leave the
+				// row shape unnamed; the pipeline flags it instead of guessing.
+				return fmt.Errorf("gen: %w", err)
+			}
+			return nil // the db-method renderer owns the loud failure
 		}
-		data.Structs = append(data.Structs, templates.StructSpec{Name: s.RowName(u.QueryIDs[0], u.Name), Fields: fields})
+		name := s.RowName(u.QueryIDs[0], u.Name)
+		sig := rowShapeSig(fields)
+		if prev, ok := rowSig[name]; ok {
+			if prev != sig {
+				return fmt.Errorf("gen: row struct name %q is pinned by both %s and %s with different shapes — rename one row: pin in the mapping",
+					name, rowOwner[name], u.QueryIDs[0])
+			}
+			return nil
+		}
+		rowSig[name] = sig
+		rowOwner[name] = u.QueryIDs[0]
+		data.Structs = append(data.Structs, templates.StructSpec{Name: name, Fields: fields})
+		return nil
 	}
-	// Single-row SELECT units produce a row struct too (non-COUNT singles).
 	for _, u := range p.Units {
 		if u.Kind != plan.KindDBMethod || len(u.QueryIDs) == 0 {
 			continue
 		}
 		q := s.Query(u.QueryIDs[0])
-		if q == nil || q.Type != ir.QuerySelectSingle || isCountQuery(q) {
+		if q == nil {
 			continue
 		}
-		fields, err := s.rowFields(q)
-		if err != nil {
-			// Host vars declared in Pro*C table headers may leave the row
-			// shape unnamed; the pipeline flags it instead of guessing.
-			return "", fmt.Errorf("gen: %w", err)
+		switch {
+		case q.Type == ir.QuerySelectMulti:
+			if err := addRow(u, q, false); err != nil {
+				return "", err
+			}
+		case q.Type == ir.QuerySelectSingle && !isCountQuery(q):
+			if err := addRow(u, q, true); err != nil {
+				return "", err
+			}
 		}
-		data.Structs = append(data.Structs, templates.StructSpec{Name: s.RowName(u.QueryIDs[0], u.Name), Fields: fields})
 	}
 	return render(templates.ModelFile, data)
+}
+
+// rowShapeSig fingerprints a row struct's fields (name/type/db tag) so
+// identical shapes can share one declaration while a conflicting re-use of
+// the same name is caught deterministically.
+func rowShapeSig(fields []templates.FieldSpec) string {
+	var sb strings.Builder
+	for _, f := range fields {
+		sb.WriteString(f.Name)
+		sb.WriteByte(':')
+		sb.WriteString(f.Type)
+		sb.WriteByte(':')
+		sb.WriteString(f.DBTag)
+		sb.WriteByte(';')
+	}
+	return sb.String()
 }
 
 // FMLRequestMap renders the endpoint's FML-field → request-Go-field map
@@ -485,8 +520,9 @@ func (s *Service) DBMethod(u plan.Unit) (body, signature string, needsSQL bool, 
 	sql := q.SQL
 	switch q.Type {
 	case ir.QuerySelectSingle, ir.QuerySelectMulti:
-		sql = stripInto(sql)
+		sql = sqltext.StripInto(sql)
 	}
+	sql = sqltext.CollapseBinds(sql)
 	d := templates.DBMethodData{
 		Receiver:  "g",
 		StoreType: "store",

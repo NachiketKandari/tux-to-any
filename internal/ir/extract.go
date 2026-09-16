@@ -273,16 +273,6 @@ func unbalancedOf(facts *tsscan.SourceFacts) []Unbalanced {
 	return out
 }
 
-// entryFunction is the entry's FunctionDef, if any.
-func entryFunction(facts *tsscan.SourceFacts, entry string) *tsscan.FunctionDef {
-	for i := range facts.Functions {
-		if facts.Functions[i].Name == entry {
-			return &facts.Functions[i]
-		}
-	}
-	return nil
-}
-
 // buildDefines builds the define map from recorded directives.
 func buildDefines(facts *tsscan.SourceFacts) []Define {
 	var f File

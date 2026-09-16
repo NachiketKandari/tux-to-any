@@ -1,0 +1,8 @@
+source: SVC_MIN_CURSOR.pc
+service: MinCursor
+module: mutual-fund-be/pkg/services/mincursor
+routeGroup: /mincursor
+endpoints:
+  - condition: 1
+    name: CursorList
+    route: /mincursor/list

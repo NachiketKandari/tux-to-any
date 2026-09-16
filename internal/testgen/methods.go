@@ -31,22 +31,6 @@ func dbCols(sc *serviceCtx, f *dbFact) []string {
 	return cols
 }
 
-// dbColFields pairs each column with its field name + Go type (expected
-// struct literals).
-func dbColFields(sc *serviceCtx, f *dbFact) []fieldInfo {
-	if f.RowType == "" {
-		return nil
-	}
-	base := structBase(f.RowType)
-	var out []fieldInfo
-	for _, fl := range sc.models.Structs[base] {
-		if fl.DB != "" {
-			out = append(out, fl)
-		}
-	}
-	return out
-}
-
 // structBase strips slice/pointer wrappers and the models qualifier,
 // leaving the bare struct name for the models inventory lookup.
 func structBase(t string) string {
