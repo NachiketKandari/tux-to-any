@@ -48,8 +48,10 @@ const outputExpansionPct = 130
 // the default 4 (2026-09-14 dense-C run — the estimate read 3360 of 4000,
 // the call truncated at exactly 4000). Splitting a branch that would have
 // fit costs one extra call; a truncated body costs the call plus every
-// retry — the margin errs the same way.
-const outputTriggerPct = 80
+// retry — the margin errs the same way. risk.pc evidence (2026-09-17: a
+// single-shot body estimated under the 80% line still truncated at the
+// 4096 cap) tightened the margin to 70%.
+const outputTriggerPct = 70
 
 // outputChunkReason names the output-ceiling split trigger, empty when the
 // estimate fits with margin.

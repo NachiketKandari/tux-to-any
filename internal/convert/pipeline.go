@@ -518,6 +518,13 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	// template owns never reaches the model either. Stops at first live
 	// line; store-call lines never match.
 	view.Source, _ = stripPreludeDecls(view.Source)
+	// Legacy #define inlining: the view's macro names (`RISK_PROFILE_LIST`)
+	// are undefined Go identifiers when copied; substitute the effective
+	// literal values so the model keeps only names the Go body can declare.
+	if inlined, n := inlineLegacyConstants(view.Source, effectiveDefines(opts.Main, c, opts.Main.Entry)); n > 0 {
+		view.Source = inlined
+		telemetry.Log(ctx).Info("legacy constants inlined into view", "unit", u.Name, "substitutions", n)
+	}
 	// §4.7 query-replacement accounting (engine-wiring audit Tier-2: the
 	// budget engine computed this on every seam call and nothing recorded
 	// it). One line per unit in the run log.
@@ -1085,7 +1092,24 @@ func buildPrompt(view budget.View, dbContract, contract, endpoint, draft string,
 // unresolvable-in-Go compound values ride here verbatim so the LLM inlines
 // them without guessing.
 func legacyConstants(f *ir.File, c *ir.Condition, entry string) []string {
-	if f == nil {
+	effective := effectiveDefines(f, c, entry)
+	if len(effective) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(effective))
+	for name, value := range effective {
+		out = append(out, name+" = "+value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// effectiveDefines resolves the #define names effective at the endpoint's
+// span end (file-scope plus entry-function defines, #undef tombstones
+// honored, macros excluded) — the single source both the prompt's constants
+// section and the view's constant inlining read.
+func effectiveDefines(f *ir.File, c *ir.Condition, entry string) map[string]string {
+	if f == nil || c == nil {
 		return nil
 	}
 	effective := map[string]string{}
@@ -1102,15 +1126,48 @@ func legacyConstants(f *ir.File, c *ir.Condition, entry string) []string {
 		}
 		effective[d.Name] = d.Value
 	}
-	if len(effective) == 0 {
-		return nil
+	return effective
+}
+
+// inlineLegacyConstants substitutes the endpoint's effective #define names in
+// a view with their literal values. Models otherwise copy the macro names
+// (`c_rqst_typ == RISK_PROFILE_LIST`) and the undeclared-identifier gate
+// rejects the body; the prompt's constants section still lists each name for
+// provenance. Returns the rewritten view and the substitution count.
+func inlineLegacyConstants(src string, defines map[string]string) (string, int) {
+	if len(defines) == 0 {
+		return src, 0
 	}
-	out := make([]string, 0, len(effective))
-	for name, value := range effective {
-		out = append(out, name+" = "+value)
+	names := make([]string, 0, len(defines))
+	res := make(map[string]*regexp.Regexp, len(defines))
+	for name, value := range defines {
+		if name == "" || value == "" {
+			continue
+		}
+		names = append(names, name)
+		res[name] = regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
 	}
-	sort.Strings(out)
-	return out
+	if len(names) == 0 {
+		return src, 0
+	}
+	sort.Strings(names)
+	count := 0
+	lines := strings.Split(src, "\n")
+	for i, line := range lines {
+		for _, name := range names {
+			if !res[name].MatchString(line) {
+				continue
+			}
+			n := len(res[name].FindAllStringIndex(line, -1))
+			line = res[name].ReplaceAllLiteralString(line, defines[name])
+			count += n
+		}
+		lines[i] = line
+	}
+	if count == 0 {
+		return src, 0
+	}
+	return strings.Join(lines, "\n"), count
 }
 
 // legacyErrorCodes lists the distinct legacy error-message codes the

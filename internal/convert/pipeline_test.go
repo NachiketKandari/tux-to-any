@@ -787,6 +787,38 @@ func TestStripPreludeDecls(t *testing.T) {
 	}
 }
 
+// TestInlineLegacyConstants pins the #define view inlining: effective names
+// become their literal values, identifiers that merely contain a name and
+// names without defines stay untouched.
+func TestInlineLegacyConstants(t *testing.T) {
+	view := "if(c_user_id[0] == BPID && (c_rqst_typ == RISK_PROFILE_LIST || c_rqst_typ == VIEW_QUESTIONS)) {\n" +
+		"  n := REC_LENGTH * 2;\n" +
+		"  x := RISK_PROFILE_LIST_EXTRA;\n" +
+		"}\n"
+	defines := map[string]string{
+		"RISK_PROFILE_LIST": "'A'",
+		"VIEW_QUESTIONS":    "'B'",
+		"REC_LENGTH":        "300",
+	}
+	got, n := inlineLegacyConstants(view, defines)
+	if n != 3 {
+		t.Fatalf("substitutions = %d, want 3:\n%s", n, got)
+	}
+	for _, want := range []string{"c_rqst_typ == 'A'", "c_rqst_typ == 'B'", "n := 300 * 2;"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	for _, kept := range []string{"BPID", "RISK_PROFILE_LIST_EXTRA"} {
+		if !strings.Contains(got, kept) {
+			t.Errorf("untouched identifier %q lost:\n%s", kept, got)
+		}
+	}
+	if same, n := inlineLegacyConstants(view, nil); n != 0 || same != view {
+		t.Errorf("nil defines altered the view (n=%d)", n)
+	}
+}
+
 // TestControllerTuxedoGate pins the transliteration ban (audit 2026-09-16):
 // the staged GetNavHistory-style body (s.tpalloc/s.errlog/s.Fadd32/
 // s.tpreturn/EXEC SQL CLOSE/break) must fail, while a reference-style body
