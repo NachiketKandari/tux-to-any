@@ -34,6 +34,13 @@ var (
 	seamAssignRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*(?:\s*\[[^\]]*\])?\s*=\s*$`)
 	// seamCastRe strips a C cast prefix on a call argument.
 	seamCastRe = regexp.MustCompile(`(?i)\(\s*[a-zA-Z_][a-zA-Z0-9_ ]*\*+\s*\)`)
+	// errlogLineRe anchors an errlog statement (optional provenance
+	// markers); errlogErrCodeRe pulls its S-code out.
+	errlogLineRe    = regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*errlog\s*\(`)
+	errlogErrCodeRe = regexp.MustCompile(`"(S\d{5})"`)
+	// errBufferNames are the shared error-message buffers the error legs
+	// consume; an adjacent errlog S-code repaints only these.
+	errBufferNames = map[string]bool{"c_errmsg": true, "c_err_msg": true, "errmsg": true, "err_msg": true}
 )
 
 // rewriteLegacySeams maps the deterministic FML/session seams in a
@@ -44,21 +51,37 @@ var (
 //     normalized target — the model's own accepted bodies spell it exactly
 //     this way). Unmapped fields stay legacy; the model still owns them.
 //   - `Fadd32(inbuf, FML_ERR_MSG, expr, 0);` error-append statements →
-//     `err = fmt.Errorf("%s", expr);` — the error leg's S-code (carried by
-//     expr's writer) stays in the error text per the prompt contract.
-//     Response-shaping adds (non-ERR fields, Obuffer fan-outs) and
-//     condition-context adds are left for the AI to shape.
+//     `err = errors.New("S31005");` when the adjacent `errlog(...)` line
+//     supplies an S-code and expr is the shared error buffer, else
+//     `err = fmt.Errorf("%s", expr);`. Response-shaping adds (non-ERR
+//     fields, Obuffer fan-outs) and condition-context adds are left for the
+//     AI to shape.
 //   - `x = chk_sssn(...)` → `x = 0;` — session prologue the prompt already
 //     orders dropped; the timeout guard becomes dead, which is correct
 //     (Go middleware owns sessions).
+//
+// The errlog S-code pairing is why this pass runs before the scaffold
+// strip: the scaffold pass deletes the errlog line, so the code must be
+// captured while both lines are still in the view.
 //
 // Returns the rewritten source, the counts, and whether anything changed.
 func rewriteLegacySeams(src string, reqMap map[string]string) (string, seamCounts, bool) {
 	var out []string
 	var c seamCounts
 	changed := false
+	pendingCode := ""
 	for _, line := range strings.Split(src, "\n") {
-		rewritten, kind := rewriteSeamLine(line, reqMap)
+		if errlogLineRe.MatchString(line) {
+			if m := errlogErrCodeRe.FindStringSubmatch(line); m != nil {
+				pendingCode = m[1]
+			}
+			out = append(out, line)
+			continue
+		}
+		rewritten, kind := rewriteSeamLine(line, reqMap, pendingCode)
+		// The S-code window is the adjacent line only: the corpus pairs
+		// errlog directly with its consuming Fadd32 error leg.
+		pendingCode = ""
 		switch kind {
 		case seamGet:
 			c.Gets++
@@ -85,8 +108,10 @@ const (
 )
 
 // rewriteSeamLine applies the three seam rewrites to one line, returning
-// the (possibly original) line and which rewrite fired.
-func rewriteSeamLine(line string, reqMap map[string]string) (string, seamKind) {
+// the (possibly original) line and which rewrite fired. pendingCode is the
+// S-code captured from the preceding errlog line ("" when none) — it turns
+// a variable error leg into errors.New(<code>) instead of fmt.Errorf.
+func rewriteSeamLine(line string, reqMap map[string]string, pendingCode string) (string, seamKind) {
 	// chk_sssn first: the unpack block's `l_sssn_id_chk = chk_sssn(...)`
 	// precedes any Fget line ordering — order within a line never collides
 	// (one call per line in the flattened views).
@@ -130,6 +155,9 @@ func rewriteSeamLine(line string, reqMap map[string]string) (string, seamKind) {
 		expr := normalizeSeamTarget(args[2])
 		if expr == "" {
 			return line, seamNone
+		}
+		if pendingCode != "" && isErrBuffer(expr) {
+			return head + "err = errors.New(\"" + pendingCode + "\");" + trailingSuffix(line, close), seamErrAdd
 		}
 		return head + "err = fmt.Errorf(\"%s\", " + expr + ");" + trailingSuffix(line, close), seamErrAdd
 	}
@@ -183,6 +211,10 @@ func trailingSuffix(line string, close int) string {
 var isPlainIdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func isPlainIdent(s string) bool { return isPlainIdentRe.MatchString(s) }
+
+// isErrBuffer reports whether a normalized seam target names a shared
+// error-message buffer — the only exprs an errlog S-code repaints.
+func isErrBuffer(expr string) bool { return errBufferNames[expr] }
 
 // normalizeSeamTarget reduces a call argument to the bare host-var name the
 // Go assignment writes: `(char *)&c_user_id` → c_user_id,

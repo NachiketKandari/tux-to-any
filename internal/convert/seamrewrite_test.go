@@ -62,7 +62,7 @@ func TestRewriteSeamLine(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, kind := rewriteSeamLine(tc.in, reqMap)
+			got, kind := rewriteSeamLine(tc.in, reqMap, "")
 			if kind != tc.kind {
 				t.Fatalf("kind = %v, want %v", kind, tc.kind)
 			}
@@ -84,7 +84,7 @@ func TestRewriteSeamLine(t *testing.T) {
 	}
 	for _, tc := range kept {
 		t.Run(tc.name, func(t *testing.T) {
-			got, kind := rewriteSeamLine(tc.in, reqMap)
+			got, kind := rewriteSeamLine(tc.in, reqMap, "")
 			if kind != seamNone {
 				t.Errorf("kind = %v, want seamNone:\n got %q", kind, got)
 			}
@@ -99,7 +99,7 @@ func TestRewriteSeamLine(t *testing.T) {
 // assignment keeps its LHS, the call becomes 0, trailing semicolon stays.
 func TestRewriteSeamLineChkSssn(t *testing.T) {
 	in := "    l_sssn_id_chk = chk_sssn(c_ServiceName,c_user_id,l_sssn_id ,c_errmsg);"
-	got, kind := rewriteSeamLine(in, map[string]string{})
+	got, kind := rewriteSeamLine(in, map[string]string{}, "")
 	if kind != seamSsn {
 		t.Fatalf("kind = %v, want seamSsn", kind)
 	}
@@ -108,8 +108,71 @@ func TestRewriteSeamLineChkSssn(t *testing.T) {
 	}
 	// A comparison context never rewrites.
 	cmp := "if (x == chk_sssn(a, b)) {"
-	if got, kind := rewriteSeamLine(cmp, nil); kind != seamNone || got != cmp {
+	if got, kind := rewriteSeamLine(cmp, nil, ""); kind != seamNone || got != cmp {
 		t.Errorf("comparison rewritten: %q", got)
+	}
+}
+
+// TestRewriteLegacySeamsErrCode pins the errlog→error-leg S-code pairing:
+// the scaffold pass later drops the errlog line, so the seam pass must
+// carry its S-code into the adjacent variable error leg as errors.New. A
+// leg with no preceding errlog, a literal expr, a non-buffer expr, and a
+// non-adjacent errlog all keep today's fmt.Errorf shape.
+func TestRewriteLegacySeamsErrCode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			"adjacent errlog supplies the S-code",
+			"errlog(c_ServiceName,\"S31005\",SQLMSG,(char *)DEF_USR,DEF_SSSN,c_errmsg);\n" +
+				"Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_errmsg, 0);",
+			"err = errors.New(\"S31005\");",
+		},
+		{
+			"c_err_msg buffer with provenance marker",
+			"/*L220*/ errlog(c_ServiceName, \"S31030\", TPMSG);\n" +
+				"    Fadd32( ptr_fml_Ibuffer,FML_ERR_MSG, c_err_msg, 0 );",
+			"err = errors.New(\"S31030\");",
+		},
+		{
+			"no errlog keeps fmt.Errorf",
+			"Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_errmsg, 0);",
+			"err = fmt.Errorf(\"%s\", c_errmsg);",
+		},
+		{
+			"non-buffer expr keeps fmt.Errorf",
+			"errlog(c_ServiceName, \"S31005\", SQLMSG);\n" +
+				"Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, sql_buf.arr, 0);",
+			"err = fmt.Errorf(\"%s\", sql_buf);",
+		},
+		{
+			"literal expr keeps fmt.Errorf",
+			"errlog(c_ServiceName, \"S31005\", SQLMSG);\n" +
+				"Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, \"boom\", 0);",
+			"err = fmt.Errorf(\"%s\", \"boom\");",
+		},
+		{
+			"window does not span intervening lines",
+			"errlog(c_ServiceName, \"S31005\", SQLMSG);\n" +
+				"userlog(c_errmsg);\n" +
+				"Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_errmsg, 0);",
+			"err = fmt.Errorf(\"%s\", c_errmsg);",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, c, _ := rewriteLegacySeams(tc.in, map[string]string{})
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("missing %q:\n%s", tc.want, got)
+			}
+			if c.ErrAdds != 1 {
+				t.Errorf("err adds = %d, want 1:\n%s", c.ErrAdds, got)
+			}
+			if strings.Contains(got, "errors.New") != strings.HasPrefix(tc.want, "err = errors.New") {
+				t.Errorf("errors.New presence mismatch:\n%s", got)
+			}
+		})
 	}
 }
 
