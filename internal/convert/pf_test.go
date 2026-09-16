@@ -109,7 +109,7 @@ func TestConvertFragmentGate(t *testing.T) {
 		if i == 0 && !strings.Contains(prompt, "s.store.GetNavSlice") {
 			t.Errorf("fragment prompt %d missing the store contract", i)
 		}
-		if i == 1 && strings.Contains(prompt, "s.store.") {
+		if i == 1 && strings.Contains(prompt, "s.store.GetNavSlice") {
 			t.Errorf("fragment prompt %d must not carry store signatures (its branch calls none)", i)
 		}
 	}

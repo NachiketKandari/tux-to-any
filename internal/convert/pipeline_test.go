@@ -356,6 +356,7 @@ func TestStubEvidenceInference(t *testing.T) {
 		t.Errorf("return note = %q, want the -1 convention", ev.returnNote)
 	}
 }
+
 // TestConvertConcurrentDBUnitsByteIdentical: workers>1 must produce the same
 // bytes as workers=1 — the pool renders in parallel, the merge stays in unit
 // order. Run under `go test -race` for the data-race check.
@@ -496,10 +497,10 @@ func TestBuildPromptLegacyFacts(t *testing.T) {
 		t.Error("baseline prompt broken")
 	}
 	for _, want := range []string{
-		"Legacy constants (preprocessor #defines visible in this branch",
+		"Legacy constants (use literal values directly)",
 		"  - BUF_LEN = 6144",
 		"  - DEMO_OUT_FML = 6",
-		"Legacy error codes — retain them in the returned error text",
+		"Legacy error codes (retain in returned error text)",
 		"S31005, S31010",
 	} {
 		if !strings.Contains(withFacts, want) {
@@ -595,5 +596,86 @@ func TestScenarioViewReplacesSQLNoLeak(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(sp.TxNotes, "\n"), "utils.ExecTransaction") {
 		t.Errorf("tx facts missing the wrap pattern: %v", sp.TxNotes)
+	}
+}
+
+// TestDBSignaturesForPrefixedNames pins the fragment-path contract fix
+// (audit 2026-09-16): the chunked path passes receiver-prefixed names
+// (s.store.GetDateRange) while the single-call path passes bare names —
+// both must resolve to the unit's signature, never an empty contract.
+func TestDBSignaturesForPrefixedNames(t *testing.T) {
+	p := &plan.Plan{Units: []plan.Unit{
+		{ID: "u1", Kind: plan.KindDBMethod, Name: "GetDateRange", QueryIDs: []string{"q1"}},
+	}}
+	bodies := map[string]dbOut{"u1": {sig: "GetDateRange(c context.Context) (*models.DateRange, error)"}}
+	for _, methods := range [][]string{
+		{"GetDateRange"},
+		{"s.store.GetDateRange"},
+	} {
+		got := dbSignaturesFor(p, bodies, methods)
+		if !strings.Contains(got, "s.store.GetDateRange(c context.Context)") {
+			t.Errorf("dbSignaturesFor(%v) = %q, want the store signature", methods, got)
+		}
+	}
+	if got := bareStoreCall("s.store.FetchNavHistory"); got != "FetchNavHistory" {
+		t.Errorf("bareStoreCall = %q, want FetchNavHistory", got)
+	}
+}
+
+// TestStripDeadComments pins the dead-SQL elision (audit 2026-09-16): the
+// ver-2.2 D2U SELECT rides a /* ... **/ block into views as live SQL —
+// comment-only lines (including multi-line block regions) must go, code
+// lines (even with trailing comments or /* inside strings) must stay.
+func TestStripDeadComments(t *testing.T) {
+	src := "int i;                           /* Loop counter */\n" +
+		"/*Added in Ver 2.1*/\n" +
+		"/* ver 2.2 **\n" +
+		"EXEC SQL\n" +
+		"SELECT COUNT(*) INTO :i_cnt FROM DUAL;\n" +
+		"} **/\n" +
+		"// line comment\n" +
+		"EXEC SQL include \"table/mf_navs.h\";\n" +
+		"s.store.GetDateRange(c)\n" +
+		"userlog(\"x /* not a comment */\");\n"
+	got := stripDeadComments(src)
+	if strings.Contains(got, "SELECT COUNT") || strings.Contains(got, "ver 2.2") {
+		t.Errorf("dead comment block survived:\n%s", got)
+	}
+	for _, want := range []string{"int i;", "EXEC SQL include", "s.store.GetDateRange(c)", "not a comment"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("code line %q stripped:\n%s", want, got)
+		}
+	}
+}
+
+// TestControllerTuxedoGate pins the transliteration ban (audit 2026-09-16):
+// the staged GetNavHistory-style body (s.tpalloc/s.errlog/s.Fadd32/
+// s.tpreturn/EXEC SQL CLOSE/break) must fail, while a reference-style body
+// (store calls + data shaping + return data, err) passes.
+func TestControllerTuxedoGate(t *testing.T) {
+	bad := "ptrFmlObuffer := s.tpalloc(\"FML32\", nil, 3)\n" +
+		"s.errlog(c_ServiceName, \"S31030\", TPMSG, c_user_id, li_session_id, c_errmsg)\n" +
+		"s.Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_errmsg, 0)\n" +
+		"s.tpreturn(TPFAIL, 0, (string)(ptr_fml_Ibuffer), 0, 0)\n" +
+		"s.EXEC_SQL_CLOSE(cur_mf_nav_hist)\n" +
+		"SETNULL(sql_mf_nav_sch_cd)\n" +
+		"x := (string)(unsafe.Pointer(ptr))\n" +
+		"if SQLCODE != 0 {\n\treturn nil, err\n}\n"
+	errs := controllerTuxedoErrs(bad)
+	if len(errs) == 0 {
+		t.Errorf("transliterated body passed the tuxedo gate")
+	}
+	joined := strings.Join(errs, "; ")
+	for _, want := range []string{"tpreturn", "Fadd32", "errlog"} {
+		if !strings.Contains(strings.ToLower(joined), strings.ToLower(want)) {
+			t.Errorf("gate notes %q miss %q", joined, want)
+		}
+	}
+	good := "dateDetail, err := s.store.GetDateDetails(c)\n" +
+		"if err != nil {\n\treturn nil, err\n}\n" +
+		"for _, d := range result {\n\tdata = append(data, &models.NavHistoryResponse{CompCode: d.CompCd.String})\n}\n" +
+		"return data, err\n"
+	if errs := controllerTuxedoErrs(good); len(errs) != 0 {
+		t.Errorf("reference-style body rejected: %v", errs)
 	}
 }

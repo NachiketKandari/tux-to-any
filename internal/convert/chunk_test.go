@@ -178,6 +178,45 @@ func TestGroupFragmentsBudget(t *testing.T) {
 	}
 }
 
+// TestBalancedFragmentsEqualParts pins the equal-mass split: uniform units
+// under a budget that forces 2 chunks divide evenly (not packed front-heavy)
+// and still reassemble byte-for-byte.
+func TestBalancedFragmentsEqualParts(t *testing.T) {
+	units := []string{"a;", "b;", "c;", "d;"}
+	chunks := groupFragments(units, 6, func(string) int { return 0 })
+	if len(chunks) != 2 {
+		t.Fatalf("budget 6 produced %d chunks, want 2 balanced parts", len(chunks))
+	}
+	if chunks[0] != "a;\nb;" || chunks[1] != "c;\nd;" {
+		t.Errorf("balanced split = %q, want [a b] [c d]", chunks)
+	}
+	if got := strings.Join(chunks, "\n"); got != "a;\nb;\nc;\nd;" {
+		t.Errorf("balanced chunks do not reassemble: %q", got)
+	}
+}
+
+// TestComposerStitches pins the third-model pass: a chunked run writes one
+// #composer audit exchange and the unit still lands appended.
+func TestComposerStitches(t *testing.T) {
+	opts, _, auditRoot := bigFixture(t, 3000, 4000)
+
+	res, err := Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Failed) > 0 {
+		t.Fatalf("chunked run failed endpoints: %v", res.Failed)
+	}
+	matches, _ := filepath.Glob(filepath.Join(auditRoot, "bigrun", "controller_method-BigBranch#composer-attempt0.json"))
+	if len(matches) != 1 {
+		t.Errorf("composer audit exchanges = %d, want 1", len(matches))
+	}
+	u := unitsOf(opts.Plan, plan.KindControllerMethod)[0]
+	if e := opts.Ledger.Get(u.ID, string(u.Kind), u.Name); e.Status != ledger.StatusAppended {
+		t.Errorf("BigBranch ledger status = %s, want appended", e.Status)
+	}
+}
+
 func TestFragmentLocals(t *testing.T) {
 	body := "\tx := FetchX(c)\n\ty, z := 1, 2\n\tfor i := range rows {\n\t}\n\tvar w int\n\t_ = w"
 	if got := strings.Join(fragmentLocals(body), ","); got != "x,y,z,i,w" {
@@ -411,5 +450,32 @@ func TestTxGateErrs(t *testing.T) {
 		"\treturn nil\n})"
 	if errs := txGateErrs(ok, calls); errs != nil {
 		t.Errorf("valid tx body rejected: %v", errs)
+	}
+}
+
+// TestPromptHardeningBudget pins the no-bloat hardening rule: the three
+// system prompts must carry the failure-mode clauses (store-only calls,
+// C-literal mapping, terseness) while the combined instruction mass stays
+// within budget — hardening merges and trims, never just appends.
+func TestPromptHardeningBudget(t *testing.T) {
+	prompts := map[string]string{
+		"system":   systemPrompt,
+		"fragment": systemPromptFragment,
+		"composer": systemPromptComposer,
+	}
+	total := 0
+	for name, p := range prompts {
+		total += len(p)
+		for _, want := range []string{"s.store.*", "\\0", "terse"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("%s prompt missing hardening clause %q", name, want)
+			}
+		}
+		if strings.Contains(p, "template-shaped gap") {
+			t.Errorf("%s prompt still carries the verbose template boilerplate", name)
+		}
+	}
+	if total > 5000 {
+		t.Errorf("combined system prompts = %d chars, want <= 5000 (harden by merging, not appending)", total)
 	}
 }

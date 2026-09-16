@@ -450,6 +450,11 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 			draft = flowDraft(opts, svc, c)
 		}
 	}
+	// Dead commented-out code never reaches the model: the ver-2.2 D2U
+	// SELECT rode a /* ... **/ block into fragment prompts as live SQL and
+	// every retry echoed it back (found SQL). Comment-only lines carry no
+	// store calls, so gating against the stripped view is equivalent.
+	view.Source = stripDeadComments(view.Source)
 	// §4.7 query-replacement accounting (engine-wiring audit Tier-2: the
 	// budget engine computed this on every seam call and nothing recorded
 	// it). One line per unit in the run log.
@@ -517,6 +522,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		Gate: func(body string) []string {
 			verr := validateBody(opts, body)
 			verr = append(verr, requiredCallErrs(view.Source, body, receiverOf(opts))...)
+			verr = append(verr, controllerTuxedoErrs(body)...)
 			return append(verr, txGateErrs(body, calls)...)
 		},
 	})
@@ -534,24 +540,17 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	return accepted, prompt, nil
 }
 
-const systemPrompt = `You convert one legacy Pro*C/Tuxedo branch into the body of a Go controller method.
-Rules:
-- Emit ONLY the Go statements that go between the method's braces. No package, imports, or func declaration. No helper functions, types, or constants.
-- The legacy view may open with "else if (…) {" (a mid-chain branch): that header is the condition this method already represents — never emit it or any leading "}". The body starts at the first statement under the header.
-- The signature is fixed and provided verbatim: the context parameter is c, the request parameter is request, and the named returns are data and err. Never declare or use req, resp, or Response.
-- Read inputs only as request.<Field>, using the request struct's verbatim field names.
-- The named returns are data and err — never shadow them: assign "data = ..." / "err = ..." (or fresh local names); "data := ..." inside the body discards the method's output.
-- Every code path ends in an explicit return ("return data, err" on success, "return nil, err" on error) — a body that falls off the end returns zero values silently.
-- Every store call the view shows appears exactly once — never repeat a call, never bare-call one whose results the view uses: capture the returned values into locals.
-- Copy struct/row field names character-exact from the definitions provided — never fuse names (CToDateString is not CToDate + String) and never invent fields; a sql.NullString reads through its .String FIELD (no parentheses: row.X.String, never row.X.String()).
-- Call the database exclusively through the store signatures provided — exactly the parameters each signature shows, same count and order. Never write SQL anywhere (no raw strings, no string literals containing SQL).
-- Store methods return []*models.X or *models.X per their signatures; the row structs are provided verbatim — use their field names exactly, never invent fields.
-- String comparisons use double-quoted literals: flag == "Y", never 'Y'.
-- Every identifier must be one of: request.<Field>, a store call, data, err, or a local you declare. No hallucinated variables.
-- The method template already emits the START and END debug logs — never write logger START/END statements, fmt.Print*, or any other logging in the body.
-- Check every error: each call that returns err must be followed by if err != nil { return nil, err } before its results are used. Never swallow or ignore an error.
-- Preserve the branch's control flow exactly as the view shows it — same loops, same branches, same order. Do not summarize, elide, merge, or reorder. A branch that looks dead still gets implemented. Every store call shown in the branch view MUST appear in the body, under the same condition.
-- On error return nil, err; on success return data, err.`
+const systemPrompt = `You emit the body of a Go controller method translated from a legacy Pro*C/Tuxedo branch.
+OUTPUT: bare Go statements only — no package/imports/func wrapper/helpers/types, no prose/fences/comments (S-codes live in error text), minimal blank lines. Stay terse: the body must fit the output ceiling.
+SIGNATURE (fixed, verbatim): c context.Context, request *models.X, named returns data and err. Never req/resp/Response. Never shadow data/err with :=.
+HEADER: a leading else-if header is the method's own condition — never emit it or a leading }. Start at the first statement under it.
+INPUTS: request.<Field> exactly as defined — the only input source.
+STORE: every s.store.* call in the view appears exactly once, exact params in order, results captured to locals. No other s.* calls. Never SQL.
+FIELDS: verbatim struct/row names (CToDateString is not CToDate + String); sql.NullString via its .String field (row.X.String, never row.X.String()).
+LITERALS (Go only): "Y" never 'Y'; 0 never '\0'; == never =.
+ERRORS: after every err-returning call: if err != nil { return nil, err }. Every path ends return data, err / return nil, err.
+LEGACY MAP (intent, never spelling): FML pack (Fadd32) → append shaped rows to data; tpreturn(TPSUCCESS) → return data, err; error legs → return nil + S-code; CLOSE/SETNULL/SETLEN/MEMSET/buffer-math/DEBUG userlog → drop; session prologue (Fget32/chk_sssn/tpalloc/INCLUDEs) → drop. Never emit tpreturn/tpalloc/Fadd32/Fget32/errlog/userlog/EXEC SQL/FBFR32/unsafe.
+FLOW: same loops/branches/order; dead-looking branches still implemented.`
 
 // fnHelperSystem is the fn-library translation seam's contract: one
 // legacy helper becomes one complete Go method on the controller struct —
@@ -603,6 +602,7 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 	if err != nil {
 		return "", "", fmt.Errorf("convert: query replacement for fn %s: %w", u.Name, err)
 	}
+	view.Source = stripDeadComments(view.Source)
 	telemetry.Log(ctx).Info("sql replaced by store calls", "unit", u.Name,
 		"queries", len(view.Report), "shrink_pct", fmt.Sprintf("%.0f", view.ShrinkPct()))
 	methods := make([]string, 0, len(calls))
@@ -1013,7 +1013,7 @@ func buildPrompt(view budget.View, dbContract, contract, endpoint, draft string,
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Endpoint: %s\n\n", endpoint)
 	if scen != nil {
-		fmt.Fprintf(&sb, "Scenario slice: %s — one dispatch-axis slice of the legacy entry; every contradicted branch is already folded away, so implement exactly what remains. Legacy declarations in the leading region (int counters, EXEC SQL INCLUDE headers) are context only — Go declares nothing for them, translate statements only.\n\n", scen.Key)
+		fmt.Fprintf(&sb, "Scenario slice: %s — contradicted branches already folded away, implement exactly what remains. Legacy declarations in the leading region (int counters, EXEC SQL INCLUDE headers) are context only.\n\n", scen.Key)
 	}
 	sb.WriteString("DB layer contract (call these; never write SQL):\n" + dbContract + "\n\n")
 	if calls := requiredCalls(view.Source, "s.store."); len(calls) > 0 {
@@ -1028,7 +1028,7 @@ func buildPrompt(view budget.View, dbContract, contract, endpoint, draft string,
 			sb.WriteString("\n")
 		}
 		if len(scen.TxNotes) > 0 {
-			sb.WriteString("Legacy transaction facts (SCEN evidence — preserve the transaction shape):\n")
+			sb.WriteString("Transaction facts (preserve the transaction shape):\n")
 			for _, n := range scen.TxNotes {
 				sb.WriteString("  - " + n + "\n")
 			}
@@ -1036,32 +1036,32 @@ func buildPrompt(view budget.View, dbContract, contract, endpoint, draft string,
 		}
 	}
 	if len(constants) > 0 {
-		sb.WriteString("Legacy constants (preprocessor #defines visible in this branch — use their literal values directly):\n")
+		sb.WriteString("Legacy constants (use literal values directly):\n")
 		for _, k := range constants {
 			sb.WriteString("  - " + k + "\n")
 		}
 		sb.WriteString("\n")
 	}
 	if len(errCodes) > 0 {
-		sb.WriteString("Legacy error codes — retain them in the returned error text; the legacy runtime maps each code to its real message: " +
+		sb.WriteString("Legacy error codes (retain in returned error text): " +
 			strings.Join(errCodes, ", ") + "\n\n")
 	}
 	if len(helpers) > 0 {
-		sb.WriteString("Legacy helper calls in the view — each resolved fn has a Go equivalent; never substitute one fn's symbol for another:\n")
+		sb.WriteString("Legacy helpers in the view — never substitute one fn's symbol for another:\n")
 		for _, h := range helpers {
 			sb.WriteString("  - " + h + "\n")
 		}
 		sb.WriteString("\n")
 	}
 	if len(stubs) > 0 {
-		sb.WriteString("Stubbed helpers — legacy fns with no source in the corpus. Each has a generated package-level stub (variadic args, int return, panics at runtime); call the RIGHT stub for each legacy fn and pass only identifiers your body declares (declare zero-value locals for C-only names like c_ServiceName or error buffers; out-pointers become &local):\n")
+		sb.WriteString("Stubbed helpers (generated package-level stubs, variadic args, int return): call the RIGHT stub per legacy fn, passing only declared identifiers (declare zero-value locals for C-only names; out-pointers become &local):\n")
 		for _, st := range stubs {
 			fmt.Fprintf(&sb, "  - %s(...) → %s(args ...any) int\n", st.Fn, common.CamelLowerGo(st.Fn))
 		}
 		sb.WriteString("\n")
 	}
-	sb.WriteString("Fixed method signature and verbatim struct definitions (parameter and field names must match exactly):\n" + contract + "\n\n")
-	sb.WriteString("Legacy branch, with every SQL block already replaced by its store call:\n\n" + view.Source + "\n")
+	sb.WriteString("Fixed signature + verbatim structs (names must match exactly):\n" + contract + "\n\n")
+	sb.WriteString("Legacy branch (SQL already replaced by store calls):\n\n" + view.Source + "\n")
 	if draft != "" {
 		sb.WriteString("\nDeterministic flow draft (parsed from the control flow — verify it, fix field mappings, keep the flow and every store call):\n" + draft + "\n")
 	}
@@ -1183,6 +1183,132 @@ func txGateErrs(body string, calls map[string]budget.DBCall) []string {
 		}
 	}
 	return errs
+}
+
+// bareStoreCall strips a store receiver prefix (s.store.GetDateRange →
+// GetDateRange); bare names pass through unchanged.
+func bareStoreCall(name string) string {
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
+
+// tuxedoCallRe matches legacy Tuxedo/FML runtime calls — bare or
+// s.-prefixed transliterations — that must never appear in a Go controller
+// body (audit 2026-09-16: fragment outputs transliterated tpalloc/errlog/
+// Fadd32/tpreturn with s. receivers and passed the parse gates).
+var tuxedoCallRe = regexp.MustCompile(`(?i)(?:s\.)?\b(tpreturn|tpalloc|tpfree|tprealloc|Fadd32|Fget32|Ferror32|Fsizeof32|Funused32|Finit32|Fneeded32|errlog|userlog|chk_sssn)\s*\(`)
+
+// tuxedoRefRe matches legacy runtime references (directives, buffer types,
+// indicator macros, cursor state) with no Go equivalent in a controller.
+var tuxedoRefRe = regexp.MustCompile(`(?i)(EXEC\s+SQL|FBFR32|SQLCODE|SQLCA|SETNULL\s*\(|SETLEN\s*\(|MEMSET\s*\(|unsafe\.Pointer|tpcall\s*\()`)
+
+// controllerTuxedoErrs rejects transliterated Tuxedo/FML runtime usage in a
+// controller body: the view still shows the legacy runtime calls, but the
+// system prompt maps them to response shaping / returns / nothing — their
+// spelling must never reach the body. One note per category keeps retry
+// feedback compact.
+func controllerTuxedoErrs(body string) []string {
+	seenCall := map[string]bool{}
+	var calls []string
+	for _, m := range tuxedoCallRe.FindAllStringSubmatch(body, -1) {
+		name := strings.ToLower(m[1])
+		if !seenCall[name] {
+			seenCall[name] = true
+			calls = append(calls, name)
+		}
+	}
+	seenRef := map[string]bool{}
+	var refs []string
+	for _, m := range tuxedoRefRe.FindAllString(body, -1) {
+		key := strings.ToLower(strings.Join(strings.Fields(m), " "))
+		if !seenRef[key] {
+			seenRef[key] = true
+			refs = append(refs, strings.TrimSpace(m))
+		}
+	}
+	var errs []string
+	if len(calls) > 0 {
+		errs = append(errs, "tuxedo runtime: translate intent, never spelling — drop these legacy calls and use the mapped Go instead (FML packing → append shaped rows to data; tpreturn(TPSUCCESS) → return data, err; error legs → return nil with the S-code in the error text): "+strings.Join(calls, ", "))
+	}
+	if len(refs) > 0 {
+		errs = append(errs, "tuxedo runtime: these legacy references have no Go equivalent in a controller — drop cursor CLOSE/buffer bookkeeping, read inputs as request.<Field>, never write SQL: "+strings.Join(refs, ", "))
+	}
+	return errs
+}
+
+// stripDeadComments drops comment-only lines (// full-line and /* */
+// regions, including multi-line block comments) from a branch view before
+// prompting. Dead code lives in comments — the ver-2.2 D2U SELECT rode a
+// /* ... **/ block into fragment prompts as live SQL and every retry echoed
+// it back (found SQL). Lines carrying code (even with trailing comments)
+// are kept byte-for-byte; string/char literals never start comments.
+func stripDeadComments(src string) string {
+	var out []string
+	inBlock := false
+	for _, line := range strings.Split(src, "\n") {
+		i := 0
+		code := false
+		inString := false
+		inChar := false
+		escaped := false
+		for i < len(line) {
+			ch := line[i]
+			switch {
+			case inBlock:
+				if ch == '*' && i+1 < len(line) && line[i+1] == '/' {
+					inBlock = false
+					i += 2
+					continue
+				}
+				i++
+			case inString:
+				if escaped {
+					escaped = false
+				} else if ch == '\\' {
+					escaped = true
+				} else if ch == '"' {
+					inString = false
+				}
+				i++
+			case inChar:
+				if escaped {
+					escaped = false
+				} else if ch == '\\' {
+					escaped = true
+				} else if ch == '\'' {
+					inChar = false
+				}
+				i++
+			default:
+				switch {
+				case ch == '/' && i+1 < len(line) && line[i+1] == '*':
+					inBlock = true
+					i += 2
+				case ch == '/' && i+1 < len(line) && line[i+1] == '/':
+					i = len(line) // line comment — nothing code-shaped after this
+				case ch == '"':
+					inString = true
+					code = true
+					i++
+				case ch == '\'':
+					inChar = true
+					code = true
+					i++
+				default:
+					if ch != ' ' && ch != '\t' && ch != '\r' {
+						code = true
+					}
+					i++
+				}
+			}
+		}
+		if code {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // branchSource slices the 1-based inclusive line range out of src.
@@ -1344,11 +1470,15 @@ type dbOut struct {
 // consumes: only the methods the endpoint's view calls (scenario services
 // carry hundreds of store methods — the whole-interface contract would
 // exceed the prompt ceiling; the REQUIRED-CALLS gate already pins the
-// endpoint's own set).
+// endpoint's own set). Names may arrive bare (GetDateDetails, single-call
+// path) or receiver-prefixed (s.store.GetDateRange, fragment path) — the
+// match is on the bare method name either way (audit 2026-09-16: prefixed
+// names matched nothing, so every fragment prompt carried an empty
+// contract next to its REQUIRED CALLS).
 func dbSignaturesFor(p *plan.Plan, bodies map[string]dbOut, methods []string) string {
 	want := map[string]bool{}
 	for _, m := range methods {
-		want[m] = true
+		want[bareStoreCall(m)] = true
 	}
 	var lines []string
 	for _, u := range unitsOf(p, plan.KindDBMethod) {
