@@ -348,6 +348,31 @@ func (s *Service) ModelFile(p *plan.Plan) (string, error) {
 	return render(templates.ModelFile, data)
 }
 
+// FMLRequestMap renders the endpoint's FML-field → request-Go-field map
+// from the same FmlGet derivation the request struct uses (§4.8.3): the
+// deterministic input seam the controller view's Fget unpack rewrite
+// consumes ("FML_USR_ID → UsrId"). Ops the request struct skips (error
+// emissions, response adds) are absent.
+func (s *Service) FMLRequestMap(endpoint string, c *ir.Condition) map[string]string {
+	var e *plan.Endpoint
+	for i := range s.Mapping.Endpoints {
+		if s.Mapping.Endpoints[i].Name == endpoint {
+			e = &s.Mapping.Endpoints[i]
+			break
+		}
+	}
+	if e == nil || c == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, f := range s.requestFields(*e, c) {
+		if f.JSONTag != "" {
+			out[f.JSONTag] = f.Name
+		}
+	}
+	return out
+}
+
 // requestFields derives one endpoint's request struct fields (§4.8.3):
 // the branch's FmlGet ops, unioned with the entry-preamble Fgets whose
 // host vars the branch body actually consumes (live-run fix, 2026-09-10 —

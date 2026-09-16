@@ -470,6 +470,17 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	// template owns never reaches the model either. Stops at first live
 	// line; store-call lines never match.
 	view.Source, _ = stripPreludeDecls(view.Source)
+	// Legacy-seam rewrite (micro-chunk step 2): the FML unpack block, the
+	// FML_ERR_MSG error legs, and the chk_sssn session check carry a single
+	// mechanical intent each — the view carries the mapped Go (request
+	// reads, err = fmt.Errorf, neutralized session check) so the model
+	// copies instead of echoing the spellings the tuxedo gate forbids.
+	rewritten, seams, _ := rewriteLegacySeams(view.Source, svc.FMLRequestMap(u.Name, c))
+	if seams.Gets+seams.ErrAdds+seams.Ssn > 0 {
+		view.Source = rewritten
+		telemetry.Log(ctx).Info("legacy seams rewritten",
+			"unit", u.Name, "fml_gets", seams.Gets, "err_legs", seams.ErrAdds, "chk_sssn", seams.Ssn)
+	}
 	// §4.7 query-replacement accounting (engine-wiring audit Tier-2: the
 	// budget engine computed this on every seam call and nothing recorded
 	// it). One line per unit in the run log.
