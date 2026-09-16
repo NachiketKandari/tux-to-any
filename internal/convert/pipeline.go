@@ -455,6 +455,11 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	// every retry echoed it back (found SQL). Comment-only lines carry no
 	// store calls, so gating against the stripped view is equivalent.
 	view.Source = stripDeadComments(view.Source)
+	// Deterministic scaffold elision (micro-chunk step 1): pure
+	// Tuxedo/Pro*C scaffold the tuxedo gate would reject in output never
+	// reaches the model — fewer echo-failures, smaller prompts. Dropped
+	// lines carry no store calls, so the orchestration gate is unaffected.
+	view.Source, _ = stripLegacyScaffold(view.Source)
 	// §4.7 query-replacement accounting (engine-wiring audit Tier-2: the
 	// budget engine computed this on every seam call and nothing recorded
 	// it). One line per unit in the run log.
@@ -603,6 +608,7 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 		return "", "", fmt.Errorf("convert: query replacement for fn %s: %w", u.Name, err)
 	}
 	view.Source = stripDeadComments(view.Source)
+	view.Source, _ = stripLegacyScaffold(view.Source)
 	telemetry.Log(ctx).Info("sql replaced by store calls", "unit", u.Name,
 		"queries", len(view.Report), "shrink_pct", fmt.Sprintf("%.0f", view.ShrinkPct()))
 	methods := make([]string, 0, len(calls))
@@ -1309,6 +1315,37 @@ func stripDeadComments(src string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// legacyScaffoldRe matches whole view lines that are pure Tuxedo/Pro*C
+// scaffold with no Go intent: buffer-management macros, buffer alloc/free,
+// FML size helpers, logging calls, cursor CLOSE, and EXEC SQL INCLUDE
+// directives. The controller tuxedo gate (controllerTuxedoErrs) rejects all
+// of these spellings in LLM output — stripping them from the view removes
+// the echo temptation and the prompt tax before any LLM spend.
+//
+// Conservative by design: only lines STARTING with the scaffold token
+// (after optional /*...*/ provenance markers) are dropped. Mixed-intent
+// lines (Fadd32/Fget32 field mapping, tpreturn legs, chk_sssn guards,
+// strcpy assignments) are kept — the LLM still maps their intent.
+var legacyScaffoldRe = regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*(?:EXEC\s+SQL\s+[Ii][Nn][Cc][Ll][Uu][Dd][Ee]\b|FBFR32\b|MEMSET\s*\(|SETNULL\s*\(|SETLEN\s*\(|CLOSE\s+[A-Za-z_]|userlog\s*\(|errlog\s*\(|tpalloc\s*\(|tpfree\s*\(|tprealloc\s*\(|INITDBGLVL\s*\(|Fsizeof32\s*\(|Funused32\s*\(|Fneeded32\s*\(|Finit32\s*\(|[A-Za-z_][A-Za-z0-9_.]*\s*=\s*(?:\([^)]*\)\s*)*(?:tpalloc|tprealloc)\s*\()`)
+
+// stripLegacyScaffold drops pure-scaffold lines from a branch view before
+// prompting. It runs after stripDeadComments/ReplaceQueries: query regions
+// are already store calls (requiredCalls unaffected), and only dead scaffold
+// — never store calls, branches, or FML mapping — is removed. Returns the
+// stripped source and the dropped line count for telemetry.
+func stripLegacyScaffold(src string) (string, int) {
+	var out []string
+	dropped := 0
+	for _, line := range strings.Split(src, "\n") {
+		if legacyScaffoldRe.MatchString(line) {
+			dropped++
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n"), dropped
 }
 
 // branchSource slices the 1-based inclusive line range out of src.

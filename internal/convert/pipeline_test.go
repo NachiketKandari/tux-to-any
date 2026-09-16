@@ -648,6 +648,51 @@ func TestStripDeadComments(t *testing.T) {
 	}
 }
 
+// TestStripLegacyScaffold pins the deterministic scaffold elision
+// (micro-chunk step 1): pure Tuxedo/Pro*C scaffold lines never reach the
+// model, while store calls, branches, and FML-mapping lines survive.
+func TestStripLegacyScaffold(t *testing.T) {
+	src := "FBFR32 *ptr_fml_Ibuffer;\n" +
+		"EXEC SQL include \"table/mf_navs.h\";\n" +
+		"MEMSET(sql_mf_nav_sch_cd);\n" +
+		"SETNULL(sql_urf_usr_id);\n" +
+		"SETLEN(sql_buf, 10);\n" +
+		"/*L113*/ userlog(\"%s: debug\", c_ServiceName);\n" +
+		"errlog(c_ServiceName, \"S31030\", TPMSG);\n" +
+		"ptr = tpalloc(\"FML32\", nil, 3);\n" +
+		"tpfree(ptr);\n" +
+		"CLOSE cur_get_tblc_dtls;\n" +
+		"INITDBGLVL(3);\n" +
+		"s.store.GetDateRange(c)\n" +
+		"if request.RqstTyp == \"S\" {\n" +
+		"s.store.DeleteRpam(c, tx, request.PrtfloId)\n" +
+		"}\n" +
+		"Fadd32(ptr, FML_ERR_MSG, c_errmsg, 0);\n" +
+		"Fget32(ptr, FML_USR_ID, c_user_id, 0);\n" +
+		"tpreturn(TPSUCCESS, 0, ptr, 0, 0);\n" +
+		"x = strcpy(dst, src);\n"
+	got, dropped := stripLegacyScaffold(src)
+	if dropped != 11 {
+		t.Errorf("dropped = %d, want 11:\n%s", dropped, got)
+	}
+	for _, want := range []string{
+		"s.store.GetDateRange(c)", "if request.RqstTyp", "s.store.DeleteRpam",
+		"Fadd32(", "Fget32(", "tpreturn(", "strcpy(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("intent line %q stripped:\n%s", want, got)
+		}
+	}
+	for _, gone := range []string{
+		"FBFR32", "EXEC SQL include", "MEMSET(", "SETNULL(", "SETLEN(",
+		"userlog(", "errlog(", "tpalloc(", "tpfree(", "CLOSE cur_", "INITDBGLVL(",
+	} {
+		if strings.Contains(got, gone) {
+			t.Errorf("scaffold %q survived:\n%s", gone, got)
+		}
+	}
+}
+
 // TestControllerTuxedoGate pins the transliteration ban (audit 2026-09-16):
 // the staged GetNavHistory-style body (s.tpalloc/s.errlog/s.Fadd32/
 // s.tpreturn/EXEC SQL CLOSE/break) must fail, while a reference-style body
