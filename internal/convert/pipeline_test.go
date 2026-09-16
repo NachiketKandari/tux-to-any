@@ -693,6 +693,58 @@ func TestStripLegacyScaffold(t *testing.T) {
 	}
 }
 
+// TestStripLegacyScaffoldDeclareSection pins the DECLARE-SECTION extension:
+// host-var section markers are scaffold like INCLUDE and never reach the
+// model, while live EXEC SQL (already store calls post-replacement) stays.
+func TestStripLegacyScaffoldDeclareSection(t *testing.T) {
+	src := "EXEC SQL BEGIN DECLARE SECTION;\n" +
+		"varchar sql_usr_id[20];\n" +
+		"EXEC SQL END DECLARE SECTION;\n" +
+		"s.store.GetDetail(c)\n"
+	got, dropped := stripLegacyScaffold(src)
+	if dropped != 2 {
+		t.Errorf("dropped = %d, want 2 (both section markers):\n%s", dropped, got)
+	}
+	if !strings.Contains(got, "s.store.GetDetail(c)") || !strings.Contains(got, "varchar sql_usr_id") {
+		t.Errorf("live lines stripped:\n%s", got)
+	}
+}
+
+// TestStripPreludeDecls pins the prelude hoist: the leading run of
+// context-only declarations drops, stripping stops at the first live line,
+// initialized decls and calls survive, and store calls are never matched.
+func TestStripPreludeDecls(t *testing.T) {
+	src := "\n" +
+		"/* preamble */\n" +
+		"int i_cnt;\n" +
+		"char c_user_id[19]; /* acc */\n" +
+		"/*L10*/  long l_sssn_id;\n" +
+		"if (a) {\n" +
+		"  int inner;\n" +
+		"  s.store.One(c);\n" +
+		"}\n"
+	got, dropped := stripPreludeDecls(src)
+	if dropped != 5 {
+		t.Errorf("dropped = %d, want 5 (blank, preamble, 3 decls):\n%s", dropped, got)
+	}
+	if !strings.HasPrefix(got, "if (a) {") {
+		t.Errorf("strip did not stop at first live line:\n%s", got)
+	}
+	if !strings.Contains(got, "int inner;") || !strings.Contains(got, "s.store.One(c);") {
+		t.Errorf("live body stripped:\n%s", got)
+	}
+
+	// Initialized declarations and call-shaped lines stop the strip.
+	live := "int i_cnt = 0;\ns.store.One(c);\n"
+	if got, dropped := stripPreludeDecls(live); dropped != 0 || got != live {
+		t.Errorf("live-first view altered: dropped=%d got=%q", dropped, got)
+	}
+	// A view that is only prelude strips to empty without failing.
+	if got, _ := stripPreludeDecls("int a;\nchar b[4];\n"); got != "" {
+		t.Errorf("all-prelude view = %q, want empty", got)
+	}
+}
+
 // TestControllerTuxedoGate pins the transliteration ban (audit 2026-09-16):
 // the staged GetNavHistory-style body (s.tpalloc/s.errlog/s.Fadd32/
 // s.tpreturn/EXEC SQL CLOSE/break) must fail, while a reference-style body

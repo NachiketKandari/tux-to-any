@@ -460,6 +460,10 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	// reaches the model — fewer echo-failures, smaller prompts. Dropped
 	// lines carry no store calls, so the orchestration gate is unaffected.
 	view.Source, _ = stripLegacyScaffold(view.Source)
+	// Prelude hoist: the leading run of context-only C declarations the
+	// template owns never reaches the model either. Stops at first live
+	// line; store-call lines never match.
+	view.Source, _ = stripPreludeDecls(view.Source)
 	// §4.7 query-replacement accounting (engine-wiring audit Tier-2: the
 	// budget engine computed this on every seam call and nothing recorded
 	// it). One line per unit in the run log.
@@ -609,6 +613,7 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 	}
 	view.Source = stripDeadComments(view.Source)
 	view.Source, _ = stripLegacyScaffold(view.Source)
+	view.Source, _ = stripPreludeDecls(view.Source)
 	telemetry.Log(ctx).Info("sql replaced by store calls", "unit", u.Name,
 		"queries", len(view.Report), "shrink_pct", fmt.Sprintf("%.0f", view.ShrinkPct()))
 	methods := make([]string, 0, len(calls))
@@ -1319,8 +1324,8 @@ func stripDeadComments(src string) string {
 
 // legacyScaffoldRe matches whole view lines that are pure Tuxedo/Pro*C
 // scaffold with no Go intent: buffer-management macros, buffer alloc/free,
-// FML size helpers, logging calls, cursor CLOSE, and EXEC SQL INCLUDE
-// directives. The controller tuxedo gate (controllerTuxedoErrs) rejects all
+// FML size helpers, logging calls, cursor CLOSE, and EXEC SQL INCLUDE /
+// DECLARE-SECTION directives. The controller tuxedo gate (controllerTuxedoErrs) rejects all
 // of these spellings in LLM output — stripping them from the view removes
 // the echo temptation and the prompt tax before any LLM spend.
 //
@@ -1328,7 +1333,7 @@ func stripDeadComments(src string) string {
 // (after optional /*...*/ provenance markers) are dropped. Mixed-intent
 // lines (Fadd32/Fget32 field mapping, tpreturn legs, chk_sssn guards,
 // strcpy assignments) are kept — the LLM still maps their intent.
-var legacyScaffoldRe = regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*(?:EXEC\s+SQL\s+[Ii][Nn][Cc][Ll][Uu][Dd][Ee]\b|FBFR32\b|MEMSET\s*\(|SETNULL\s*\(|SETLEN\s*\(|CLOSE\s+[A-Za-z_]|userlog\s*\(|errlog\s*\(|tpalloc\s*\(|tpfree\s*\(|tprealloc\s*\(|INITDBGLVL\s*\(|Fsizeof32\s*\(|Funused32\s*\(|Fneeded32\s*\(|Finit32\s*\(|[A-Za-z_][A-Za-z0-9_.]*\s*=\s*(?:\([^)]*\)\s*)*(?:tpalloc|tprealloc)\s*\()`)
+var legacyScaffoldRe = regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*(?:EXEC\s+SQL\s+(?:[Ii][Nn][Cc][Ll][Uu][Dd][Ee]|[Bb][Ee][Gg][Ii][Nn]|[Ee][Nn][Dd])\b|FBFR32\b|MEMSET\s*\(|SETNULL\s*\(|SETLEN\s*\(|CLOSE\s+[A-Za-z_]|userlog\s*\(|errlog\s*\(|tpalloc\s*\(|tpfree\s*\(|tprealloc\s*\(|INITDBGLVL\s*\(|Fsizeof32\s*\(|Funused32\s*\(|Fneeded32\s*\(|Finit32\s*\(|[A-Za-z_][A-Za-z0-9_.]*\s*=\s*(?:\([^)]*\)\s*)*(?:tpalloc|tprealloc)\s*\()`)
 
 // stripLegacyScaffold drops pure-scaffold lines from a branch view before
 // prompting. It runs after stripDeadComments/ReplaceQueries: query regions
@@ -1346,6 +1351,35 @@ func stripLegacyScaffold(src string) (string, int) {
 		out = append(out, line)
 	}
 	return strings.Join(out, "\n"), dropped
+}
+
+// preludeDeclRe matches uninitialized C declaration lines: a storage type
+// (or varchar host-var) declaring names with no initializer and no call —
+// `int i_cnt;`, `char c_user_id[19];`. Anything with `=`, `(`, or `{` keeps
+// its line: initializers and call-shaped decls may carry intent the prompt
+// still needs.
+var preludeDeclRe = regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*(?:(?:int|long|short|char|float|double|varchar|TPSVCINFO|FBFR32)\b[^=({;]*;\s*(?:/\*.*?\*/\s*)?)$`)
+
+// stripPreludeDecls drops the view's leading run of context-only lines —
+// blanks, uninitialized C declarations, and EXEC SQL DECLARE markers —
+// before prompting. The Go template owns declarations (fragmentLocals tracks
+// Go-side decls; C decls never translate), so the shared init prelude every
+// endpoint repeats is prompt tax with echo risk. Stops at the first
+// intent-bearing line; a view whose first code line is live keeps every
+// byte. Store-call lines always carry `(` and never match. Returns the
+// stripped source and the dropped line count.
+func stripPreludeDecls(src string) (string, int) {
+	lines := strings.Split(src, "\n")
+	i := 0
+	for i < len(lines) {
+		t := strings.TrimSpace(stripLeadingComments(lines[i]))
+		if t == "" || preludeDeclRe.MatchString(lines[i]) {
+			i++
+			continue
+		}
+		break
+	}
+	return strings.Join(lines[i:], "\n"), i
 }
 
 // branchSource slices the 1-based inclusive line range out of src.
