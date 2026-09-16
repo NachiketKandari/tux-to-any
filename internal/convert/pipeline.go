@@ -546,7 +546,7 @@ SIGNATURE (fixed, verbatim): c context.Context, request *models.X, named returns
 HEADER: a leading else-if header is the method's own condition — never emit it or a leading }. Start at the first statement under it.
 INPUTS: request.<Field> exactly as defined — the only input source.
 STORE: every s.store.* call in the view appears exactly once, exact params in order, results captured to locals. No other s.* calls. Never SQL.
-FIELDS: verbatim struct/row names (CToDateString is not CToDate + String); sql.NullString via its .String field (row.X.String, never row.X.String()).
+FIELDS: verbatim struct/row names (CToDateString is not CToDate + String); sql.NullString via its .String field.
 LITERALS (Go only): "Y" never 'Y'; 0 never '\0'; == never =.
 ERRORS: after every err-returning call: if err != nil { return nil, err }. Every path ends return data, err / return nil, err.
 LEGACY MAP (intent, never spelling): FML pack (Fadd32) → append shaped rows to data; tpreturn(TPSUCCESS) → return data, err; error legs → return nil + S-code; CLOSE/SETNULL/SETLEN/MEMSET/buffer-math/DEBUG userlog → drop; session prologue (Fget32/chk_sssn/tpalloc/INCLUDEs) → drop. Never emit tpreturn/tpalloc/Fadd32/Fget32/errlog/userlog/EXEC SQL/FBFR32/unsafe.
@@ -1060,7 +1060,7 @@ func buildPrompt(view budget.View, dbContract, contract, endpoint, draft string,
 		}
 		sb.WriteString("\n")
 	}
-	sb.WriteString("Fixed signature + verbatim structs (names must match exactly):\n" + contract + "\n\n")
+	sb.WriteString("Signature + structs (exact names; types noted once):\n" + contract + "\n\n")
 	sb.WriteString("Legacy branch (SQL already replaced by store calls):\n\n" + view.Source + "\n")
 	if draft != "" {
 		sb.WriteString("\nDeterministic flow draft (parsed from the control flow — verify it, fix field mappings, keep the flow and every store call):\n" + draft + "\n")
@@ -1347,9 +1347,21 @@ func validateBody(opts Options, body string) []string {
 	return nil
 }
 
+// nullStringCallRe matches a two-level .String() call (row.X.String(),
+// dateRange.CFromDate.String()) — the model's spelling of the NullString
+// .String FIELD. Single-level x.String() (e.g. time.Time) is left alone,
+// so legitimate String() methods survive the fixup.
+var nullStringCallRe = regexp.MustCompile(`(\.[A-Za-z_][A-Za-z0-9_]*)\.String\(\)`)
+
+// dataShadowRe matches a body-level `data := make(` — the template fixes
+// data as a named return (same scope as the body), so := is a redeclaration;
+// the init the prompt instructs must assign with =.
+var dataShadowRe = regexp.MustCompile(`(?m)^(\s*)data := make\(`)
+
 // cleanBody strips code fences and stray blank lines the model may add —
 // line-based, so the body's own indentation (which gofmt normalizes) is
-// preserved exactly.
+// preserved exactly. It also normalizes NullString method-call spelling to
+// the field access, so no gate or retry burns on it.
 func cleanBody(content string) string {
 	lines := strings.Split(content, "\n")
 	var out []string
@@ -1365,7 +1377,9 @@ func cleanBody(content string) string {
 	for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
 		out = out[:len(out)-1]
 	}
-	return strings.Join(out, "\n")
+	return dataShadowRe.ReplaceAllString(
+		nullStringCallRe.ReplaceAllString(strings.Join(out, "\n"), "${1}.String"),
+		"${1}data = make(")
 }
 
 // appendControllerMethod appends the rendered method to the controller file

@@ -173,11 +173,13 @@ func (s *Service) StoreCallsFor(ids []string, p *plan.Plan) (map[string]budget.D
 }
 
 // ControllerPromptContext renders the fixed contract a controller prompt
-// consumes: the exact method signature (named returns data/err), the
-// endpoint's request/response structs, and the row structs its store calls
-// return — all verbatim, so the model references parameter and field names
-// exactly instead of guessing them (live-smoke finding: ActiveFlg vs
-// CActiveFlag, req vs request).
+// consumes: the exact method signature (named returns data/err) plus the
+// endpoint's request/response/row shapes as compact name lists — exact Go
+// names (the live-smoke finding: the model guesses ActiveFlg vs CActiveFlag
+// when names aren't quoted), FML source per contract field, uniform types
+// stated once (contract fields are all string; row fields are all
+// sql.NullString). No struct tags or per-field types: the body never emits
+// them, so they are pure token cost.
 func (s *Service) ControllerPromptContext(endpoint string, p *plan.Plan, storeMethods []string) (string, error) {
 	c := s.ConditionOf(endpoint)
 	if c == nil {
@@ -196,14 +198,11 @@ func (s *Service) ControllerPromptContext(endpoint string, p *plan.Plan, storeMe
 			break
 		}
 	}
-	sb.WriteString("\ntype " + s.requestType(endpoint) + " struct {\n")
-	sb.WriteString(indentFields(s.requestFields(ep, c)))
-	sb.WriteString("}\n")
-	sb.WriteString("\ntype " + s.responseType(endpoint) + " struct {\n")
-	sb.WriteString(indentFields(contractFields(c.FmlOps, ir.FmlAdd)))
-	sb.WriteString("}\n")
+	sb.WriteString("request " + s.requestType(endpoint) + " (all string): " + compactFields(s.requestFields(ep, c)) + "\n")
+	sb.WriteString("response " + s.responseType(endpoint) + " (all string): " + compactFields(contractFields(c.FmlOps, ir.FmlAdd)) + "\n")
 
 	rows := map[string]bool{}
+	rowQuery := map[string]*ir.Query{}
 	for _, u := range p.Units {
 		if u.Kind != plan.KindDBMethod || len(u.QueryIDs) == 0 || !slices.Contains(storeMethods, u.Name) {
 			continue
@@ -224,10 +223,24 @@ func (s *Service) ControllerPromptContext(endpoint string, p *plan.Plan, storeMe
 			return "", err
 		}
 		rows[row] = true
-		sb.WriteString("\ntype " + row + " struct {\n")
-		sb.WriteString(indentFields(fields))
-		sb.WriteString("}\n")
+		rowQuery[row] = q
+		names := make([]string, 0, len(fields))
+		for _, f := range fields {
+			names = append(names, f.Name)
+		}
+		sb.WriteString("row " + row + " (all sql.NullString, read row.X.String): " + strings.Join(names, ", ") + "\n")
 	}
+
+	// Response shaping + input provenance (nav-golden parity): the SQL
+	// replacement elides the FETCH/Fadd loop, so the view shows a bare
+	// store call with no loop and no field mapping — without this block
+	// the model must guess both. The block restates the known seams:
+	// the db interface (store input/output), the row structs (every
+	// field sql.NullString, read via .String) vs the controller
+	// response (every field string), the per-field row→response map
+	// derived from the FML ops' host-var targets, and each store arg's
+	// provenance (request field vs prior store result vs local).
+	sb.WriteString(responseShaping(s, c, p, endpoint, storeMethods, rowQuery))
 
 	// External interactions surface as compilable placeholders (PF-4.5): the
 	// body calls the stub instead of inventing an outbound call. Endpoints
@@ -241,15 +254,233 @@ func (s *Service) ControllerPromptContext(endpoint string, p *plan.Plan, storeMe
 	return sb.String(), nil
 }
 
-// indentFields renders struct fields gofmt-shaped.
-func indentFields(fields []templates.FieldSpec) string {
-	var sb strings.Builder
+// compactFields renders contract fields as bare names with their FML source:
+// "CompCd [FML_COMP_CD], Account [FML_ACCOUNT]" — exact Go names for the
+// body, FML tags for traceability against the view's Fget/Fadd lines.
+func compactFields(fields []templates.FieldSpec) string {
+	parts := make([]string, 0, len(fields))
 	for _, f := range fields {
-		sb.WriteString("\t" + f.Name + " " + f.Type)
-		if tag := f.Tag(); tag != "" {
-			sb.WriteString(" `" + tag + "`")
+		if f.JSONTag != "" {
+			parts = append(parts, f.Name+" ["+f.JSONTag+"]")
+		} else {
+			parts = append(parts, f.Name)
 		}
-		sb.WriteString("\n")
+	}
+	return strings.Join(parts, ", ")
+}
+
+// normHost normalizes a Pro*C host-var reference for target matching:
+// qualified/indicator/array noise stripped (ST.TBL.col → col,
+// "sql_x INDICATOR" → sql_x, s.arr → s), the sql_ prefix dropped,
+// lowercased. RowShape entries and FML-op targets normalize to the same
+// key, so an Fadd target finds its FETCH-INTO column even when the row
+// struct names the field from the SELECT alias.
+func normHost(s string) string {
+	s = strings.TrimSpace(s)
+	if j := strings.IndexAny(s, " \t"); j > 0 {
+		s = s[:j]
+	}
+	if j := strings.LastIndex(s, "."); j >= 0 {
+		s = s[j+1:]
+	}
+	s = strings.TrimSuffix(s, ".arr")
+	s = strings.TrimSuffix(s, "[0]")
+	if j := strings.Index(s, "["); j >= 0 {
+		s = s[:j]
+	}
+	s = strings.TrimSuffix(s, ".arr")
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimPrefix(s, "sql_")
+	return strings.Trim(s, "_")
+}
+
+// responseShaping renders the compact seam block the flattened view cannot
+// carry: store input/output per method, the row-vs-response type rule, the
+// row→response field map, and each store arg's provenance. Short by design
+// — a few lines per method, not a second copy of the structs above.
+func responseShaping(s *Service, c *ir.Condition, p *plan.Plan, endpoint string, storeMethods []string, rowQuery map[string]*ir.Query) string {
+	// Endpoint's methods in plan order (deterministic, matches the view's
+	// REQUIRED-CALLS order only when the view lists them in legacy order —
+	// plan order is the stable choice here).
+	var units []plan.Unit
+	for _, u := range p.Units {
+		if u.Kind != plan.KindDBMethod || len(u.QueryIDs) == 0 || !slices.Contains(storeMethods, u.Name) {
+			continue
+		}
+		units = append(units, u)
+	}
+	if len(units) == 0 {
+		return ""
+	}
+	// Request field lookup: normalized host var → request Go field, from
+	// the same FmlGet derivation the request struct uses (branch gets
+	// plus consumed preamble gets).
+	var ep plan.Endpoint
+	for _, e := range s.Mapping.Endpoints {
+		if e.Name == endpoint {
+			ep = e
+			break
+		}
+	}
+	reqByHost := map[string]string{}
+	for _, f := range s.requestFields(ep, c) {
+		reqByHost["_by_name_"+strings.ToLower(f.Name)] = f.Name
+	}
+	getOps := []ir.FmlOp{}
+	for _, op := range c.FmlOps {
+		if op.Kind == ir.FmlGet && !op.Dropped && !op.Error {
+			getOps = append(getOps, op)
+		}
+	}
+	if s.Main != nil && s.source != "" {
+		branchSrc := ""
+		if lines := strings.Split(s.source, "\n"); c.EndLine <= len(lines) && c.StartLine >= 1 && c.EndLine > c.StartLine {
+			branchSrc = strings.Join(lines[c.StartLine-1:c.EndLine], "\n")
+		}
+		for _, op := range s.Main.FmlOps {
+			if op.Kind != ir.FmlGet || op.Dropped || op.Target == "" || !strings.Contains(branchSrc, op.Target) {
+				continue
+			}
+			dup := false
+			for _, g := range getOps {
+				if g.Field == op.Field {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				getOps = append(getOps, op)
+			}
+		}
+	}
+	for _, op := range getOps {
+		if op.Target != "" {
+			reqByHost[normHost(op.Target)] = fieldFromFML(op.Field)
+		}
+	}
+	// Row-shape lookup across the endpoint's queries: normalized host var
+	// → producing method, so a bind fed by another store result names it.
+	shapeByHost := map[string]string{}
+	for _, u := range units {
+		q := s.Query(u.QueryIDs[0])
+		if q == nil {
+			continue
+		}
+		for _, hv := range q.RowShape {
+			if k := normHost(hv); k != "" {
+				if _, ok := shapeByHost[k]; !ok {
+					shapeByHost[k] = u.Name
+				}
+			}
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\nResponse shaping — the FETCH/Fadd loop the SQL replacement elided (implement exactly this; the view shows no loop):\n")
+	respFields := contractFields(c.FmlOps, ir.FmlAdd)
+	for _, u := range units {
+		q := s.Query(u.QueryIDs[0])
+		if q == nil {
+			continue
+		}
+		pin, _ := s.Pin(u.QueryIDs[0])
+		params, _ := s.dbParams(q, pin)
+		argNames := make([]string, len(params))
+		for i, pp := range params {
+			argNames[i] = pp.Name + " " + pp.Type
+		}
+		switch {
+		case q.Type.IsDML():
+			fmt.Fprintf(&sb, "- s.store.%s(%s) returns error only.\n", u.Name, strings.Join(append([]string{"c"}, argNames...), ", "))
+			continue
+		case isCountQuery(q):
+			fmt.Fprintf(&sb, "- s.store.%s(%s) returns int64 scalar — use directly, no struct, no loop.\n", u.Name, strings.Join(append([]string{"c"}, argNames...), ", "))
+		case q.Type == ir.QuerySelectSingle:
+			row := s.RowName(u.QueryIDs[0], u.Name)
+			fmt.Fprintf(&sb, "- s.store.%s(%s) returns *models.%s (single row — read fields directly, no loop).\n", u.Name, strings.Join(append([]string{"c"}, argNames...), ", "), row)
+		default:
+			row := s.RowName(u.QueryIDs[0], u.Name)
+			fmt.Fprintf(&sb, "- s.store.%s(%s) returns []*models.%s → one %s per row, in order.\n", u.Name, strings.Join(append([]string{"c"}, argNames...), ", "), row, s.responseType(endpoint))
+		}
+		// Arg provenance.
+		if len(params) > 0 && len(q.Binds) > 0 {
+			parts := make([]string, 0, len(params))
+			for i, pp := range params {
+				if i >= len(q.Binds) {
+					break
+				}
+				bk := normHost(q.Binds[i])
+				switch {
+				case bk != "" && reqByHost[bk] != "":
+					parts = append(parts, pp.Name+" ← request."+reqByHost[bk])
+				case bk != "" && shapeByHost[bk] != "" && shapeByHost[bk] != u.Name:
+					parts = append(parts, pp.Name+" ← "+shapeByHost[bk]+" result")
+				default:
+					parts = append(parts, pp.Name+" ← local (see view)")
+				}
+			}
+			sb.WriteString("  args: " + strings.Join(parts, ", ") + "\n")
+		}
+	}
+	// Row→response map for the multi-row result(s): FML add target → row
+	// field (via RowShape position, alias-proof) → response field.
+	mapped := false
+	for _, u := range units {
+		q := s.Query(u.QueryIDs[0])
+		if q == nil || q.Type != ir.QuerySelectMulti {
+			continue
+		}
+		row := s.RowName(u.QueryIDs[0], u.Name)
+		fields, err := s.rowFields(q)
+		if err != nil || len(respFields) == 0 {
+			continue
+		}
+		byHost := map[string]string{}
+		for i, hv := range q.RowShape {
+			if i < len(fields) {
+				byHost[normHost(hv)] = fields[i].Name
+			}
+		}
+		sb.WriteString("  map " + row + " → " + s.responseType(endpoint) + ":\n")
+		for _, rf := range respFields {
+			var target string
+			var fml string
+			for _, op := range c.FmlOps {
+				if op.Kind == ir.FmlAdd && !op.Dropped && !op.Error && fieldFromFML(op.Field) == rf.Name {
+					target, fml = op.Target, op.Field
+					break
+				}
+			}
+			rowField := ""
+			if target != "" {
+				rowField = byHost[normHost(target)]
+			}
+			if rowField == "" {
+				// Fallback: response name contains row name or vice
+				// versa (alias-shaped rows where the host var left no
+				// trace) — still pins the intended pair explicitly.
+				rl, sl := strings.ToLower(rf.Name), ""
+				for _, f := range fields {
+					fl := strings.ToLower(f.Name)
+					if strings.Contains(fl, rl) || strings.Contains(rl, fl) {
+						sl = f.Name
+						break
+					}
+				}
+				rowField = sl
+			}
+			if rowField != "" {
+				fmt.Fprintf(&sb, "    %s ← %s.String\n", rf.Name, rowField)
+				mapped = true
+			} else if fml != "" {
+				fmt.Fprintf(&sb, "    %s ← ? (%s, no row column matched — use the closest row field)\n", rf.Name, fml)
+			}
+		}
+	}
+	if !mapped {
+		fmt.Fprintf(&sb, "  init: data = make([]*models.%s, 0), then append the shaped element directly (no loop)\n", s.responseType(endpoint))
+	} else {
+		fmt.Fprintf(&sb, "  init: data = make([]*models.%s, 0); then for _, row := range result { data = append(data, &models.%s{...}) }\n", s.responseType(endpoint), s.responseType(endpoint))
 	}
 	return sb.String()
 }

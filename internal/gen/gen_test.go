@@ -386,9 +386,10 @@ func goastInspect(path, iface string) ([]string, error) {
 }
 
 // TestGenControllerPromptContext pins the fixed contract the controller
-// prompt consumes: exact signature (named returns), verbatim request/
-// response structs, and only the row structs the endpoint's store calls
-// return.
+// prompt consumes: exact signature (named returns), compact request/
+// response/row name lists, plus the response-shaping seam (the FETCH/Fadd
+// loop the SQL replacement elides: store I/O, row→response map, arg
+// provenance, data init).
 func TestGenControllerPromptContext(t *testing.T) {
 	s, p, _ := genNavFixture(t)
 	ctx, err := s.ControllerPromptContext("SipFreedem", p, []string{"GetCount", "IsDemoActive", "GetSipFreedem"})
@@ -397,17 +398,34 @@ func TestGenControllerPromptContext(t *testing.T) {
 	}
 	for _, want := range []string{
 		"func (s *navController) SipFreedem(c context.Context, request *models.SipFreedemRequest) (data []*models.SipFreedemResponse, err error)",
-		"type SipFreedemRequest struct {",
-		"type SipFreedemResponse struct {",
-		"type SipFreedemDetail struct {",
-		"type DemoActive struct {",
+		"request SipFreedemRequest (all string):",
+		"CompCd [FML_COMP_CD]",
+		"response SipFreedemResponse (all string):",
+		"row SipFreedemDetail (all sql.NullString, read row.X.String):",
+		"row DemoActive (all sql.NullString, read row.X.String):",
+		"Response shaping",
+		"s.store.GetCount(c, matchAccount string) returns int64 scalar",
+		"s.store.GetSipFreedem(c, sqlDemoCompCd string, cDemoEnableFlg string) returns []*models.SipFreedemDetail",
+		"CompCd ← DemoCompCd.String",
+		"Rating ← DemoRating.String",
+		"Label ← StrDesc.String",
+		"matchAccount ← request.Account",
+		"data = make([]*models.SipFreedemResponse, 0)",
+		"for _, row := range result",
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("prompt context missing %q:\n%s", want, ctx)
 		}
 	}
-	// Only the endpoint's own rows: other units' structs stay out.
-	for _, absent := range []string{"NavHistoryDetail", "NavListRequest", "GetCount"} {
+	// Compact means no struct dumps or tags: the body never emits them.
+	for _, absent := range []string{"type SipFreedemDetail struct", "type SipFreedemRequest struct", "db:\"", "binding:\""} {
+		if strings.Contains(ctx, absent) {
+			t.Errorf("prompt context carries bloat %q:\n%s", absent, ctx)
+		}
+	}
+	// Only the endpoint's own rows: other units' structs stay out (the
+	// shaping block names the endpoint's own store methods only).
+	for _, absent := range []string{"row NavHistoryDetail", "row NavDetails", "NavListRequest", "GetNavHistory", "GetDateDetails"} {
 		if strings.Contains(ctx, absent) {
 			t.Errorf("prompt context leaks %q:\n%s", absent, ctx)
 		}

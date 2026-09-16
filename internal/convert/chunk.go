@@ -107,7 +107,7 @@ OUTPUT: bare Go statements of this fragment only — no wrapper/package/imports/
 SIGNATURE (fixed, verbatim): c, request, named returns data and err. Never req/resp/Response. Never shadow data/err with :=.
 INPUTS: request.<Field> exactly as defined.
 STORE: every s.store.* call shown appears exactly once, exact params in order, results captured. No other s.* calls. Never SQL.
-FIELDS: verbatim struct/row names; sql.NullString via row.X.String (never row.X.String()).
+FIELDS: verbatim struct/row names; sql.NullString via row.X.String.
 LITERALS (Go only): "Y" never 'Y'; 0 never '\0'; == never =.
 ERRORS: after every err-returning call: if err != nil { return nil, err }. Return (return data, err / return nil, err) ONLY where this fragment's view shows one; otherwise fall through.
 JOINTS: a closing brace closes an earlier fragment's block; an if header open at the end is closed later. Listed earlier-fragment locals are reused, never redeclared; := only on first use in THIS fragment.
@@ -478,7 +478,7 @@ func buildChunkPrompt(cx chunkCtx, k, n int, chunkText, dbContract, contract str
 		}
 		sb.WriteString("\n")
 	}
-	sb.WriteString("Fixed signature + verbatim structs (names must match exactly):\n" + contract + "\n\n")
+	sb.WriteString("Signature + structs (exact names; types noted once):\n" + contract + "\n\n")
 	if k > 0 && len(locals) > 0 {
 		sb.WriteString("Locals already declared by earlier fragments — never redeclare, reuse them: " +
 			strings.Join(locals, ", ") + "\n\n")
@@ -663,7 +663,7 @@ func buildComposerPrompt(cx chunkCtx, contract, dbContract string, bodies []stri
 		}
 		sb.WriteString("\n")
 	}
-	sb.WriteString("Fixed signature + verbatim structs (names must match exactly):\n" + contract + "\n\n")
+	sb.WriteString("Signature + structs (exact names; types noted once):\n" + contract + "\n\n")
 	for i, b := range bodies {
 		fmt.Fprintf(&sb, "Fragment output %d of %d:\n%s\n\n", i+1, len(bodies), b)
 	}

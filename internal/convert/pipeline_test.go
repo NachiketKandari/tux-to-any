@@ -679,3 +679,22 @@ func TestControllerTuxedoGate(t *testing.T) {
 		t.Errorf("reference-style body rejected: %v", errs)
 	}
 }
+
+// TestCleanBodyNormalizesNullString pins the extraction fixup: two-level
+// .String() (the model's NullString spelling) becomes the .String field,
+// while single-level calls (e.g. time.Time.String()) pass through.
+func TestCleanBodyNormalizesNullString(t *testing.T) {
+	in := "data := make([]*models.R, 0)\nfor _, row := range rows {\n\tdata = append(data, &models.R{C: row.C.String(), D: d.Date.String()})\n}\nfrom := fromDate.String()\n"
+	got := cleanBody(in)
+	for _, want := range []string{"row.C.String,", "d.Date.String}", "fromDate.String()", "data = make([]*models.R, 0)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("cleanBody output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "data := make(") {
+		t.Errorf("shadowed data init remains:\n%s", got)
+	}
+	if strings.Contains(got, ".String()") && !strings.Contains(got, "fromDate.String()") {
+		t.Errorf("unexpected .String() remains:\n%s", got)
+	}
+}
