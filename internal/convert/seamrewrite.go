@@ -2,6 +2,7 @@ package convert
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 
 	"tux-to-any/internal/ir"
@@ -215,6 +216,94 @@ func isPlainIdent(s string) bool { return isPlainIdentRe.MatchString(s) }
 // isErrBuffer reports whether a normalized seam target names a shared
 // error-message buffer — the only exprs an errlog S-code repaints.
 func isErrBuffer(expr string) bool { return errBufferNames[expr] }
+
+// sessionArgNames are the middleware-owned identifiers an unresolved-fn
+// call in the view must not carry: Go middleware owns the service name,
+// the session/user ids, and the shared error buffers. The generated stub
+// is variadic and the accepted body shape omits them (measured A/B: the
+// model copied the session plumbing verbatim and the gate rejected the
+// undefined C names).
+var sessionArgNames = map[string]bool{
+	"c_ServiceName": true, "c_errmsg": true, "c_err_msg": true,
+	"errmsg": true, "err_msg": true, "c_user_id": true, "c_userid": true,
+	"li_session_id": true, "l_sssn_id": true, "DEF_USR": true, "DEF_SSSN": true,
+}
+
+// strcpyServiceRe anchors the session-prologue strcpy whose destination is
+// the middleware-owned service name.
+var strcpyServiceRe = regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*strcpy\s*\(\s*c_ServiceName\s*,`)
+
+// stripSessionArgs drops middleware-owned identifiers (session service
+// name, error buffers, user/session ids) from calls to unresolved legacy
+// fns in a view — the Go stub is variadic and the accepted shape omits
+// them. Also drops the strcpy(c_ServiceName, rqst->name) prologue line.
+// fnNames carries the legacy fn spellings (plan.Stub.Fn); other callees
+// keep every arg, including out-params like &c_d2u_active_flg. Returns the
+// rewritten source and the number of args/lines dropped.
+func stripSessionArgs(src string, fnNames map[string]bool) (string, int) {
+	if len(fnNames) == 0 {
+		return src, 0
+	}
+	callRe := stubCallRe(fnNames)
+	var out []string
+	dropped := 0
+	for _, line := range strings.Split(src, "\n") {
+		rewritten, n := stripSessionArgLine(line, callRe)
+		dropped += n
+		out = append(out, rewritten)
+	}
+	if dropped == 0 {
+		return src, 0
+	}
+	return strings.Join(out, "\n"), dropped
+}
+
+// stubCallRe matches a call to any unresolved fn name; the names are
+// legacy C identifiers, so a word boundary anchors them.
+func stubCallRe(fnNames map[string]bool) *regexp.Regexp {
+	names := make([]string, 0, len(fnNames))
+	for n := range fnNames {
+		names = append(names, regexp.QuoteMeta(n))
+	}
+	sort.Strings(names)
+	return regexp.MustCompile(`\b(?:` + strings.Join(names, "|") + `)\s*\(`)
+}
+
+// stripSessionArgLine scrubs one line: a statement-level
+// strcpy(c_ServiceName, ...) line drops whole (empty result), and the
+// first call to a known unresolved fn keeps only its non-session args.
+func stripSessionArgLine(line string, fnCall *regexp.Regexp) (string, int) {
+	if strcpyServiceRe.MatchString(line) {
+		if open := strings.Index(line, "("); open >= 0 {
+			if _, close, ok := balancedParens(line, open); ok && lineEndsWithStmt(line, close) {
+				return "", 1
+			}
+		}
+	}
+	loc := fnCall.FindStringIndex(line)
+	if loc == nil {
+		return line, 0
+	}
+	open := loc[0] + strings.Index(line[loc[0]:loc[1]], "(")
+	content, close, ok := balancedParens(line, open)
+	if !ok {
+		return line, 0
+	}
+	args := splitTopArgs(content)
+	kept := make([]string, 0, len(args))
+	dropped := 0
+	for _, a := range args {
+		if sessionArgNames[normalizeSeamTarget(a)] {
+			dropped++
+			continue
+		}
+		kept = append(kept, strings.TrimSpace(a))
+	}
+	if dropped == 0 {
+		return line, 0
+	}
+	return line[:open+1] + strings.Join(kept, ", ") + line[close:], dropped
+}
 
 // normalizeSeamTarget reduces a call argument to the bare host-var name the
 // Go assignment writes: `(char *)&c_user_id` → c_user_id,

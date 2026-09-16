@@ -176,6 +176,79 @@ func TestRewriteLegacySeamsErrCode(t *testing.T) {
 	}
 }
 
+// TestStripSessionArgs pins the unresolved-fn arg scrub: session service
+// name / user and session ids / shared error buffers drop from calls to
+// stubbed fns (condition and statement context), out-params stay, other
+// callees keep every arg, and the strcpy(c_ServiceName, ...) prologue line
+// drops while a generic strcpy assignment survives.
+func TestStripSessionArgs(t *testing.T) {
+	fns := map[string]bool{"fn_is_d2u_active": true, "fn_long_to_int": true}
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+		n    int
+	}{
+		{
+			"condition call keeps only the out-param",
+			"if (fn_is_d2u_active(c_ServiceName, ls_match_acc.arr, &c_d2u_active_flg, c_errmsg) == -1) {",
+			"if (fn_is_d2u_active(ls_match_acc.arr, &c_d2u_active_flg) == -1) {",
+			2,
+		},
+		{
+			"statement call drops the error buffer",
+			"                if(fn_long_to_int(l_sizeof,&i_out,c_errmsg) == -1)",
+			"                if(fn_long_to_int(l_sizeof, &i_out) == -1)",
+			1,
+		},
+		{
+			"all-session call scrubs to empty args",
+			"i_error := fn_is_d2u_active(c_ServiceName, l_sssn_id, c_user_id, c_err_msg);",
+			"i_error := fn_is_d2u_active();",
+			4,
+		},
+		{
+			"call without session args untouched",
+			"fn_is_d2u_active(ls_match_acc.arr, &c_d2u_active_flg);",
+			"fn_is_d2u_active(ls_match_acc.arr, &c_d2u_active_flg);",
+			0,
+		},
+		{
+			"other callees untouched",
+			"fn_is_demo_active(c_ServiceName, c_errmsg);",
+			"fn_is_demo_active(c_ServiceName, c_errmsg);",
+			0,
+		},
+		{
+			"service-name strcpy prologue dropped",
+			"    strcpy(c_ServiceName,rqst->name) ;",
+			"",
+			1,
+		},
+		{
+			"generic strcpy untouched",
+			"x = strcpy(dst, src);",
+			"x = strcpy(dst, src);",
+			0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, n := stripSessionArgs(tc.in, fns)
+			if n != tc.n {
+				t.Errorf("dropped = %d, want %d:\n%s", n, tc.n, got)
+			}
+			if got != tc.want {
+				t.Errorf("rewrite:\n got %q\nwant %q", got, tc.want)
+			}
+		})
+	}
+	// No stubs means no scrubbing at all.
+	view := "fn_is_d2u_active(c_ServiceName, c_errmsg);\nstrcpy(c_ServiceName, rqst->name);\n"
+	if got, n := stripSessionArgs(view, nil); n != 0 || got != view {
+		t.Errorf("nil fn set altered the view: n=%d\n%s", n, got)
+	}
+}
+
 // TestRewriteLegacySeamsFullView pins the whole-view pass on a realistic
 // prologue slice: unpack → request reads, error legs → Errorf, session
 // check → 0, and every intent line (store calls, branches, response adds)

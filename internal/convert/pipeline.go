@@ -483,6 +483,15 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		telemetry.Log(ctx).Info("legacy seams rewritten",
 			"unit", u.Name, "fml_gets", seams.Gets, "err_legs", seams.ErrAdds, "chk_sssn", seams.Ssn)
 	}
+	// Session-arg scrub (micro-chunk step 3): unresolved-fn calls keep the
+	// middleware-owned session/buffer args in the view, and the model
+	// copies them into outputs the gate rejects (undefined C names). The
+	// generated stub is variadic; the accepted shape omits them. Runs on
+	// the seam-rewritten view so the strcpy prologue is still present.
+	if scrubbed, dropped := stripSessionArgs(view.Source, stubFnNames(opts.Plan)); dropped > 0 {
+		view.Source = scrubbed
+		telemetry.Log(ctx).Info("session args dropped from unresolved-fn views", "unit", u.Name, "dropped", dropped)
+	}
 	// Deterministic scaffold elision (micro-chunk step 1): pure
 	// Tuxedo/Pro*C scaffold the tuxedo gate would reject in output never
 	// reaches the model — fewer echo-failures, smaller prompts. Dropped
@@ -631,6 +640,13 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 	view.Source = stripDeadComments(view.Source)
 	view.Source, _ = stripLegacyScaffold(view.Source)
 	view.Source, _ = stripPreludeDecls(view.Source)
+	// Session-arg scrub (micro-chunk step 3): same contract as the
+	// controller seam — unresolved-fn calls lose the middleware-owned
+	// session/buffer args the stub signature is not meant to carry.
+	if scrubbed, dropped := stripSessionArgs(view.Source, stubFnNames(opts.Plan)); dropped > 0 {
+		view.Source = scrubbed
+		telemetry.Log(ctx).Info("session args dropped from unresolved-fn views", "unit", u.Name, "dropped", dropped)
+	}
 	telemetry.Log(ctx).Info("sql replaced by store calls", "unit", u.Name,
 		"queries", len(view.Report), "shrink_pct", fmt.Sprintf("%.0f", view.ShrinkPct()))
 	methods := make([]string, 0, len(calls))
@@ -1020,6 +1036,19 @@ func legacyHelpers(p *plan.Plan, view string) []string {
 		out = append(out, fmt.Sprintf("%s(...) → session/error plumbing, middleware-owned — drop the call", fn))
 	}
 	return out
+}
+
+// stubFnNames collects the unresolved fns' legacy spellings (plan.Stub.Fn)
+// — the callees stripSessionArgs scrubs middleware-owned args from.
+func stubFnNames(p *plan.Plan) map[string]bool {
+	if len(p.Stubs) == 0 {
+		return nil
+	}
+	names := make(map[string]bool, len(p.Stubs))
+	for _, st := range p.Stubs {
+		names[st.Fn] = true
+	}
+	return names
 }
 
 func buildPrompt(view budget.View, dbContract, contract, endpoint, draft string, stubs []plan.Stub, helpers, constants, errCodes []string, scen *scenPrompt) string {

@@ -236,6 +236,14 @@ func TestConvertGateEndToEnd(t *testing.T) {
 	if !strings.Contains(navListPrompt, "Stubbed helpers") || !strings.Contains(navListPrompt, "fnLongToInt(args ...any) int") {
 		t.Errorf("NavList prompt missing the stubbed-helper contract\n---\n%s", navListPrompt)
 	}
+	// The stub call's view carries no session args and no strcpy prologue:
+	// the model copies the call, so middleware-owned C names must not be
+	// there to copy (the measured c_ServiceName/c_errmsg reject class).
+	for _, absent := range []string{"c_ServiceName", "c_errmsg", "c_err_msg", "l_sssn_id", "strcpy("} {
+		if strings.Contains(navListPrompt, absent) {
+			t.Errorf("NavList prompt leaks middleware-owned identifier %q\n---\n%s", absent, navListPrompt)
+		}
+	}
 
 	// Resume: a second run converts nothing new — zero LLM calls.
 	res2, err := Run(context.Background(), opts)
