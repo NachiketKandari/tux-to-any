@@ -85,6 +85,27 @@ type Stub struct {
 	Endpoints []string `json:"endpoints"`
 }
 
+// txHelperRole classifies an external helper fn as transaction plumbing:
+// the begin/commit/abort helper trio maps onto utils.ExecTransaction (the
+// convert view pass rewrites its call sites into the wrapper template), so
+// these fns are dropped from the plan, never stubbed.
+func txHelperRole(name string) string {
+	if !strings.HasPrefix(name, "fn_") {
+		return ""
+	}
+	l := strings.ToLower(name)
+	switch {
+	case strings.Contains(l, "begintran") || strings.Contains(l, "begin_tran"):
+		return "begin"
+	case strings.Contains(l, "committran") || strings.Contains(l, "commit_tran"):
+		return "commit"
+	case strings.Contains(l, "aborttran") || strings.Contains(l, "abort_tran") ||
+		strings.Contains(l, "rollbacktran") || strings.Contains(l, "rollback_tran"):
+		return "abort"
+	}
+	return ""
+}
+
 // FnHelper is one fn-library function's conversion anchor: the legacy fn
 // name, the Go method name the unit renders, and the fn's source span —
 // the side-table the convert seam reads for KindFnHelper units.
@@ -362,6 +383,13 @@ func Build(opts Options) (*Plan, error) {
 	for _, fn := range opts.Main.ExternalFns {
 		if strings.HasPrefix(fn.Name, "chk_") {
 			p.Dropped = append(p.Dropped, fn.Name+" (session/error plumbing — middleware owns it, §4.8.4.1)")
+			continue
+		}
+		if role := txHelperRole(fn.Name); role != "" {
+			// Utility helpers route through the ExecTransaction template
+			// (convert's txtemplate pass rewrites their call sites), so a
+			// stub would only invite the model to call the legacy name.
+			p.Dropped = append(p.Dropped, fn.Name+" (transaction "+role+" plumbing — utils.ExecTransaction owns begin/commit/rollback)")
 			continue
 		}
 		switch {

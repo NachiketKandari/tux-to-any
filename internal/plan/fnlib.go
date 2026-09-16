@@ -202,6 +202,10 @@ func BuildFnLib(opts Options) (*Plan, error) {
 			p.Dropped = append(p.Dropped, fn.Name+" (session/error plumbing — middleware owns it, §4.8.4.1)")
 			continue
 		}
+		if role := txHelperRole(fn.Name); role != "" {
+			p.Dropped = append(p.Dropped, fn.Name+" (transaction "+role+" plumbing — utils.ExecTransaction owns begin/commit/rollback)")
+			continue
+		}
 		b := Stub{Fn: fn.Name, Reason: "defining file not provided — converted as a panicking stub; implement before relying on the calling helpers"}
 		for _, h := range p.FnHelpers {
 			span := [2]int{h.StartLine, h.EndLine}

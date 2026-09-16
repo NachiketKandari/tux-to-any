@@ -754,14 +754,20 @@ func TestScenarioTxAbortsCensus(t *testing.T) {
 }
 
 // TestScenarioSourceElidesTxPlumbing pins the slice-level elision: standalone
-// begin/commit/abort call lines drop from the scenario text (the wrapper owns
-// begin/commit/rollback), SQL regions still map, and non-plumbing lines stay.
+// abort/rollback call lines drop from the scenario text (the wrapper owns
+// rollback), while begin/commit lines stay — the convert view pass rewrites
+// them into the utils.ExecTransaction template — and SQL regions still map.
 func TestScenarioSourceElidesTxPlumbing(t *testing.T) {
 	sc, tree := txScenario(t, "A")
 	src, spans := ScenarioSource(sc, tree, []byte(txPairsSrc))
-	for _, bad := range []string{"fn_equ_begintran", "fn_equ_committran", "fn_equ_aborttran", "tpbegin", "tpcommit"} {
+	for _, bad := range []string{"fn_equ_aborttran", "tpabort"} {
 		if strings.Contains(src, bad) {
 			t.Errorf("scenario source still contains %q\n%s", bad, src)
+		}
+	}
+	for _, kept := range []string{"fn_equ_begintran", "fn_equ_committran", "tpbegin", "tpcommit"} {
+		if !strings.Contains(src, kept) {
+			t.Errorf("scenario source lost tx template anchor %q\n%s", kept, src)
 		}
 	}
 	// Scenario A folds the P-branch away — the B-update's branch is

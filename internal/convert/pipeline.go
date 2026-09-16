@@ -483,6 +483,23 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		telemetry.Log(ctx).Info("legacy seams rewritten",
 			"unit", u.Name, "fml_gets", seams.Gets, "err_legs", seams.ErrAdds, "chk_sssn", seams.Ssn)
 	}
+	// Transaction template: the legacy fn_*tran/tp* begin/commit calls are
+	// the two ends of the Go utils.ExecTransaction wrapper — the view
+	// carries the template lines verbatim so the model copies the accepted
+	// shape (and `tx` is defined) instead of calling the stubs.
+	if txed, n := rewriteTxTemplate(view.Source); n > 0 {
+		view.Source = txed
+		telemetry.Log(ctx).Info("transaction template applied", "unit", u.Name, "sites", n)
+	}
+	// FML probe elision: the INIT/i_ferr/Ferror32 arrays and the
+	// i_err[i_loop]/FNOTPRES checks are dead once the unpack reads became
+	// direct request reads — models copy them verbatim (undefined C name
+	// rejects). The pass keeps each FNOTPRES fallback as a Go presence
+	// guard and drops the unpack-error plumbing.
+	if probed, elided := stripFMLProbes(view.Source); elided > 0 {
+		view.Source = probed
+		telemetry.Log(ctx).Info("fml probe scaffolding elided", "unit", u.Name, "lines", elided)
+	}
 	// Session-arg scrub (micro-chunk step 3): unresolved-fn calls keep the
 	// middleware-owned session/buffer args in the view, and the model
 	// copies them into outputs the gate rejects (undefined C names). The
@@ -925,7 +942,7 @@ func scenPromptOf(sc *flow.Scenario, diff *flow.ScenarioDiff) *scenPrompt {
 	}
 	if len(txIDs) > 0 {
 		for _, s := range sc.TxSpans {
-			p.TxNotes = append(p.TxNotes, fmt.Sprintf("legacy tx span %d→%d (%s) — the wrapper owns begin/commit; the standalone tx call lines are elided from the slice", s.BeginLine, s.CommitLine, txKindName(s.Kind)))
+			p.TxNotes = append(p.TxNotes, fmt.Sprintf("legacy tx span %d→%d (%s) — the view carries the utils.ExecTransaction open/close template; the wrapper owns begin/commit", s.BeginLine, s.CommitLine, txKindName(s.Kind)))
 		}
 		p.TxNotes = append(p.TxNotes,
 			fmt.Sprintf("DML queries %s ride those transactions and their store calls take tx — wrap each call in utils.ExecTransaction(c, s.store.GetDB(), func(tx *sqlx.Tx) error { ...; return nil }); the wrapper owns begin/commit/rollback",

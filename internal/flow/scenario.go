@@ -2182,17 +2182,19 @@ func (sc *Scenario) BodyExtent() [2]int {
 // the replacement coordinates budget.ReplaceQueries consumes. A query's
 // region merges every kept SQL node carrying its id (flattened cursors
 // replace DECLARE..CLOSE as one unit, matching the whole-file path).
-// Standalone tx plumbing call lines (begin/commit/abort — SCEN-D8, the
-// wrapper owns them) elide from the text.
+// Standalone abort/rollback call lines (SCEN-D8, the wrapper owns
+// rollback) elide from the text; begin/commit lines stay — the convert
+// view pass replaces them with the utils.ExecTransaction template.
 func ScenarioSource(sc *Scenario, tree *Tree, src []byte) (string, map[string][2]int) {
 	kept := keptLineSet(sc, tree)
-	// Tx plumbing (begin/commit/abort call statements) elides from the
-	// slice — utils.ExecTransaction owns begin/commit/rollback, and the
-	// prompt's TxNotes say so; guard-form calls stay (see
+	// Abort/rollback tx plumbing call statements elide from the slice —
+	// utils.ExecTransaction owns rollback, and the prompt's TxNotes say so.
+	// Begin/commit call lines stay: the convert pass rewrites them into the
+	// wrapper's open/close template lines (guard-form commits stay too; see
 	// lineIsTxPlumbingCall). SQL regions never anchor on a plumbing line.
-	plumbing := map[int]string{}
+	plumbing := map[int]txSite{}
 	for _, s := range txSites(sc, tree) {
-		plumbing[s.line] = s.name
+		plumbing[s.line] = s
 	}
 	var out []int
 	seen := map[int]bool{}
@@ -2219,7 +2221,7 @@ func ScenarioSource(sc *Scenario, tree *Tree, src []byte) (string, map[string][2
 		if l < 1 || l > len(lines) {
 			continue
 		}
-		if name := plumbing[l]; name != "" && lineIsTxPlumbingCall(string(lines[l-1]), name) {
+		if s, ok := plumbing[l]; ok && s.role == "abort" && lineIsTxPlumbingCall(string(lines[l-1]), s.name) {
 			continue
 		}
 		idx[l] = len(text) + 1

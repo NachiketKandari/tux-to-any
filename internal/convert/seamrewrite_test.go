@@ -249,6 +249,58 @@ func TestStripSessionArgs(t *testing.T) {
 	}
 }
 
+// TestRewriteLegacySeamsDeadSessionGuard pins the dead-guard elision: the
+// neutralized chk_sssn check leaves `x = 0;` plus its `if (x == -1)` guard,
+// and both drop once no other line reads the temp.
+func TestRewriteLegacySeamsDeadSessionGuard(t *testing.T) {
+	view := "long l_sssn_id_chk;\n" +
+		"l_sssn_id_chk      = 0;\n" +
+		"gi_lssn_id = chk_sssn(c_ServiceName,(char *)c_user_id, l_sssn_id,(char *)c_errmsg);\n" +
+		"if(gi_lssn_id == -1)\n" +
+		"{\n" +
+		"  err = fmt.Errorf(\"%s\", c_errmsg);\n" +
+		"  strcpy(c_errmsg,\"Session Timed Out\");\n" +
+		"  tpreturn(TPFAIL,0L, (char *)ptr_fml_Ibuffer, 0L, 0);\n" +
+		"}\n" +
+		"s.store.GetDetail(c)\n"
+	got, c, _ := rewriteLegacySeams(view, map[string]string{})
+	if c.Ssn != 1 {
+		t.Fatalf("chk_sssn count = %d, want 1", c.Ssn)
+	}
+	for _, gone := range []string{"chk_sssn", "gi_lssn_id", "Session Timed Out", "tpreturn", "c_errmsg"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("dead session guard residue %q survived:\n%s", gone, got)
+		}
+	}
+	if !strings.Contains(got, "s.store.GetDetail(c)") {
+		t.Errorf("live line dropped:\n%s", got)
+	}
+}
+
+// TestRewriteLegacySeamsDeadSessionGuardKept pins the conservative branch:
+// a later real read of the temp keeps its assignment (only the guard drops).
+func TestRewriteLegacySeamsDeadSessionGuardKept(t *testing.T) {
+	view := "gi_lssn_id = chk_sssn(c_ServiceName, c_user_id, l_sssn_id, c_errmsg);\n" +
+		"if(gi_lssn_id == -1)\n" +
+		"{\n" +
+		"  err = errors.New(\"Session Timed Out\");\n" +
+		"}\n" +
+		"if(gi_lssn_id == 0) { s.store.GetDetail(c) }\n"
+	got, c, _ := rewriteLegacySeams(view, map[string]string{})
+	if c.Ssn != 1 {
+		t.Fatalf("chk_sssn count = %d, want 1", c.Ssn)
+	}
+	if !strings.Contains(got, "gi_lssn_id = 0;") {
+		t.Errorf("kept assignment missing:\n%s", got)
+	}
+	if !strings.Contains(got, "if(gi_lssn_id == 0) { s.store.GetDetail(c) }") {
+		t.Errorf("real use dropped:\n%s", got)
+	}
+	if strings.Contains(got, "Session Timed Out") {
+		t.Errorf("dead guard body survived:\n%s", got)
+	}
+}
+
 // TestRewriteLegacySeamsFullView pins the whole-view pass on a realistic
 // prologue slice: unpack → request reads, error legs → Errorf, session
 // check → 0, and every intent line (store calls, branches, response adds)

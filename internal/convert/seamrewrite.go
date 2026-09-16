@@ -71,7 +71,9 @@ func rewriteLegacySeams(src string, reqMap map[string]string) (string, seamCount
 	var c seamCounts
 	changed := false
 	pendingCode := ""
-	for _, line := range strings.Split(src, "\n") {
+	lines := strings.Split(src, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		if errlogLineRe.MatchString(line) {
 			if m := errlogErrCodeRe.FindStringSubmatch(line); m != nil {
 				pendingCode = m[1]
@@ -83,6 +85,26 @@ func rewriteLegacySeams(src string, reqMap map[string]string) (string, seamCount
 		// The S-code window is the adjacent line only: the corpus pairs
 		// errlog directly with its consuming Fadd32 error leg.
 		pendingCode = ""
+		if kind == seamSsn {
+			c.Ssn++
+			changed = true
+			// The neutralized check (`x = 0;`) turns its `if (x == -1)`
+			// guard provably dead: drop the guard block, and the dead
+			// assignment too when nothing else reads the temp.
+			if target := seamSsnTarget(line); target != "" {
+				if end, ok := deadSessionGuard(lines, i+1, target); ok {
+					if !identUsedElsewhere(lines, target, i, end) {
+						i = end - 1
+						continue
+					}
+					out = append(out, rewritten)
+					i = end - 1
+					continue
+				}
+			}
+			out = append(out, rewritten)
+			continue
+		}
 		switch kind {
 		case seamGet:
 			c.Gets++
@@ -90,13 +112,69 @@ func rewriteLegacySeams(src string, reqMap map[string]string) (string, seamCount
 		case seamErrAdd:
 			c.ErrAdds++
 			changed = true
-		case seamSsn:
-			c.Ssn++
-			changed = true
 		}
 		out = append(out, rewritten)
 	}
 	return strings.Join(out, "\n"), c, changed
+}
+
+// seamSsnTarget extracts the assignment target of a `target = chk_sssn(...)`
+// line ("" for any other shape).
+func seamSsnTarget(line string) string {
+	i := strings.Index(line, "chk_sssn(")
+	if i < 0 {
+		return ""
+	}
+	eq := assignmentEq(line, i)
+	if eq < 0 {
+		return ""
+	}
+	target := strings.TrimSpace(line[:eq])
+	if !isPlainIdent(target) {
+		return ""
+	}
+	return target
+}
+
+// deadSessionGuard finds the provably-dead `if (target == -1) { ... }`
+// block a neutralized session check leaves behind, starting at line start
+// (blank lines skipped). Returns the index just past the block.
+func deadSessionGuard(lines []string, start int, target string) (int, bool) {
+	re := regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*if\s*\(\s*` + regexp.QuoteMeta(target) + `\s*==\s*-1\s*\)`)
+	j := start
+	for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
+		j++
+	}
+	if j >= len(lines) || !re.MatchString(lines[j]) {
+		return 0, false
+	}
+	_, end, ok := braceBlockLines(lines, j)
+	if !ok {
+		return 0, false
+	}
+	return end, true
+}
+
+// identUsedElsewhere reports whether ident has a real use outside lines
+// [skipFrom, skipTo): plain declarations and `= 0` initializations are
+// bookkeeping, not reads.
+func identUsedElsewhere(lines []string, ident string, skipFrom, skipTo int) bool {
+	use := regexp.MustCompile(`\b` + regexp.QuoteMeta(ident) + `\b`)
+	bookkeeping := regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*(?:(?:int|long|short|char|float|double|unsigned)\b[^=]*\b` +
+		regexp.QuoteMeta(ident) + `\b|` + regexp.QuoteMeta(ident) + `\s*=\s*0\s*;)`)
+	for i, ln := range lines {
+		if i >= skipFrom && i < skipTo {
+			continue
+		}
+		if !use.MatchString(ln) {
+			continue
+		}
+		if bookkeeping.MatchString(ln) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 type seamKind int
