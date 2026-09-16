@@ -144,6 +144,30 @@ func TestStripLeadingArmChain(t *testing.T) {
 	}
 }
 
+// TestUncapturedStoreErrs pins the stale-err gate: bare store-call
+// statements reject; assignments and inline error tests pass.
+func TestUncapturedStoreErrs(t *testing.T) {
+	bad := "s.store.UpdateRiskProfile(c, tx, request.MatchAccnt, request.UsrAddrss2Stte)\n" +
+		"if err != nil {\n\treturn nil, err\n}\n" +
+		"return data, nil\n"
+	errs := uncapturedStoreErrs(bad, "s.store.")
+	if len(errs) != 1 || !strings.Contains(errs[0], "discarded") {
+		t.Fatalf("uncapturedStoreErrs = %v, want one discard note", errs)
+	}
+	good := []string{
+		"err = s.store.UpdateRiskProfile(c, tx, request.MatchAccnt, request.UsrAddrss2Stte)\nif err != nil {\n\treturn nil, err\n}\nreturn data, nil",
+		"rows, err := s.store.GetRiskProfile(c)\nif err != nil {\n\treturn nil, err\n}\n_ = rows\nreturn data, nil",
+		"if err := s.store.UpdateRiskProfile(c, tx, request.MatchAccnt, request.UsrAddrss2Stte); err != nil {\n\treturn nil, err\n}\nreturn data, nil",
+		"fnIsD2uActive(lsMatchAcc, &cD2uActiveFlg)\nreturn data, nil",
+		"err = utils.ExecTransaction(c, s.store.GetDB(), func(tx *sqlx.Tx) error {\n\treturn nil\n})\nreturn data, err",
+	}
+	for _, body := range good {
+		if errs := uncapturedStoreErrs(body, "s.store."); len(errs) != 0 {
+			t.Errorf("captured body flagged: %v\n%s", errs, body)
+		}
+	}
+}
+
 // TestTerminatingReturnErr pins the fall-off-the-end gate: named results do
 // not make an implicit return legal.
 func TestTerminatingReturnErr(t *testing.T) {

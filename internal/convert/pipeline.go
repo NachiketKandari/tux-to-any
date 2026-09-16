@@ -1480,6 +1480,7 @@ func validateBody(opts Options, body string) []string {
 	errs := nonConstFormatErrs(body)
 	errs = append(errs, runeLiteralErrs(body)...)
 	errs = append(errs, undeclaredIdentErrs(body, stubNames(opts))...)
+	errs = append(errs, uncapturedStoreErrs(body, receiverOf(opts))...)
 	return append(errs, unusedLocalErrs(body)...)
 }
 

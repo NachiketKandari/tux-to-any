@@ -318,6 +318,56 @@ func identAllowed(name string, allow map[string]bool) bool {
 	return false
 }
 
+// uncapturedStoreErrs rejects store calls whose result is discarded: the
+// model's bare-call shape (`s.store.UpdateRiskProfile(c, tx, …)`) drops the
+// returned error, and the `if err != nil` that follows then checks a stale
+// err — a real logic drop Tier A cannot see. Accepted bodies assign or test
+// the result (`err = s.store.X(…)`, `rows, err := s.store.X(…)`,
+// `if err := s.store.X(…); err != nil`).
+func uncapturedStoreErrs(body, receiver string) []string {
+	if receiver == "" {
+		return nil
+	}
+	fset, block, offset, ok := parseBodyWrapped(body)
+	if !ok {
+		return nil
+	}
+	recv := strings.TrimSuffix(receiver, ".")
+	var errs []string
+	ast.Inspect(block, func(n ast.Node) bool {
+		es, isStmt := n.(*ast.ExprStmt)
+		if !isStmt {
+			return true
+		}
+		call, isCall := es.X.(*ast.CallExpr)
+		if !isCall {
+			return true
+		}
+		sel, isSel := call.Fun.(*ast.SelectorExpr)
+		if !isSel || selectorBase(sel.X) != recv {
+			return true
+		}
+		errs = append(errs, fmt.Sprintf("line %d: store call result discarded — capture it and check the error (rows, err := %s.%s(…) / err = %s.%s(…))",
+			fset.Position(es.Pos()).Line-offset, recv, sel.Sel.Name, recv, sel.Sel.Name))
+		return true
+	})
+	return errs
+}
+
+// selectorBase renders a selector chain's receiver (`s.store` for
+// `s.store.GetDB`); "" for anything else.
+func selectorBase(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.SelectorExpr:
+		if base := selectorBase(x.X); base != "" {
+			return base + "." + x.Sel.Name
+		}
+	}
+	return ""
+}
+
 // stubNames lists the fn-stub helper functions the generated package
 // declares (fnstubs.go): bodies may call them, the wrap cannot resolve them.
 func stubNames(opts Options) map[string]bool {

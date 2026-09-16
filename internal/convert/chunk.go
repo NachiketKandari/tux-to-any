@@ -604,6 +604,7 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 			Extract: cleanBody,
 			Gate: func(body string) []string {
 				verr := validateFragment(body)
+				verr = append(verr, uncapturedStoreErrs(body, receiver)...)
 				verr = append(verr, requiredCallErrs(chunkText, body, receiver)...)
 				return append(verr, controllerTuxedoErrs(body)...)
 			},
