@@ -148,8 +148,14 @@ func fixRuneLiterals(body string) string {
 		case *ast.IndexExpr:
 			markCharLits(x.Index, unsafePos)
 		case *ast.SliceExpr:
-			markCharLits(x.Low, unsafePos)
-			markCharLits(x.High, unsafePos)
+			// Missing bounds are legal Go (s[i:], s[:n], s[:]) and their
+			// AST fields are nil — Inspect(nil) panics.
+			if x.Low != nil {
+				markCharLits(x.Low, unsafePos)
+			}
+			if x.High != nil {
+				markCharLits(x.High, unsafePos)
+			}
 		}
 		return true
 	})
@@ -193,6 +199,9 @@ func isArithOp(op token.Token) bool {
 
 // markCharLits records every rune literal inside n as unsafe to rewrite.
 func markCharLits(n ast.Node, mark map[token.Pos]bool) {
+	if n == nil {
+		return
+	}
 	ast.Inspect(n, func(n ast.Node) bool {
 		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.CHAR {
 			mark[lit.Pos()] = true

@@ -77,6 +77,28 @@ func TestFixRuneLiterals(t *testing.T) {
 	}
 }
 
+// TestFixRuneLiteralsSliceBounds pins the crash fix: missing slice bounds
+// (s[i:], s[:n], s[:]) leave nil AST fields, and the unsafe-marking walk
+// must not Inspect them (ast.Inspect(nil) panics).
+func TestFixRuneLiteralsSliceBounds(t *testing.T) {
+	for _, body := range []string{
+		"b := s[:3]\nreturn b, nil",
+		"b := s[2:]\nreturn b, nil",
+		"b := s[:]\nreturn b, nil",
+		"b := s[1:2:3]\nreturn b, nil",
+		"if arr[0] == 'Y' {\n\tb := s[:1]\n\t_ = b\n}\nreturn data, nil",
+	} {
+		got := fixRuneLiterals(body)
+		if got == "" {
+			t.Errorf("fixRuneLiterals returned empty for %q", body)
+		}
+	}
+	// The rune fix still applies next to a slice expression.
+	if got := fixRuneLiterals("flg := 'Y'\nb := s[:1]\n_ = b\nreturn flg, nil"); !strings.Contains(got, `flg := "Y"`) {
+		t.Errorf("rune fix lost with slice present: %q", got)
+	}
+}
+
 // TestTerminatingReturnErr pins the fall-off-the-end gate: named results do
 // not make an implicit return legal.
 func TestTerminatingReturnErr(t *testing.T) {
