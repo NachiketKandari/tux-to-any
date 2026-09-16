@@ -96,3 +96,25 @@ go run ./cmd/tuxconv retrystats conversion_logs/audit/<roll-id> conversion_logs/
 Raw evidence: `conversion_logs/audit/<run-id>/<kind>-<name>-attempt<N>.json`
 (prompt, response, errors, `retry_repair`, token usage) and
 `conversion_logs/logs/run-<run-id>.log`.
+
+## Post-fix re-roll (deterministic reject classes, 2026-09-17)
+
+W1–W3 removed the mechanical reject classes (phantom `result` loop target,
+`errlog` S-code legs referencing stripped buffers, session args on
+unresolved-fn calls — see `docs/rejection-reduction-plan.md`). Same target,
+profile, and clean procedure; two roll runs.
+
+| Run | First-try | Attempts | Tokens | Accepted |
+|---|---|---|---|---|
+| 17092026_024148 | 5/6 | 8 | 30,790 | 6/6 |
+| 17092026_024335 | 5/6 | 7 | 23,406 | 6/6 |
+
+- Zero `undefined identifier` for `c_errmsg`, `c_ServiceName`, `result`,
+  `rows` in either run (census over the audit Exchanges); rune-literal and
+  required-call classes also zero.
+- Remaining rejects: model-invented locals (`dateRange`, `cEnableD2uFlg`,
+  `i_cnt_d2us`), one unused local, and one leading branch header
+  (`c_flag`) that co-occurred with an undeclared `dateRange` — the W4
+  repair alone would not have recovered that body.
+- Attempts now sit at the best pre-fix baseline (7–8 vs 7–12) with tokens
+  down ~30% (23–31k vs 34–47k).
