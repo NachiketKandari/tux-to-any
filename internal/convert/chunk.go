@@ -483,53 +483,7 @@ func buildChunkPrompt(cx chunkCtx, k, n int, chunkText, dbContract, contract str
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Endpoint: %s\n\n", cx.unit.Name)
 	fmt.Fprintf(&sb, "Fragment %d of %d of one controller body (template owns the wrapper + START/END logs). Convert this flattened logic to Go: emit ONLY this fragment's statements (code only, no fences) — no wrapper, no package lines, no other fragments, no closing `}` for the method.\n\n", k+1, n)
-	if cx.scen != nil {
-		fmt.Fprintf(&sb, "Scenario slice: %s — contradicted branches already folded away, implement exactly what remains. Legacy declarations (int counters, EXEC SQL INCLUDE headers) are context only.\n\n", cx.scen.Key)
-	}
-	sb.WriteString("DB layer contract (call these; never write SQL):\n" + dbContract + "\n\n")
-	if calls := requiredCalls(chunkText, "s.store."); len(calls) > 0 {
-		sb.WriteString("REQUIRED CALLS — every one must appear in your statements, under the same condition the fragment shows: " +
-			strings.Join(calls, ", ") + "\n\n")
-	}
-	if cx.scen != nil && k == 0 && len(cx.scen.Shared) > 0 {
-		for _, s := range cx.scen.Shared {
-			sb.WriteString("Shared blocks — " + s + "\n")
-		}
-		sb.WriteString("\n")
-	}
-	if cx.scen != nil && len(cx.scen.TxNotes) > 0 {
-		sb.WriteString("Transaction facts (preserve the transaction shape):\n")
-		for _, tn := range cx.scen.TxNotes {
-			sb.WriteString("  - " + tn + "\n")
-		}
-		sb.WriteString("\n")
-	}
-	if len(constants) > 0 {
-		sb.WriteString("Legacy constants (use literal values directly):\n")
-		for _, cst := range constants {
-			sb.WriteString("  - " + cst + "\n")
-		}
-		sb.WriteString("\n")
-	}
-	if len(errCodes) > 0 {
-		sb.WriteString("Legacy error codes (retain in returned error text): " +
-			strings.Join(errCodes, ", ") + "\n\n")
-	}
-	if len(helpers) > 0 {
-		sb.WriteString("Legacy helpers in the fragment — never substitute one fn's symbol for another:\n")
-		for _, h := range helpers {
-			sb.WriteString("  - " + h + "\n")
-		}
-		sb.WriteString("\n")
-	}
-	if len(stubs) > 0 {
-		sb.WriteString("Stubbed helpers (generated package-level stubs, variadic args, int return): call the RIGHT stub per legacy fn, passing only declared identifiers (declare zero-value locals for C-only names; out-pointers become &local):\n")
-		for _, st := range stubs {
-			fmt.Fprintf(&sb, "  - %s(...) → %s(args ...any) int\n", st.Fn, common.CamelLowerGo(st.Fn))
-		}
-		sb.WriteString("\n")
-	}
-	sb.WriteString("Signature + structs (exact names; types noted once):\n" + contract + "\n\n")
+	writePromptFacts(&sb, fragmentWording, cx.scen, k == 0, chunkText, "s.store.", dbContract, contract, helpers, constants, errCodes, stubs)
 	if k > 0 && len(locals) > 0 {
 		sb.WriteString("Locals already declared by earlier fragments — never redeclare, reuse them: " +
 			strings.Join(locals, ", ") + "\n\n")
@@ -736,19 +690,7 @@ func buildComposerPrompt(cx chunkCtx, contract, dbContract string, bodies []stri
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Endpoint: %s\n\n", cx.unit.Name)
 	fmt.Fprintf(&sb, "Stitch %d fragment outputs into ONE controller method body (template owns the wrapper + START/END logs). The fragments already translate the flattened logic (SQL already replaced) — merge them, code only.\n\n", len(bodies))
-	sb.WriteString("DB layer contract (call these; never write SQL):\n" + dbContract + "\n\n")
-	if calls := requiredCalls(cx.view.Source, receiverOf(cx.opts)); len(calls) > 0 {
-		sb.WriteString("REQUIRED CALLS — every one must appear in the merged body, under the same condition its fragment shows: " +
-			strings.Join(calls, ", ") + "\n\n")
-	}
-	if cx.scen != nil && len(cx.scen.TxNotes) > 0 {
-		sb.WriteString("Transaction facts (preserve the transaction shape):\n")
-		for _, tn := range cx.scen.TxNotes {
-			sb.WriteString("  - " + tn + "\n")
-		}
-		sb.WriteString("\n")
-	}
-	sb.WriteString("Signature + structs (exact names; types noted once):\n" + contract + "\n\n")
+	writePromptFacts(&sb, composerWording, cx.scen, false, cx.view.Source, receiverOf(cx.opts), dbContract, contract, nil, nil, nil, nil)
 	for i, b := range bodies {
 		fmt.Fprintf(&sb, "Fragment output %d of %d:\n%s\n\n", i+1, len(bodies), b)
 	}

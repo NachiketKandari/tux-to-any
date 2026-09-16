@@ -706,7 +706,7 @@ func buildFnPrompt(goName, structName, view, dbContract, rowContracts string, er
 	fmt.Fprintf(&sb, "Legacy helper function — emit the complete Go method (s *%s) %s.\n\n", structName, goName)
 	sb.WriteString("Legacy function, with every SQL block already replaced by its store call:\n\n" + view + "\n\n")
 	if dbContract != "" {
-		sb.WriteString("DB layer contract (call these; never write SQL):\n" + dbContract + "\n\n")
+		writeDBContract(&sb, dbContract)
 	}
 	if rowContracts != "" {
 		sb.WriteString("Row struct definitions the store calls return — copy field names character-exact, never invent fields; a sql.NullString reads through its .String FIELD (no parentheses: row.X.String):\n" + rowContracts + "\n\n")
@@ -721,9 +721,7 @@ func buildFnPrompt(goName, structName, view, dbContract, rowContracts string, er
 	}
 	if len(stubs) > 0 {
 		sb.WriteString("Stubbed helpers — legacy fns with no source in the corpus. Each has a generated package-level stub (variadic args, int return, panics at runtime); call the RIGHT stub for each legacy fn and pass only identifiers your method declares (declare zero-value locals for C-only names; out-pointers become &local):\n")
-		for _, st := range stubs {
-			fmt.Fprintf(&sb, "  - %s(...) → %s(args ...any) int\n", st.Fn, common.CamelLowerGo(st.Fn))
-		}
+		writeStubEntries(&sb, stubs)
 		sb.WriteString("\n")
 	}
 	return sb.String()
@@ -1044,55 +1042,7 @@ func legacyHelpers(p *plan.Plan, view string) []string {
 func buildPrompt(view budget.View, dbContract, contract, endpoint, draft string, stubs []plan.Stub, helpers, constants, errCodes []string, scen *scenPrompt) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Endpoint: %s\n\n", endpoint)
-	if scen != nil {
-		fmt.Fprintf(&sb, "Scenario slice: %s — contradicted branches already folded away, implement exactly what remains. Legacy declarations in the leading region (int counters, EXEC SQL INCLUDE headers) are context only.\n\n", scen.Key)
-	}
-	sb.WriteString("DB layer contract (call these; never write SQL):\n" + dbContract + "\n\n")
-	if calls := requiredCalls(view.Source, "s.store."); len(calls) > 0 {
-		sb.WriteString("REQUIRED CALLS — every one must appear in the body, under the same condition the view shows: " +
-			strings.Join(calls, ", ") + "\n\n")
-	}
-	if scen != nil {
-		for _, s := range scen.Shared {
-			sb.WriteString("Shared blocks — " + s + "\n")
-		}
-		if len(scen.Shared) > 0 {
-			sb.WriteString("\n")
-		}
-		if len(scen.TxNotes) > 0 {
-			sb.WriteString("Transaction facts (preserve the transaction shape):\n")
-			for _, n := range scen.TxNotes {
-				sb.WriteString("  - " + n + "\n")
-			}
-			sb.WriteString("\n")
-		}
-	}
-	if len(constants) > 0 {
-		sb.WriteString("Legacy constants (use literal values directly):\n")
-		for _, k := range constants {
-			sb.WriteString("  - " + k + "\n")
-		}
-		sb.WriteString("\n")
-	}
-	if len(errCodes) > 0 {
-		sb.WriteString("Legacy error codes (retain in returned error text): " +
-			strings.Join(errCodes, ", ") + "\n\n")
-	}
-	if len(helpers) > 0 {
-		sb.WriteString("Legacy helpers in the view — never substitute one fn's symbol for another:\n")
-		for _, h := range helpers {
-			sb.WriteString("  - " + h + "\n")
-		}
-		sb.WriteString("\n")
-	}
-	if len(stubs) > 0 {
-		sb.WriteString("Stubbed helpers (generated package-level stubs, variadic args, int return): call the RIGHT stub per legacy fn, passing only declared identifiers (declare zero-value locals for C-only names; out-pointers become &local):\n")
-		for _, st := range stubs {
-			fmt.Fprintf(&sb, "  - %s(...) → %s(args ...any) int\n", st.Fn, common.CamelLowerGo(st.Fn))
-		}
-		sb.WriteString("\n")
-	}
-	sb.WriteString("Signature + structs (exact names; types noted once):\n" + contract + "\n\n")
+	writePromptFacts(&sb, viewWording, scen, true, view.Source, "s.store.", dbContract, contract, helpers, constants, errCodes, stubs)
 	sb.WriteString("Legacy branch (SQL already replaced by store calls):\n\n" + view.Source + "\n")
 	if draft != "" {
 		sb.WriteString("\nDeterministic flow draft (parsed from the control flow — verify it, fix field mappings, keep the flow and every store call):\n" + draft + "\n")

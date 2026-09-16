@@ -509,6 +509,40 @@ func TestBuildPromptLegacyFacts(t *testing.T) {
 	}
 }
 
+// TestPromptFactsShared pins the extraction: the chunk and whole-view
+// builders must emit the identical fact sections (DB contract, constants,
+// error codes, stubs, signature) — only the stance words differ.
+func TestPromptFactsShared(t *testing.T) {
+	view := budget.View{Source: "s.store.GetNavHistory(c)\n"}
+	stubs := []plan.Stub{{Fn: "fn_long_to_int"}}
+	helpers := []string{"fn_is_demo_active(...) → s.store.IsDemoActive(...)"}
+	constants := []string{"BUF_LEN = 6144"}
+	codes := []string{"S31005"}
+
+	whole := buildPrompt(view, "db contract", "struct contract", "NavHistory", "", stubs, helpers, constants, codes, nil)
+	chunk := buildChunkPrompt(chunkCtx{unit: plan.Unit{Name: "NavHistory"}}, 0, 1, view.Source,
+		"db contract", "struct contract", helpers, constants, codes, stubs, nil)
+
+	for _, block := range []string{
+		"DB layer contract (call these; never write SQL):\ndb contract\n\n",
+		"Legacy constants (use literal values directly):\n  - BUF_LEN = 6144\n\n",
+		"Legacy error codes (retain in returned error text): S31005\n\n",
+		"Stubbed helpers (generated package-level stubs, variadic args, int return): call the RIGHT stub per legacy fn, passing only declared identifiers (declare zero-value locals for C-only names; out-pointers become &local):\n  - fn_long_to_int(...) → fnLongToInt(args ...any) int\n\n",
+		"Signature + structs (exact names; types noted once):\nstruct contract\n\n",
+	} {
+		if !strings.Contains(whole, block) {
+			t.Errorf("whole-view prompt missing shared block %q:\n%s", block, whole)
+		}
+		if !strings.Contains(chunk, block) {
+			t.Errorf("fragment prompt missing shared block %q:\n%s", block, chunk)
+		}
+	}
+	if !strings.Contains(whole, "Legacy helpers in the view — never substitute") ||
+		!strings.Contains(chunk, "Legacy helpers in the fragment — never substitute") {
+		t.Error("fragment/view scoping wording lost")
+	}
+}
+
 const scenarioViewSrc = `void SVC_SV(TPSVCINFO *rqst) {
 	char trn_cd;
 	if (Fget32(ibuf, FML_TRANS_CD, 0, (char *)sql_trn_cd.arr, 0) == -1) {
