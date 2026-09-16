@@ -28,7 +28,7 @@ func fillServiceBody(ctx context.Context, opts Options) (body string, calls int,
 		Unit: p.Module, Kind: "batchpy", Name: p.ClassName,
 		Audit: opts.Audit, Client: opts.Client, Budget: opts.Budget, MaxRetries: opts.MaxRetries,
 		AbortOnChatError: true,
-		Prompt: func(notes []string) (string, []llm.Message) {
+		Prompt: func(_ string, notes []string) (string, []llm.Message) {
 			prompt := userPrompt(p, opts, notes)
 			return prompt, []llm.Message{
 				{Role: "system", Content: systemPrompt(p)},

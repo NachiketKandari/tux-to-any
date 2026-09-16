@@ -59,6 +59,7 @@ func main() {
 		"convertbatchpy": runBatchpy,
 		"analyze":        runAnalyze,
 		"gentest":        runGentest,
+		"retrystats":     runRetryStats,
 	}
 	run, ok := commands[rest[0]]
 	switch {
@@ -202,6 +203,9 @@ Available Commands:
                analyze folder "a.pc, b.pc" / a b c, or a .txt file list)
   gentest      Generate db/controller/handler Go tests for a converted service
                tree (-check-only reports the gap; -no-llm template-deterministic)
+  retrystats   Compare the retry behaviour of one or two audit runs (attempts,
+               outcomes, tokens per unit) — the retry methodology A/B read-out:
+               retrystats conversion_logs/audit/<runA> [<runB>]
   version      Print version information
 
 `)

@@ -23,6 +23,10 @@ type Exchange struct {
 	Response string   `json:"response"`
 	Errors   []string `json:"errors,omitempty"` // gate/validation errors fed back into the next attempt
 	Outcome  string   `json:"outcome"`          // ok | failed
+	// RetryRepair marks the seam's retry methodology: true = rejected
+	// attempts rode back as an assistant turn (patch-in-place), false =
+	// fresh regeneration. Lets tuxconv retrystats compare A/B audit runs.
+	RetryRepair bool `json:"retry_repair,omitempty"`
 	// FinishReason is the provider's finish_reason for this attempt
 	// ("stop", "length", …). Anything but "stop"/"" means the payload may
 	// be cut mid-statement — the audit trail must say so (engine-wiring

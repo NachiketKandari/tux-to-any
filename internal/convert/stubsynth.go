@@ -82,10 +82,10 @@ func synthesizeStubs(ctx context.Context, opts Options, res *Result) (map[string
 		prompt := buildStubPrompt(ev)
 		accepted, calls, notes, err := llm.RunSeam(ctx, llm.SeamInput{
 			Unit: "fnstub", Kind: "fn_stub_synth", Name: ev.goName,
-			Template: "fn_stub_file", LLM: true,
+			Template: "fn_stub_file", LLM: true, Repair: opts.RetryRepair,
 			Audit: opts.Audit, Client: opts.Client, Budget: opts.Budget, MaxRetries: 0,
 			Temperature: 0.1,
-			Prompt: func(attemptNotes []string) (string, []llm.Message) {
+			Prompt: func(_ string, attemptNotes []string) (string, []llm.Message) {
 				msgs := []llm.Message{
 					{Role: "system", Content: stubSynthSystem},
 					{Role: "user", Content: prompt},

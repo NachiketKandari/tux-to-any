@@ -27,7 +27,7 @@ func fillArmBody(ctx context.Context, opts Options, p *csplan.Plan, ep EpData, s
 		Template: string(templates.CsServiceFile), LLM: true,
 		Audit: opts.Audit, Client: opts.Client, Budget: opts.Budget, MaxRetries: opts.MaxRetries,
 		AbortOnChatError: true,
-		Prompt: func(notes []string) (string, []llm.Message) {
+		Prompt: func(_ string, notes []string) (string, []llm.Message) {
 			prompt := userPrompt(p, ep, svc, opts.Source, notes)
 			return prompt, []llm.Message{
 				{Role: "system", Content: systemPrompt(p, svc)},

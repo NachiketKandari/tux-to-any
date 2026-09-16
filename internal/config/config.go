@@ -417,6 +417,11 @@ type Convert struct {
 	// passing bodies are never rewritten. Nil (default) enables it; false
 	// keeps the loud combined-gate failure for gate-behavior A/B runs.
 	TxWrap *bool `yaml:"txWrap"`
+	// RetryRepair is the retry-methodology A/B switch (default off): false
+	// = a rejected attempt regenerates from the original prompt; true = the
+	// rejected payload rides back as an assistant turn and the model
+	// patches it. Compare the two with `tuxconv retrystats <auditA> <auditB>`.
+	RetryRepair *bool `yaml:"retryRepair"`
 }
 
 // ValidateCfg configures the bounded gofmt/build/vet/test retry loop (G6)

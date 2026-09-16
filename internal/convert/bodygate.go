@@ -119,6 +119,94 @@ func runeLiteralErrs(body string) []string {
 	return errs
 }
 
+// fixRuneLiterals rewrites plain single-letter rune literals to their
+// string form ('Y' → "Y") before the gates run: the Pro*C char-flag
+// transliteration slip is mechanical, and making the model burn a retry on
+// it is waste. Only 3-byte letter literals convert (escapes like '\n' and
+// digit/symbol runes may be intentional int math), and never inside an
+// arithmetic or index/slice expression — those stay for runeLiteralErrs to
+// reject so the model decides string vs int. Parse failures pass through
+// untouched (the parse gate owns them).
+func fixRuneLiterals(body string) string {
+	wrapped := bodyParseWrap(body)
+	base := strings.Index(wrapped, body)
+	if base < 0 {
+		return body
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "body.go", wrapped, 0)
+	if err != nil {
+		return body
+	}
+	unsafePos := map[token.Pos]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.BinaryExpr:
+			if isArithOp(x.Op) {
+				markCharLits(x, unsafePos)
+			}
+		case *ast.IndexExpr:
+			markCharLits(x.Index, unsafePos)
+		case *ast.SliceExpr:
+			markCharLits(x.Low, unsafePos)
+			markCharLits(x.High, unsafePos)
+		}
+		return true
+	})
+	type edit struct {
+		start, end int
+		text       string
+	}
+	var edits []edit
+	ast.Inspect(f, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.CHAR || unsafePos[lit.Pos()] {
+			return true
+		}
+		v := lit.Value
+		if len(v) != 3 || !isASCIILetter(v[1]) {
+			return true
+		}
+		off := fset.Position(lit.Pos()).Offset - base
+		edits = append(edits, edit{start: off, end: off + len(v), text: `"` + string(v[1]) + `"`})
+		return true
+	})
+	for i := len(edits) - 1; i >= 0; i-- { // right-to-left keeps offsets valid
+		e := edits[i]
+		if e.start < 0 || e.end > len(body) {
+			continue
+		}
+		body = body[:e.start] + e.text + body[e.end:]
+	}
+	return body
+}
+
+// isArithOp reports whether a binary operator computes a value (any context
+// where a letter rune could be intended as an int) rather than compares.
+func isArithOp(op token.Token) bool {
+	switch op {
+	case token.EQL, token.NEQ, token.LSS, token.GTR, token.LEQ, token.GEQ, token.LAND, token.LOR:
+		return false
+	}
+	return true
+}
+
+// markCharLits records every rune literal inside n as unsafe to rewrite.
+func markCharLits(n ast.Node, mark map[token.Pos]bool) {
+	ast.Inspect(n, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.CHAR {
+			mark[lit.Pos()] = true
+		}
+		return true
+	})
+}
+
+// isASCIILetter reports whether b is a plain ASCII letter (the rune literal
+// shapes the flag fix targets).
+func isASCIILetter(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
+}
+
 // terminatingReturnErr rejects a body whose last statement cannot terminate
 // the method: named results do not make falling off the end legal.
 func terminatingReturnErr(body string) []string {

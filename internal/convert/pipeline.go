@@ -75,6 +75,12 @@ type Options struct {
 	// utils.ExecTransaction. Repair-only on would-fail output, re-gated
 	// before use; false keeps the loud combined-gate failure.
 	TxWrap bool
+	// RetryRepair switches the LLM seams' retry methodology (retryRepair
+	// A/B, default off): true sends a rejected attempt's payload back as an
+	// assistant turn so the model patches it against the gate notes; false
+	// regenerates from the original prompt. Only the message assembly
+	// changes — gates, budgets, and the retry count are identical.
+	RetryRepair bool
 }
 
 // Result summarizes one convert run.
@@ -525,26 +531,13 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		}
 		return body, prompt, nil
 	}
-	messages := func(notes []string) []llm.Message {
-		msgs := []llm.Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: prompt},
-		}
-		if len(notes) > 0 {
-			msgs = append(msgs, llm.Message{
-				Role:    "user",
-				Content: "Your previous output failed validation:\n" + strings.Join(notes, "\n") + "\nFix these errors and emit only the corrected method body.",
-			})
-		}
-		return msgs
-	}
 	accepted, chatCalls, notes, err := llm.RunSeam(ctx, llm.SeamInput{
 		Unit: u.ID, Kind: string(u.Kind), Name: u.Name,
-		Template: u.TemplateID, LLM: u.LLM,
+		Template: u.TemplateID, LLM: u.LLM, Repair: opts.RetryRepair,
 		Audit: opts.Audit, Client: opts.Client, Budget: opts.Budget, MaxRetries: opts.MaxRetries,
 		Temperature: 0.1,
-		Prompt: func(attemptNotes []string) (string, []llm.Message) {
-			return prompt, messages(attemptNotes)
+		Prompt: func(prev string, attemptNotes []string) (string, []llm.Message) {
+			return prompt, seamMessages(systemPrompt, prompt, prev, fixHintMethodBody, attemptNotes, opts.RetryRepair)
 		},
 		Extract: func(content string) string {
 			return repairControllerBody(ctx, u.Name, axisVar, content)
@@ -646,26 +639,13 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 	prompt = buildFnPrompt(u.Name, structName, view.Source,
 		dbSignaturesFor(opts.Plan, dbBodies, methods), svc.FnRowContracts(opts.Plan, u.QueryIDs),
 		fnErrorCodes(view.Source), opts.Plan.Stubs)
-	messages := func(notes []string) []llm.Message {
-		msgs := []llm.Message{
-			{Role: "system", Content: fnHelperSystem},
-			{Role: "user", Content: prompt},
-		}
-		if len(notes) > 0 {
-			msgs = append(msgs, llm.Message{
-				Role:    "user",
-				Content: "Your previous output failed validation:\n" + strings.Join(notes, "\n") + "\nFix these errors and emit only the corrected method.",
-			})
-		}
-		return msgs
-	}
 	accepted, chatCalls, notes, err := llm.RunSeam(ctx, llm.SeamInput{
 		Unit: u.ID, Kind: string(u.Kind), Name: u.Name,
-		Template: u.TemplateID, LLM: u.LLM,
+		Template: u.TemplateID, LLM: u.LLM, Repair: opts.RetryRepair,
 		Audit: opts.Audit, Client: opts.Client, Budget: opts.Budget, MaxRetries: opts.MaxRetries,
 		Temperature: 0.1,
-		Prompt: func(attemptNotes []string) (string, []llm.Message) {
-			return prompt, messages(attemptNotes)
+		Prompt: func(prev string, attemptNotes []string) (string, []llm.Message) {
+			return prompt, seamMessages(fnHelperSystem, prompt, prev, fixHintMethod, attemptNotes, opts.RetryRepair)
 		},
 		Extract: cleanBody,
 		Gate: func(body string) []string {
@@ -1427,9 +1407,10 @@ func cleanBody(content string) string {
 	for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
 		out = out[:len(out)-1]
 	}
-	return dataShadowRe.ReplaceAllString(
+	cleaned := dataShadowRe.ReplaceAllString(
 		nullStringCallRe.ReplaceAllString(strings.Join(out, "\n"), "${1}.String"),
 		"${1}data = make(")
+	return fixRuneLiterals(cleaned)
 }
 
 // appendControllerMethod appends the rendered method to the controller file

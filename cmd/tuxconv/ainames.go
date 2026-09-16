@@ -235,7 +235,7 @@ func aiNameScenarioOne(ctx context.Context, log *slog.Logger, client llm.Client,
 		Audit: rec, Client: client, Budget: b,
 		MaxRetries:  1,
 		Temperature: 0.2,
-		Prompt: func([]string) (string, []llm.Message) {
+		Prompt: func(_ string, _ []string) (string, []llm.Message) {
 			return prompt, []llm.Message{{Role: "system", Content: aiNameSystem}, {Role: "user", Content: prompt}}
 		},
 		Gate: func(content string) []string {
@@ -376,7 +376,7 @@ func aiNameOne(ctx context.Context, log *slog.Logger, client llm.Client, b budge
 		Audit: rec, Client: client, Budget: b,
 		MaxRetries:  1,
 		Temperature: 0.2,
-		Prompt: func([]string) (string, []llm.Message) {
+		Prompt: func(_ string, _ []string) (string, []llm.Message) {
 			return prompt, []llm.Message{{Role: "system", Content: aiNameSystem}, {Role: "user", Content: prompt}}
 		},
 		Gate: func(content string) []string {

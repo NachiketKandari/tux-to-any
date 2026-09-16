@@ -39,6 +39,7 @@ func runConvert(ctx context.Context, args []string) error {
 	baseDir := fs.String("base", "", "Output base directory override (default: target module root when paths.mainGo resolves, else paths.staged; dir fan-out appends each service name)")
 	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: skip controller bodies (overrides run.llm)")
 	fragment := fs.Bool("fragment", false, "Force fragment mode on a single-file input (PF-3.1)")
+	retryRepair := fs.Bool("retry-repair", false, "Retry methodology A/B: rejected LLM attempts are sent back as an assistant turn for patching instead of regenerated (default off)")
 
 	flagArgs, positional := reorderArgs(args)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -70,6 +71,7 @@ func runConvert(ctx context.Context, args []string) error {
 	w := &convertWiring{
 		cfg: wiring.cfg, budget: wiring.budget, validator: v, client: client,
 		audit: wiring.audit, llmEnabled: client != nil,
+		retryRepair: *retryRepair || (cfg.Convert.RetryRepair != nil && *cfg.Convert.RetryRepair),
 	}
 
 	baseRoot, degrade := resolveBaseRoot(*baseDir, cfg)
@@ -189,7 +191,8 @@ func runConvertFnLib(ctx context.Context, w *convertWiring, main *ir.File, baseR
 		Ledger: led, Validator: w.validator, MaxRetries: w.cfg.ValidateCfg.MaxRetries, Audit: w.audit,
 		Workers: workers,
 		SkipLLM: !w.llmEnabled, WithGorm: w.cfg.DB.WithGorm,
-		FlowDraft: false,
+		FlowDraft:   false,
+		RetryRepair: w.retryRepair,
 	})
 	if err != nil {
 		return err
@@ -216,6 +219,9 @@ type convertWiring struct {
 	client     llm.Client
 	audit      *audit.Recorder
 	llmEnabled bool
+	// retryRepair is the resolved retry methodology (CLI flag OR config
+	// convert.retryRepair) every service in the run uses.
+	retryRepair bool
 }
 
 // draftAndStop is convert's no-mapping fallback (draft, then stop): the
@@ -281,8 +287,9 @@ func convertOneService(ctx context.Context, w *convertWiring, main *ir.File, fil
 		Ledger: led, Validator: w.validator, MaxRetries: w.cfg.ValidateCfg.MaxRetries, Audit: w.audit,
 		Workers: workers,
 		SkipLLM: !w.llmEnabled, WithGorm: w.cfg.DB.WithGorm,
-		FlowDraft: w.cfg.Convert.FlowDraft == nil || *w.cfg.Convert.FlowDraft,
-		TxWrap:    w.cfg.Convert.TxWrap == nil || *w.cfg.Convert.TxWrap,
+		FlowDraft:   w.cfg.Convert.FlowDraft == nil || *w.cfg.Convert.FlowDraft,
+		TxWrap:      w.cfg.Convert.TxWrap == nil || *w.cfg.Convert.TxWrap,
+		RetryRepair: w.retryRepair,
 	})
 	if err != nil {
 		return nil, nil, err

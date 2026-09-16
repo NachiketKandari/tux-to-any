@@ -80,7 +80,7 @@ func seamInput(c Client, rec *audit.Recorder) SeamInput {
 	return SeamInput{
 		Unit: "u01", Kind: "testseam", Name: "demo", Audit: rec,
 		Client: c, MaxRetries: 2,
-		Prompt: func(notes []string) (string, []Message) {
+		Prompt: func(_ string, notes []string) (string, []Message) {
 			return "prompt", []Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "prompt"}}
 		},
 	}
@@ -121,7 +121,7 @@ func TestRunSeamGateRetryFeedsNotesAndSucceeds(t *testing.T) {
 		return nil
 	}
 	seen := ""
-	in.Prompt = func(notes []string) (string, []Message) {
+	in.Prompt = func(_ string, notes []string) (string, []Message) {
 		seen = strings.Join(notes, "|")
 		return "prompt", []Message{{Role: "user", Content: "p"}}
 	}
@@ -202,7 +202,7 @@ func TestRunSeamBudgetCeilings(t *testing.T) {
 
 	in = seamInput(&stubClient{responses: []chatOutcome{{content: "x"}}}, nil)
 	in.Budget = budget.New(1, 100, 4) // prompt ceiling trips before any call
-	in.Prompt = func([]string) (string, []Message) { return long, nil }
+	in.Prompt = func(string, []string) (string, []Message) { return long, nil }
 	payload, calls, _, err := RunSeam(context.Background(), in)
 	if payload != "" || calls != 0 {
 		t.Fatalf("payload=%q calls=%d", payload, calls)
@@ -267,7 +267,7 @@ func TestRunSeamSignalsTruncation(t *testing.T) {
 	}}}
 	payload, calls, notes, err := RunSeam(context.Background(), SeamInput{
 		Unit: "u1", Kind: "test", Name: "trunc", Audit: rec, Client: client,
-		Prompt: func([]string) (string, []Message) { return "p", nil },
+		Prompt: func(string, []string) (string, []Message) { return "p", nil },
 	})
 	if err != nil {
 		t.Fatalf("gate-less seam must accept the payload: %v", err)
@@ -298,6 +298,100 @@ func TestRunSeamSignalsTruncation(t *testing.T) {
 	}
 }
 
+// TestRunSeamHandsPriorPayloadToPrompt pins the repair-retry contract: the
+// Prompt callback sees "" on the first attempt and the prior gated payload
+// on retries, and the Repair flag lands in the archived Exchange.
+func TestRunSeamHandsPriorPayloadToPrompt(t *testing.T) {
+	client := &stubClient{responses: []chatOutcome{{content: "bad"}, {content: "good"}}}
+	rec := newRecorder(t)
+	var prevs []string
+	payload, calls, _, err := RunSeam(context.Background(), SeamInput{
+		Unit: "u1", Kind: "test", Name: "prev", Client: client, MaxRetries: 1, Repair: true,
+		Audit: rec,
+		Prompt: func(prev string, notes []string) (string, []Message) {
+			prevs = append(prevs, prev)
+			return "p", nil
+		},
+		Gate: func(payload string) []string {
+			if payload == "bad" {
+				return []string{"nope"}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunSeam: %v", err)
+	}
+	if payload != "good" || calls != 2 {
+		t.Fatalf("payload=%q calls=%d", payload, calls)
+	}
+	if len(prevs) != 2 || prevs[0] != "" || prevs[1] != "bad" {
+		t.Fatalf("prev sequence = %q, want [\"\" \"bad\"]", prevs)
+	}
+	e := mustReadExchange(t, rec, "test-prev-attempt0.json")
+	if !e.RetryRepair {
+		t.Error("attempt 0 must archive retry_repair=true")
+	}
+}
+
+// TestRunSeamCountsRetryTurnsAgainstInputBudget: feedback and repair turns
+// are real input — a retry whose full message set exceeds the prompt ceiling
+// fails before the chat call instead of silently blowing the context.
+func TestRunSeamCountsRetryTurnsAgainstInputBudget(t *testing.T) {
+	client := &stubClient{responses: []chatOutcome{{content: "bad"}, {content: "good"}}}
+	base := strings.Repeat("x", 4)  // 1 token at 4 chars/token
+	note := strings.Repeat("y", 12) // 3 tokens
+	in := seamInput(client, nil)
+	in.Budget = budget.New(3, 100, 4) // 3-token prompt ceiling
+	in.MaxRetries = 1
+	in.Prompt = func(_ string, notes []string) (string, []Message) {
+		msgs := []Message{{Role: "system", Content: "s"}, {Role: "user", Content: base}}
+		for _, n := range notes {
+			msgs = append(msgs, Message{Role: "user", Content: n})
+		}
+		return base, msgs
+	}
+	in.Gate = func(payload string) []string {
+		if payload == "bad" {
+			return []string{note}
+		}
+		return nil
+	}
+	_, calls, _, err := RunSeam(context.Background(), in)
+	if err == nil {
+		t.Fatal("second attempt must trip the prompt ceiling")
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d — the over-ceiling retry must fail before the chat call", calls)
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("err = %v, want the prompt-ceiling failure", err)
+	}
+}
+
+// TestRunSeamClearsPrevOnChatError: a transport failure leaves no payload to
+// patch, so the next attempt's prev is empty rather than stale.
+func TestRunSeamClearsPrevOnChatError(t *testing.T) {
+	client := &stubClient{responses: []chatOutcome{
+		{err: errors.New("dial tcp: refused")},
+		{content: "good"},
+	}}
+	var prevs []string
+	_, calls, _, err := RunSeam(context.Background(), SeamInput{
+		Kind: "test", Name: "prevclear", Client: client, MaxRetries: 1, Repair: true,
+		Prompt: func(prev string, notes []string) (string, []Message) {
+			prevs = append(prevs, prev)
+			return "p", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunSeam: %v", err)
+	}
+	if calls != 2 || len(prevs) != 2 || prevs[1] != "" {
+		t.Fatalf("calls=%d prevs=%q — chat errors must clear prev", calls, prevs)
+	}
+}
+
 // The truncation note rides into the next attempt's prompt notes when the
 // gate rejects the truncated payload.
 func TestRunSeamTruncationFeedsRetryNotes(t *testing.T) {
@@ -308,7 +402,7 @@ func TestRunSeamTruncationFeedsRetryNotes(t *testing.T) {
 	var seen []string
 	_, calls, notes, err := RunSeam(context.Background(), SeamInput{
 		Kind: "test", Name: "retry", Client: client, MaxRetries: 1,
-		Prompt: func(n []string) (string, []Message) {
+		Prompt: func(_ string, n []string) (string, []Message) {
 			seen = append(seen, strings.Join(n, "|"))
 			return "p", nil
 		},
@@ -343,7 +437,7 @@ func TestRunSeamDynamicOutputCap(t *testing.T) {
 	in.Budget.ModelContextTokens = 1000
 	in.Budget.ModelMaxOutputTokens = 600
 	in.Budget.OutputReserveTokens = 0
-	in.Prompt = func([]string) (string, []Message) {
+	in.Prompt = func(string, []string) (string, []Message) {
 		return strings.Repeat("x", 400), nil // 100 estimator tokens
 	}
 	payload, _, _, err := RunSeam(context.Background(), in)
@@ -365,7 +459,7 @@ func TestRunSeamDynamicNoRoom(t *testing.T) {
 	in.Budget.ModelContextTokens = 1000
 	in.Budget.ModelMaxOutputTokens = 16384
 	in.Budget.OutputReserveTokens = 0
-	in.Prompt = func([]string) (string, []Message) {
+	in.Prompt = func(string, []string) (string, []Message) {
 		return strings.Repeat("x", 3500), nil // 875 tokens → room 125 < 256
 	}
 	_, calls, _, err := RunSeam(context.Background(), in)

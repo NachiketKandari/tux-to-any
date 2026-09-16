@@ -33,7 +33,7 @@ func fillCtrlMethod(ctx context.Context, u *unit, opts Options) (string, int, er
 		// and returned empty content); the extracted block itself is well
 		// under the Budget.CheckOutput ceiling.
 		MaxTokens: 2 * opts.Budget.MaxOutputTokens,
-		Prompt: func(notes []string) (string, []llm.Message) {
+		Prompt: func(_ string, notes []string) (string, []llm.Message) {
 			prompt := ctrlUserPrompt(u, notes)
 			return prompt, []llm.Message{
 				{Role: "system", Content: ctrlSystemPrompt(u)},

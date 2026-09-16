@@ -591,26 +591,13 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 			filterHelpers(helpersAll, chunkText), filterByPresence(constantsAll, chunkText),
 			filterByPresence(errCodesAll, chunkText), filterStubs(opts.Plan.Stubs, chunkText),
 			fragmentLocals(strings.Join(bodies, "\n")))
-		messages := func(notes []string) []llm.Message {
-			msgs := []llm.Message{
-				{Role: "system", Content: systemPromptFragment},
-				{Role: "user", Content: prompt},
-			}
-			if len(notes) > 0 {
-				msgs = append(msgs, llm.Message{
-					Role:    "user",
-					Content: "Your previous output failed validation:\n" + strings.Join(notes, "\n") + "\nFix these errors and emit only the corrected fragment statements.",
-				})
-			}
-			return msgs
-		}
 		fragment, chatCalls, _, err := llm.RunSeam(cx.ctx, llm.SeamInput{
 			Unit: cx.unit.ID, Kind: string(cx.unit.Kind), Name: fmt.Sprintf("%s#chunk%d", cx.unit.Name, k+1),
-			Template: cx.unit.TemplateID, LLM: cx.unit.LLM,
+			Template: cx.unit.TemplateID, LLM: cx.unit.LLM, Repair: opts.RetryRepair,
 			Audit: opts.Audit, Client: opts.Client, Budget: opts.Budget, MaxRetries: opts.MaxRetries,
 			Temperature: 0.1,
-			Prompt: func(attemptNotes []string) (string, []llm.Message) {
-				return prompt, messages(attemptNotes)
+			Prompt: func(prev string, attemptNotes []string) (string, []llm.Message) {
+				return prompt, seamMessages(systemPromptFragment, prompt, prev, fixHintFragment, attemptNotes, opts.RetryRepair)
 			},
 			Extract: cleanBody,
 			Gate: func(body string) []string {
@@ -716,26 +703,13 @@ func composeFragments(cx chunkCtx, contract, fullSigs string, bodies []string) (
 			return "", false
 		}
 	}
-	messages := func(notes []string) []llm.Message {
-		msgs := []llm.Message{
-			{Role: "system", Content: systemPromptComposer},
-			{Role: "user", Content: prompt},
-		}
-		if len(notes) > 0 {
-			msgs = append(msgs, llm.Message{
-				Role:    "user",
-				Content: "Your previous output failed validation:\n" + strings.Join(notes, "\n") + "\nFix these errors and emit only the corrected merged body.",
-			})
-		}
-		return msgs
-	}
 	composed, chatCalls, _, err := llm.RunSeam(cx.ctx, llm.SeamInput{
 		Unit: cx.unit.ID, Kind: string(cx.unit.Kind), Name: cx.unit.Name + "#composer",
-		Template: cx.unit.TemplateID, LLM: cx.unit.LLM,
+		Template: cx.unit.TemplateID, LLM: cx.unit.LLM, Repair: opts.RetryRepair,
 		Audit: opts.Audit, Client: opts.Client, Budget: opts.Budget, MaxRetries: opts.MaxRetries,
 		Temperature: 0.1,
-		Prompt: func(attemptNotes []string) (string, []llm.Message) {
-			return prompt, messages(attemptNotes)
+		Prompt: func(prev string, attemptNotes []string) (string, []llm.Message) {
+			return prompt, seamMessages(systemPromptComposer, prompt, prev, fixHintMergedBody, attemptNotes, opts.RetryRepair)
 		},
 		Extract: cleanBody,
 		Gate: func(body string) []string {

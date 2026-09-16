@@ -45,10 +45,21 @@ type SeamInput struct {
 	// unaffected.
 	MaxTokens int
 
-	// Prompt builds this attempt's messages. notes carries the accumulated
-	// rejection notes from earlier attempts (empty on the first). The first
-	// return value is the prompt text archived in the audit trail.
-	Prompt func(notes []string) (archived string, messages []Message)
+	// Prompt builds this attempt's messages. prev is the prior attempt's
+	// gated payload ("" on the first attempt, and after chat/over-cap
+	// failures where there is nothing to patch); repair-mode callers send
+	// it back as an assistant turn. notes carries the accumulated
+	// rejection notes from earlier attempts (empty on the first). The
+	// first return value is the prompt text archived in the audit trail.
+	Prompt func(prev string, notes []string) (archived string, messages []Message)
+
+	// Repair records the caller's retry methodology in the audit trail:
+	// true = rejected attempts ride back as an assistant turn and the
+	// model patches its own output; false = the model regenerates from
+	// the original prompt. RunSeam does not enforce the strategy (Prompt
+	// owns message assembly) — the flag exists so tuxconv retrystats can
+	// compare A/B audit folders.
+	Repair bool
 
 	// Extract turns the raw response content into the seam payload (fence
 	// stripping, JSON selection); nil = identity.
@@ -85,7 +96,7 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 		}
 		e := audit.Exchange{
 			Unit: in.Unit, Kind: in.Kind, Name: in.Name, Attempt: attempt,
-			Template: in.Template, LLM: in.LLM,
+			Template: in.Template, LLM: in.LLM, RetryRepair: in.Repair,
 			Prompt: prompt, Response: resp.Content, Errors: errs, Outcome: "ok",
 			FinishReason: resp.FinishReason,
 		}
@@ -106,13 +117,26 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 		}
 	}
 	var lastErr error
+	// prev is the payload the previous attempt was gated on — the repair
+	// context callers may send back as an assistant turn. Cleared on
+	// failures that produced no usable payload (chat error, over-cap).
+	var prev string
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		archived, messages := in.Prompt(notes)
-		inputTokens := in.Budget.Count(archived)
+		archived, messages := in.Prompt(prev, notes)
+		// The archived prompt is the base prompt; retry turns (the feedback
+		// notes, and the prior payload in repair mode) are real input too —
+		// count them so the ceiling reflects what the model actually sees.
+		counted := archived
+		if len(messages) > 2 {
+			for _, m := range messages[2:] {
+				counted += "\n" + m.Content
+			}
+		}
+		inputTokens := in.Budget.Count(counted)
 		telemetry.Log(ctx).Info("llm attempt",
 			"name", in.Name, "attempt", attempt+1, "max", maxAttempts, "prompt_tokens_est", inputTokens)
 		if in.Budget.MaxPromptTokens > 0 {
-			if berr := in.Budget.CheckInput(archived); berr != nil {
+			if berr := in.Budget.CheckInput(counted); berr != nil {
 				return "", calls, notes, berr
 			}
 		}
@@ -143,6 +167,7 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 			telemetry.Log(ctx).Warn("llm call failed",
 				"name", in.Name, "attempt", attempt+1, "max", maxAttempts, "error", cerr.Error())
 			record(attempt, archived, Response{}, []string{cerr.Error()})
+			prev = "" // no payload to patch
 			if in.AbortOnChatError {
 				return "", calls, notes, fmt.Errorf("llm chat: %w", cerr)
 			}
@@ -166,6 +191,7 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 				telemetry.Log(ctx).Warn("llm output over cap",
 					"name", in.Name, "attempt", attempt+1, "max", maxAttempts, "error", berr.Error())
 				record(attempt, archived, resp, []string{berr.Error()})
+				prev = "" // over-cap content is not a repair base
 				notes = append(notes, "output over budget: "+berr.Error())
 				continue
 			}
@@ -181,6 +207,7 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 				"name", in.Name, "attempt", attempt+1, "max", maxAttempts,
 				"errors", len(gateErrs), "first", firstErrSummary(gateErrs))
 			record(attempt, archived, resp, gateErrs)
+			prev = payload // the repair base for the next attempt
 			notes = append(notes, gateErrs...)
 			continue
 		}

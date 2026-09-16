@@ -56,6 +56,27 @@ func TestRuneLiteralErrs(t *testing.T) {
 	}
 }
 
+// TestFixRuneLiterals pins the deterministic flag fix: plain letter runes
+// become strings in both assignment and comparison contexts, while
+// arithmetic/index uses, escapes, digits, and quoted apostrophes survive
+// untouched.
+func TestFixRuneLiterals(t *testing.T) {
+	body := "flg := 'Y'\nif flg == 'N' {\n\treturn nil, err\n}\n" +
+		"idx := arr['A']\nn := 'a' + 1\nesc := '\\n'\nd := '0'\n" +
+		`s := "it's fine"` + "\nreturn data, nil"
+	want := "flg := \"Y\"\nif flg == \"N\" {\n\treturn nil, err\n}\n" +
+		"idx := arr['A']\nn := 'a' + 1\nesc := '\\n'\nd := '0'\n" +
+		`s := "it's fine"` + "\nreturn data, nil"
+	if got := fixRuneLiterals(body); got != want {
+		t.Fatalf("fixRuneLiterals:\n got %q\nwant %q", got, want)
+	}
+
+	// cleanBody applies the fix as part of extract-side normalization.
+	if got := cleanBody("```go\nflg := 'Y'\n```"); got != `flg := "Y"` {
+		t.Fatalf("cleanBody rune fix = %q", got)
+	}
+}
+
 // TestTerminatingReturnErr pins the fall-off-the-end gate: named results do
 // not make an implicit return legal.
 func TestTerminatingReturnErr(t *testing.T) {
