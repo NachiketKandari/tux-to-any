@@ -408,6 +408,15 @@ type Convert struct {
 	// LLM enhances instead of translating the raw C from scratch. The
 	// REQUIRED-CALLS gate is unchanged; kill-switch for prompt A/B runs.
 	FlowDraft *bool `yaml:"flowDraft"`
+	// TxWrap deterministically repairs a combined fragment body that fails
+	// the transaction gate: when the unit's store calls take tx but the
+	// fragments omitted the ExecTransaction wrapper (the systematic stitch
+	// gap), the repair threads the tx handle through every tx call site
+	// and wraps the body in the wrapper the gate names. Repair-only: it
+	// runs solely on would-fail gate output and is re-gated before use —
+	// passing bodies are never rewritten. Nil (default) enables it; false
+	// keeps the loud combined-gate failure for gate-behavior A/B runs.
+	TxWrap *bool `yaml:"txWrap"`
 }
 
 // ValidateCfg configures the bounded gofmt/build/vet/test retry loop (G6)

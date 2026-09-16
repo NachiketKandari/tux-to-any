@@ -559,6 +559,163 @@ func TestTxGateErrs(t *testing.T) {
 	}
 }
 
+// TestWrapTxBody pins the deterministic tx-wrap repair: a combined body
+// whose tx calls lack the wrapper gains the ExecTransaction shape the gate
+// names — tx threaded through call sites, method returns mapped into
+// closure returns — and passes every combined gate afterwards.
+func TestWrapTxBody(t *testing.T) {
+	calls := map[string]budget.DBCall{
+		"q9": {Receiver: "s.store", Name: "UpdateRiskProfileDeviation", CtxName: "c", Tx: "tx", Args: []string{"request.MatchAccnt"}},
+		"q1": {Receiver: "s.store", Name: "FetchUserAccount", CtxName: "c"},
+	}
+	view := "s.store.FetchUserAccount(c, request.MatchAccnt)\n" +
+		"s.store.UpdateRiskProfileDeviation(c, request.MatchAccnt)\n"
+	body := "_, err := s.store.FetchUserAccount(c, request.MatchAccnt)\n" +
+		"if err != nil {\nreturn nil, err\n}\n" +
+		"if err := s.store.UpdateRiskProfileDeviation(c, request.MatchAccnt); err != nil {\nreturn nil, fmt.Errorf(\"S31020: boom\")\n}\n" +
+		"data = append(data, &models.R{PointType: \"Y\"})\n" +
+		"return data, err\n"
+	if errs := txGateErrs(body, calls); len(errs) == 0 {
+		t.Fatalf("unwrapped body passes the tx gate — repair has nothing to do")
+	}
+	fixed, ok := wrapTxBody(body, calls, "s.store.")
+	if !ok {
+		t.Fatalf("repair bailed on a plain tx body")
+	}
+	for _, want := range []string{
+		"if err := utils.ExecTransaction(c, s.store.GetDB(), func(tx *sqlx.Tx) error {",
+		"s.store.UpdateRiskProfileDeviation(c, tx, request.MatchAccnt)",
+		"s.store.FetchUserAccount(c, request.MatchAccnt)",
+		"return data, nil",
+		"S31020",
+	} {
+		if !strings.Contains(fixed, want) {
+			t.Errorf("repaired body missing %q:\n%s", want, fixed)
+		}
+	}
+	// Method-level two-value returns inside the closure collapse to the
+	// error; exactly one `return nil, err` remains — the wrapper check.
+	if n := strings.Count(fixed, "return nil, err"); n != 1 {
+		t.Errorf("repaired body has %d `return nil, err`, want 1 (wrapper check):\n%s", n, fixed)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(fixed), "return data, nil") {
+		t.Errorf("repaired body does not end `return data, nil`:\n%s", fixed)
+	}
+	if errs := validateBody(Options{}, fixed); len(errs) != 0 {
+		t.Errorf("repaired body fails parse: %v\n%s", errs, fixed)
+	}
+	if errs := requiredCallErrs(view, fixed, "s.store."); len(errs) != 0 {
+		t.Errorf("repaired body drops required calls: %v", errs)
+	}
+	if errs := controllerTuxedoErrs(fixed); len(errs) != 0 {
+		t.Errorf("repaired body trips tuxedo gate: %v", errs)
+	}
+	if errs := txGateErrs(fixed, calls); len(errs) != 0 {
+		t.Errorf("repaired body still fails tx gate: %v\n%s", errs, fixed)
+	}
+}
+
+// TestWrapTxBodyTail pins the non-returning tail: a body that falls off
+// the end gains `return nil` in the closure plus the data tail outside.
+func TestWrapTxBodyTail(t *testing.T) {
+	calls := map[string]budget.DBCall{
+		"q9": {Receiver: "s.store", Name: "InsertDev", CtxName: "c", Tx: "tx"},
+	}
+	body := "if err := s.store.InsertDev(c, a); err != nil {\nreturn nil, err\n}\n" +
+		"data = append(data, &models.R{})\n"
+	fixed, ok := wrapTxBody(body, calls, "s.store.")
+	if !ok {
+		t.Fatalf("repair bailed on a tail-less body")
+	}
+	if !strings.Contains(fixed, "\nreturn nil\n}") {
+		t.Errorf("closure missing `return nil` tail:\n%s", fixed)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(fixed), "return data, nil") {
+		t.Errorf("missing data tail:\n%s", fixed)
+	}
+	if errs := validateBody(Options{}, fixed); len(errs) != 0 {
+		t.Errorf("repaired body fails parse: %v\n%s", errs, fixed)
+	}
+	if errs := txGateErrs(fixed, calls); len(errs) != 0 {
+		t.Errorf("repaired body still fails tx gate: %v", errs)
+	}
+}
+
+// TestWrapTxBodyBailouts pins the repair's refusal cases: a partial
+// wrapper is never second-guessed, a tx-free unit has nothing to repair,
+// and a body declaring its own tx local would be shadowed by the closure
+// parameter.
+func TestWrapTxBodyBailouts(t *testing.T) {
+	txCalls := map[string]budget.DBCall{
+		"q9": {Receiver: "s.store", Name: "InsertDev", CtxName: "c", Tx: "tx"},
+	}
+	plain := map[string]budget.DBCall{
+		"q1": {Receiver: "s.store", Name: "GetCount", CtxName: "c"},
+	}
+	if _, ok := wrapTxBody("err = utils.ExecTransaction(c, s.store.GetDB(), func(tx *sqlx.Tx) error {\nreturn nil\n})", txCalls, "s.store."); ok {
+		t.Errorf("repair rewrote a body that already wraps")
+	}
+	if _, ok := wrapTxBody("s.store.GetCount(c)\nreturn data, err\n", plain, "s.store."); ok {
+		t.Errorf("repair ran on a tx-free unit")
+	}
+	if _, ok := wrapTxBody("tx, err := s.store.Raw(c)\nif err != nil {\nreturn nil, err\n}\ns.store.InsertDev(c, a)\nreturn data, err\n", txCalls, "s.store."); ok {
+		t.Errorf("repair wrapped over a body-local tx (shadow risk)")
+	}
+	if _, ok := wrapTxBody("var tx *sqlx.Tx\ns.store.InsertDev(c, a)\nreturn data, err\n", txCalls, "s.store."); ok {
+		t.Errorf("repair wrapped over a var-declared tx")
+	}
+	// Use-without-declare is fine: the closure parameter provides it.
+	already := "s.store.InsertDev(c, tx, a)\nreturn data, err\n"
+	fixed, ok := wrapTxBody(already, txCalls, "s.store.")
+	if !ok {
+		t.Fatalf("repair bailed on an already-threaded body")
+	}
+	if strings.Contains(fixed, "c, tx, tx,") {
+		t.Errorf("double-threaded tx handle:\n%s", fixed)
+	}
+	if errs := txGateErrs(fixed, txCalls); len(errs) != 0 {
+		t.Errorf("threaded body still fails tx gate: %v", errs)
+	}
+}
+
+// TestRewriteClosureReturn pins the return mapping, including error values
+// carrying their own commas inside call parens.
+func TestRewriteClosureReturn(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"return data, err", "return err"},
+		{"\treturn nil, err", "\treturn err"},
+		{"  return nil, fmt.Errorf(\"S%d: boom\", x)", "  return fmt.Errorf(\"S%d: boom\", x)"},
+		{"return", "return err"},
+		{"s.store.GetCount(c)", "s.store.GetCount(c)"},
+		{"returnX := 1", "returnX := 1"},
+		{"return x", "return x"},
+	} {
+		if got := rewriteClosureReturn(tc.in); got != tc.want {
+			t.Errorf("rewriteClosureReturn(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestHasTxLocal pins the shadow guard: declared tx handles bail the
+// repair, mere uses and lookalike idents do not.
+func TestHasTxLocal(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{"tx, err := s.store.Raw(c)", true},
+		{"\tvar tx *sqlx.Tx", true},
+		{"s.store.InsertDev(c, tx, a)", false},
+		{"ctx := c", false},
+		{"context := x", false},
+		{"s.store.GetCount(c)", false},
+	} {
+		if got := hasTxLocal(tc.body); got != tc.want {
+			t.Errorf("hasTxLocal(%q) = %v, want %v", tc.body, got, tc.want)
+		}
+	}
+}
+
 // TestPromptHardeningBudget pins the no-bloat hardening rule: the three
 // system prompts must carry the failure-mode clauses (store-only calls,
 // C-literal mapping, terseness) while the combined instruction mass stays

@@ -69,6 +69,12 @@ type Options struct {
 	// the LLM enhances; false keeps the legacy prompt. The REQUIRED-CALLS
 	// gate is unchanged either way.
 	FlowDraft bool
+	// TxWrap deterministically repairs a combined fragment body that fails
+	// the transaction gate (convert.txWrap, default on): the repair threads
+	// the tx handle through every tx call site and wraps the body in
+	// utils.ExecTransaction. Repair-only on would-fail output, re-gated
+	// before use; false keeps the loud combined-gate failure.
+	TxWrap bool
 }
 
 // Result summarizes one convert run.
@@ -1489,6 +1495,23 @@ func appendControllerMethod(ctx context.Context, opts Options, res *Result, svc 
 	}
 	if err := os.WriteFile(path, []byte(formatted), 0o644); err != nil {
 		return err
+	}
+	// Tx bodies need imports the fixed header never carried: utils for the
+	// ExecTransaction wrapper, sqlx for the tx handle. Previously every
+	// such body was Tier-B-uncompilable on a wired target (the runs here
+	// are syntax-only, so the gap stayed latent). Content-gated — files
+	// without tx shapes keep their exact header.
+	var wantImports []string
+	if strings.Contains(merged, "ExecTransaction(") {
+		wantImports = append(wantImports, svc.Module+"/pkg/utils")
+	}
+	if strings.Contains(merged, "sqlx.") {
+		wantImports = append(wantImports, "github.com/jmoiron/sqlx")
+	}
+	if len(wantImports) > 0 {
+		if err := goast.AddImports(path, wantImports...); err != nil {
+			return err
+		}
 	}
 	if err := validateFile(ctx, opts, path); err != nil {
 		return err

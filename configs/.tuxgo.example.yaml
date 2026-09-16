@@ -93,6 +93,9 @@ convert:                     # defaults for convert so repeat runs need no CLI a
                              # match (they stay in the resolution pool)
   flowDraft: true            # feed the deterministic flow-tree draft into the controller
                              # prompt for the LLM to enhance; false for prompt A/B runs
+  txWrap: true               # deterministically repair combined fragment bodies that fail
+                             # the transaction gate (thread tx + wrap in ExecTransaction);
+                             # repair-only and re-gated — false keeps the loud failure
                              # (unresolved external fns need no knob: LLM mode attempts
                              # one-shot stub synthesis per stub into controller/fnstubs.go;
                              # -no-llm keeps every stub panicking)

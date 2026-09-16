@@ -282,6 +282,7 @@ func convertOneService(ctx context.Context, w *convertWiring, main *ir.File, fil
 		Workers: workers,
 		SkipLLM: !w.llmEnabled, WithGorm: w.cfg.DB.WithGorm,
 		FlowDraft: w.cfg.Convert.FlowDraft == nil || *w.cfg.Convert.FlowDraft,
+		TxWrap:    w.cfg.Convert.TxWrap == nil || *w.cfg.Convert.TxWrap,
 	})
 	if err != nil {
 		return nil, nil, err

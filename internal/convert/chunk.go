@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"tux-to-any/internal/budget"
@@ -672,10 +673,34 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 	}
 
 	combined := strings.Join(bodies, "\n")
+	parseErrs := validateBody(opts, combined)
+	reqErrs := requiredCallErrs(cx.view.Source, combined, receiver)
+	txErrs := txGateErrs(combined, cx.calls)
+	repaired := false
+	if len(parseErrs) == 0 && len(reqErrs) == 0 && len(txErrs) > 0 && cx.opts.TxWrap {
+		// Deterministic tx-wrap repair: the systematic stitch gap —
+		// fragments omit the ExecTransaction wrapper the combined gate
+		// demands. Repair-only on would-fail output; re-gated below and
+		// never bypassed. A successful repair skips the composer pass,
+		// which would risk dropping the wrapper again.
+		if fixed, ok := wrapTxBody(combined, cx.calls, receiver); ok {
+			rerrs := validateBody(opts, fixed)
+			rerrs = append(rerrs, requiredCallErrs(cx.view.Source, fixed, receiver)...)
+			rerrs = append(rerrs, controllerTuxedoErrs(fixed)...)
+			rerrs = append(rerrs, txGateErrs(fixed, cx.calls)...)
+			if len(rerrs) == 0 {
+				telemetry.Log(cx.ctx).Info("tx-wrap repair stitched fragments",
+					"unit", cx.unit.Name, "fragments", n)
+				combined = fixed
+				txErrs = nil
+				repaired = true
+			}
+		}
+	}
 	var fullErrs []string
-	fullErrs = append(fullErrs, validateBody(opts, combined)...)
-	fullErrs = append(fullErrs, requiredCallErrs(cx.view.Source, combined, receiver)...)
-	fullErrs = append(fullErrs, txGateErrs(combined, cx.calls)...)
+	fullErrs = append(fullErrs, parseErrs...)
+	fullErrs = append(fullErrs, reqErrs...)
+	fullErrs = append(fullErrs, txErrs...)
 	if len(fullErrs) > 0 {
 		return "", fmt.Errorf("combined fragment body failed validation: %s", strings.Join(fullErrs, "; "))
 	}
@@ -684,9 +709,12 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 	// by construction (each capped at 75% of the output ceiling), so the
 	// composer sees output 1, output 2, ... plus the template and the full
 	// contract, and returns the single merged body. Best-effort: a composer
-	// rejection keeps the concatenated body, never fails the unit.
-	if composed, ok := composeFragments(cx, contract, fullSigs, bodies); ok {
-		combined = composed
+	// rejection keeps the concatenated body, never fails the unit. Skipped
+	// after a successful tx-wrap repair, which already owns the final shape.
+	if !repaired {
+		if composed, ok := composeFragments(cx, contract, fullSigs, bodies); ok {
+			combined = composed
+		}
 	}
 	opts.Ledger.Set(cx.unit.ID, ledger.StatusValidated, "")
 	return combined, nil
@@ -776,6 +804,204 @@ func composeFragments(cx chunkCtx, contract, fullSigs string, bodies []string) (
 	}
 	telemetry.Log(cx.ctx).Info("composer stitched fragments", "unit", cx.unit.Name, "fragments", len(bodies))
 	return composed, true
+}
+
+// txLocalDeclRe spots a var-declared tx handle the repair's closure
+// parameter would shadow.
+var txLocalDeclRe = regexp.MustCompile(`(?m)^\s*var\s+tx\b`)
+
+// hasTxLocal reports whether the body declares its own tx handle (var tx
+// or any := with tx on the LHS) — wrapping it in a func(tx ...) closure
+// would silently rebind those uses, so the repair bails instead.
+func hasTxLocal(body string) bool {
+	if txLocalDeclRe.MatchString(body) {
+		return true
+	}
+	for _, line := range strings.Split(body, "\n") {
+		if i := strings.Index(line, ":="); i >= 0 {
+			for _, m := range identRe.FindAllString(line[:i], -1) {
+				if m == "tx" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// isReturnLine reports whether a trimmed line is a return statement (bare
+// or valued) rather than an identifier that merely starts with "return".
+func isReturnLine(t string) bool {
+	return t == "return" || strings.HasPrefix(t, "return ") || strings.HasPrefix(t, "return\t")
+}
+
+// depthZeroComma returns the index of the first comma at paren depth zero,
+// honoring string/char literals and all bracket kinds — the split point
+// between a return's value list. -1 when the line holds a single value.
+func depthZeroComma(s string) int {
+	depth := 0
+	inStr, inChar, esc := false, false, false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch {
+		case esc:
+			esc = false
+		case inStr:
+			if ch == '\\' {
+				esc = true
+			} else if ch == '"' {
+				inStr = false
+			}
+		case inChar:
+			if ch == '\\' {
+				esc = true
+			} else if ch == '\'' {
+				inChar = false
+			}
+		case ch == '"':
+			inStr = true
+		case ch == '\'':
+			inChar = true
+		case ch == '(' || ch == '[' || ch == '{':
+			depth++
+		case ch == ')' || ch == ']' || ch == '}':
+			depth--
+		case ch == ',' && depth == 0:
+			return i
+		}
+	}
+	return -1
+}
+
+// rewriteClosureReturn maps one method-body return line into the
+// tx-closure form: `return A, B` → `return B` (named data is already
+// populated by the appends; the error propagates to the wrapper, which
+// rolls back), bare `return` → `return err`. Non-return lines pass through
+// untouched.
+func rewriteClosureReturn(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if !isReturnLine(trimmed) {
+		return line
+	}
+	indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+	rest := strings.TrimSpace(trimmed[len("return"):])
+	if rest == "" {
+		return indent + "return err"
+	}
+	if i := depthZeroComma(rest); i >= 0 {
+		return indent + "return " + strings.TrimSpace(rest[i+1:])
+	}
+	return line
+}
+
+// wrapTxBody deterministically repairs a combined fragment body that fails
+// the transaction gate: the unit's store calls take tx but the fragments
+// omitted the ExecTransaction wrapper. The repair threads the tx handle
+// through every tx call site (Recv.Name(ctx, → Recv.Name(ctx, tx, —
+// already-threaded sites are left alone) and wraps the whole body in the
+// wrapper the gate names, with method returns mapped into closure returns
+// and a `return data, nil` tail delivering the accumulated rows.
+//
+// Bail-outs (ok=false — the caller keeps today's loud gate failure):
+//   - the body already contains ExecTransaction (partial wrapper —
+//     ambiguous, never second-guessed)
+//   - no tx-variant calls (gate inert — nothing to repair)
+//   - the body declares its own tx local (the closure parameter would
+//     shadow it)
+//
+// The result is re-gated by the caller (parse + REQUIRED-CALLS + tuxedo +
+// tx); the repair never bypasses validation.
+func wrapTxBody(body string, calls map[string]budget.DBCall, receiver string) (string, bool) {
+	if strings.Contains(body, "ExecTransaction(") {
+		return "", false
+	}
+	type txCall struct{ recv, name, ctx, tx string }
+	var tcs []txCall
+	for _, call := range calls {
+		if call.Tx == "" {
+			continue
+		}
+		recv := call.Receiver
+		if recv == "" {
+			recv = strings.TrimSuffix(receiver, ".")
+		}
+		ctx := call.CtxName
+		if ctx == "" {
+			ctx = "c"
+		}
+		tcs = append(tcs, txCall{recv, call.Name, ctx, call.Tx})
+	}
+	if len(tcs) == 0 {
+		return "", false
+	}
+	sort.Slice(tcs, func(i, j int) bool { return tcs[i].name < tcs[j].name })
+	if hasTxLocal(body) {
+		return "", false
+	}
+	// Wrapper context: the most common CtxName among tx calls (deterministic
+	// tie-break on sorted order — tcs is name-sorted above).
+	ctxName := tcs[0].ctx
+	best := 0
+	seen := map[string]bool{}
+	for _, tc := range tcs {
+		if seen[tc.ctx] {
+			continue
+		}
+		seen[tc.ctx] = true
+		n := 0
+		for _, other := range tcs {
+			if other.ctx == tc.ctx {
+				n++
+			}
+		}
+		if n > best {
+			best, ctxName = n, tc.ctx
+		}
+	}
+	rewritten := body
+	for _, tc := range tcs {
+		// Thread tx after the context argument. Already-threaded sites
+		// (`Name(ctx, tx, ...`) are left byte-identical — RE2 has no
+		// lookahead, so the skip is an explicit following-text check.
+		pat := regexp.MustCompile(regexp.QuoteMeta(tc.recv + "." + tc.name + "(" + tc.ctx + ","))
+		txLead := regexp.MustCompile(`^\s*` + regexp.QuoteMeta(tc.tx) + `\s*,`)
+		var sb strings.Builder
+		prev := 0
+		for _, loc := range pat.FindAllStringIndex(rewritten, -1) {
+			if txLead.MatchString(rewritten[loc[1]:]) {
+				continue
+			}
+			sb.WriteString(rewritten[prev:loc[1]])
+			sb.WriteString(" " + tc.tx + ",")
+			prev = loc[1]
+			for prev < len(rewritten) && (rewritten[prev] == ' ' || rewritten[prev] == '\t') {
+				prev++
+			}
+			sb.WriteString(" ")
+		}
+		sb.WriteString(rewritten[prev:])
+		rewritten = sb.String()
+	}
+	cls := make([]string, 0, len(rewritten)/40+3)
+	for _, line := range strings.Split(rewritten, "\n") {
+		cls = append(cls, rewriteClosureReturn(line))
+	}
+	tail := ""
+	for i := len(cls) - 1; i >= 0; i-- {
+		if t := strings.TrimSpace(cls[i]); t != "" {
+			tail = t
+			break
+		}
+	}
+	if !isReturnLine(tail) {
+		cls = append(cls, "return nil")
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "if err := utils.ExecTransaction(%s, %s.GetDB(), func(tx *sqlx.Tx) error {\n",
+		ctxName, tcs[0].recv)
+	sb.WriteString(strings.Join(cls, "\n"))
+	sb.WriteString("\n}); err != nil {\n\treturn nil, err\n}\nreturn data, nil")
+	return sb.String(), true
 }
 
 // validateFragment parses a fragment in the same synthetic-method wrap
