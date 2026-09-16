@@ -99,6 +99,51 @@ func TestFixRuneLiteralsSliceBounds(t *testing.T) {
 	}
 }
 
+// TestStripLeadingArmChain pins the branch-continuation repair: a leading
+// else-if/else header (with or without the orphan `}`) unwraps to its inner
+// statements plus any tail; other bodies stay byte-identical.
+func TestStripLeadingArmChain(t *testing.T) {
+	in := "else if request.RqstTyp == \"W\" {\n" +
+		"\ts.store.FetchAnalyzerMstr(c)\n" +
+		"\treturn data, nil\n" +
+		"}\n" +
+		"s.store.GetUserInfo(c)\n" +
+		"return data, nil\n"
+	got, ok := stripLeadingArmChain(in)
+	if !ok {
+		t.Fatalf("else-if header not stripped:\n%s", in)
+	}
+	for _, want := range []string{"s.store.FetchAnalyzerMstr(c)", "s.store.GetUserInfo(c)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q after strip:\n%s", want, got)
+		}
+	}
+	for _, gone := range []string{"else if", "request.RqstTyp"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("header residue %q survived:\n%s", gone, got)
+		}
+	}
+
+	// The orphan-`}` form and the plain else form unwrap too.
+	if got, ok := stripLeadingArmChain("} else {\n\treturn data, nil\n}\n"); !ok || strings.TrimSpace(got) != "return data, nil" {
+		t.Errorf("orphan else strip = %q, %v", got, ok)
+	}
+	if got, ok := stripLeadingArmChain("else { s.store.One(c) }"); !ok || got != "s.store.One(c)" {
+		t.Errorf("bare else strip = %q, %v", got, ok)
+	}
+
+	// Ordinary bodies never match.
+	for _, body := range []string{
+		"if request.MfGrowthFlg == \"H\" {\n\treturn data, nil\n}",
+		"s.store.One(c)\nelsewhere()\nreturn data, nil",
+		"else if (unclosed {\n",
+	} {
+		if got, ok := stripLeadingArmChain(body); ok || got != body {
+			t.Errorf("non-header body altered:\n in: %q\nout: %q", body, got)
+		}
+	}
+}
+
 // TestTerminatingReturnErr pins the fall-off-the-end gate: named results do
 // not make an implicit return legal.
 func TestTerminatingReturnErr(t *testing.T) {

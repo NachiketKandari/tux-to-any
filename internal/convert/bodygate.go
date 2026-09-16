@@ -337,6 +337,10 @@ func stubNames(opts Options) map[string]bool {
 // shapes the pipeline can own deterministically.
 func repairControllerBody(ctx context.Context, unit, axisVar, content string) string {
 	body := cleanBody(content)
+	if fixed, ok := stripLeadingArmChain(body); ok {
+		telemetry.Log(ctx).Info("leading arm chain stripped", "unit", unit)
+		body = fixed
+	}
 	if axisVar != "" {
 		if fixed, ok := repairArmWrapper(body, axisVar); ok {
 			telemetry.Log(ctx).Info("arm wrapper unwrapped", "unit", unit, "axis", axisVar)
@@ -344,6 +348,60 @@ func repairControllerBody(ctx context.Context, unit, axisVar, content string) st
 		}
 	}
 	return ensureTerminalReturn(body)
+}
+
+// stripLeadingArmChain removes a leading branch-continuation header the
+// model occasionally re-adds around a scenario arm — `else if (…) { … }`,
+// `} else if (…) { … }`, `else { … }`, `} else { … }`. A Go body can never
+// legally start with `else`, and the method's own condition already
+// represents the arm, so the header and its matching closing brace drop;
+// the inner text plus anything after the block becomes the body. The piece
+// must match exactly (header + one block); anything else is returned
+// unchanged for the gate to reject.
+func stripLeadingArmChain(body string) (string, bool) {
+	t := strings.TrimSpace(body)
+	rest := t
+	if strings.HasPrefix(rest, "}") {
+		rest = strings.TrimSpace(rest[1:])
+	}
+	if !strings.HasPrefix(rest, "else") {
+		return body, false
+	}
+	rest = strings.TrimSpace(rest[len("else"):])
+	if rest == "" {
+		return body, false
+	}
+	if strings.HasPrefix(rest, "if") {
+		rest = strings.TrimSpace(rest[len("if"):])
+		if rest == "" {
+			return body, false
+		}
+		if rest[0] == '(' {
+			_, close, ok := balancedParens(rest, 0)
+			if !ok {
+				return body, false
+			}
+			rest = strings.TrimSpace(rest[close+1:])
+		} else {
+			open := strings.IndexByte(rest, '{')
+			if open < 0 {
+				return body, false
+			}
+			rest = rest[open:]
+		}
+	}
+	if rest == "" || rest[0] != '{' {
+		return body, false
+	}
+	inner, next, ok := stringBraceBody(rest, 0)
+	if !ok {
+		return body, false
+	}
+	tail := strings.TrimSpace(rest[next:])
+	if tail == "" {
+		return strings.TrimSpace(inner), true
+	}
+	return strings.TrimRight(inner, " \t\n") + "\n" + tail, true
 }
 
 // ensureTerminalReturn appends the terminal `return data, err` when the
