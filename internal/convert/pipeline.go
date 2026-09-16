@@ -525,6 +525,14 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		view.Source = inlined
 		telemetry.Log(ctx).Info("legacy constants inlined into view", "unit", u.Name, "substitutions", n)
 	}
+	// Store-call capture rendering: the accepted shape assigns every result
+	// (error-only → `err = …`; rows → `<name>Rows, err := …`). The view
+	// carries it so models copy the captured form instead of the bare call
+	// the stale-err gate rejects.
+	if assigned, n := assignStoreCalls(view.Source, receiverOf(opts), storeCallShapes(svc, calls)); n > 0 {
+		view.Source = assigned
+		telemetry.Log(ctx).Info("store calls captured in view", "unit", u.Name, "calls", n)
+	}
 	// §4.7 query-replacement accounting (engine-wiring audit Tier-2: the
 	// budget engine computed this on every seam call and nothing recorded
 	// it). One line per unit in the run log.
