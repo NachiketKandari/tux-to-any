@@ -514,8 +514,9 @@ func buildChunkPrompt(cx chunkCtx, k, n int, chunkText, dbContract, contract str
 // controllerBodyChunked runs the oversized-endpoint path: statement-boundary
 // chunks, one bounded-retry seam call per chunk, fragment gates, then the
 // combined body through the full parse + REQUIRED-CALLS gates. Any chunk or
-// the combined gate failing fails the unit loudly with the chunk named.
-func controllerBodyChunked(cx chunkCtx) (string, error) {
+// the combined gate failing fails the unit loudly with the chunk named; the
+// last rejected payload rides back so the caller can keep it visible.
+func controllerBodyChunked(cx chunkCtx) (string, string, error) {
 	opts := cx.opts
 	receiver := receiverOf(opts)
 	methods := requiredCalls(cx.view.Source, receiver)
@@ -535,7 +536,7 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 	errCodesAll := legacyErrorCodes(cx.cond)
 	contract, err := cx.svc.ControllerPromptContext(cx.unit.Name, opts.Plan, methods)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	// The per-chunk scaffold is what a chunk's prompt actually carries: the
@@ -592,7 +593,7 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 		sliceBudget = outputRoom
 	}
 	if sliceBudget < minFragmentChars {
-		return "", fmt.Errorf("convert: budget: prompt of %d tokens exceeds the %d-token ceiling and the prompt scaffolding leaves no fragment room (output ceiling %d tokens) — trim the mapping or raise run.maxPromptTokens/run.maxOutputTokens",
+		return "", "", fmt.Errorf("convert: budget: prompt of %d tokens exceeds the %d-token ceiling and the prompt scaffolding leaves no fragment room (output ceiling %d tokens) — trim the mapping or raise run.maxPromptTokens/run.maxOutputTokens",
 			opts.Budget.Count(cx.prompt), opts.Budget.MaxPromptTokens, opts.Budget.MaxOutputTokens)
 	}
 
@@ -610,6 +611,7 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 			filterHelpers(helpersAll, chunkText), filterByPresence(constantsAll, chunkText),
 			filterByPresence(errCodesAll, chunkText), filterStubs(opts.Plan.Stubs, chunkText),
 			fragmentLocals(strings.Join(bodies, "\n")))
+		fragRej := ""
 		fragment, chatCalls, _, err := llm.RunSeam(cx.ctx, llm.SeamInput{
 			Unit: cx.unit.ID, Kind: string(cx.unit.Kind), Name: fmt.Sprintf("%s#chunk%d", cx.unit.Name, k+1),
 			Template: cx.unit.TemplateID, LLM: cx.unit.LLM, Repair: opts.RetryRepair,
@@ -625,16 +627,21 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 				verr = append(verr, requiredCallErrs(chunkText, body, receiver)...)
 				return append(verr, controllerTuxedoErrs(body)...)
 			},
+			Rejected: func(payload string) { fragRej = payload },
 		})
 		opts.Ledger.Get(cx.unit.ID, string(cx.unit.Kind), cx.unit.Name).Attempts += chatCalls
 		cx.res.LLMCalls += chatCalls
 		if err != nil {
-			return "", fmt.Errorf("fragment %d/%d: %w", k+1, n, err)
+			return "", fragRej, fmt.Errorf("fragment %d/%d: %w", k+1, n, err)
 		}
 		bodies = append(bodies, fragment)
 	}
 
 	combined := strings.Join(bodies, "\n")
+	// rejected is the last bad payload the caller keeps visible when the
+	// stitch cannot be rescued: the combined body itself, or the repair
+	// seam's final rejected payload when one existed.
+	rejected := combined
 	parseErrs := validateBody(opts, combined)
 	reqErrs := requiredCallErrs(cx.view.Source, combined, receiver)
 	txErrs := txGateErrs(combined, cx.calls)
@@ -670,16 +677,18 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 		// repair seam over the stitched body is the difference between a
 		// converted endpoint and a lost one — re-gated by the same combined
 		// contract, never bypassed.
-		if fixed, ok := repairCombinedBody(cx, contract, fullSigs, combined, fullErrs); ok {
+		if fixed, repairRej, ok := repairCombinedBody(cx, contract, fullSigs, combined, fullErrs); ok {
 			telemetry.Log(cx.ctx).Info("combined fragment body repaired",
 				"unit", cx.unit.Name, "errors", len(fullErrs))
 			combined = fixed
 			fullErrs = nil
 			repaired = true // the fixed body owns the final shape
+		} else if repairRej != "" {
+			rejected = repairRej
 		}
 	}
 	if len(fullErrs) > 0 {
-		return "", fmt.Errorf("combined fragment body failed validation: %s", strings.Join(fullErrs, "; "))
+		return "", rejected, fmt.Errorf("combined fragment body failed validation: %s", strings.Join(fullErrs, "; "))
 	}
 	// Composer pass: one stitch call over the fragment outputs + the
 	// applicable controller template shape. Fragment outputs fit in context
@@ -701,7 +710,7 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 	}
 	combined = ensureTerminalReturn(combined)
 	opts.Ledger.Set(cx.unit.ID, ledger.StatusValidated, "")
-	return combined, nil
+	return combined, "", nil
 }
 
 // buildComposerPrompt assembles the stitch call: the controller template
@@ -769,10 +778,10 @@ func composeFragments(cx chunkCtx, contract, fullSigs string, bodies []string) (
 // the combined gates: the prompt carries the full contract, the gate errors,
 // and the body, and the result must pass the same combined contract. The
 // prompt is budget-checked first; any rejection keeps the loud failure.
-func repairCombinedBody(cx chunkCtx, contract, fullSigs, body string, errs []string) (string, bool) {
+func repairCombinedBody(cx chunkCtx, contract, fullSigs, body string, errs []string) (string, string, bool) {
 	opts := cx.opts
 	if opts.Client == nil || cx.ctx.Err() != nil {
-		return "", false
+		return "", "", false
 	}
 	receiver := receiverOf(opts)
 	var sb strings.Builder
@@ -786,9 +795,10 @@ func repairCombinedBody(cx chunkCtx, contract, fullSigs, body string, errs []str
 		if berr := opts.Budget.CheckInput(prompt); berr != nil {
 			telemetry.Log(cx.ctx).Warn("combined repair skipped — prompt over ceiling",
 				"unit", cx.unit.Name, "error", berr.Error())
-			return "", false
+			return "", "", false
 		}
 	}
+	rej := ""
 	fixed, chatCalls, _, err := llm.RunSeam(cx.ctx, llm.SeamInput{
 		Unit: cx.unit.ID, Kind: string(cx.unit.Kind), Name: cx.unit.Name + "#repair",
 		Template: cx.unit.TemplateID, LLM: cx.unit.LLM, Repair: true,
@@ -806,15 +816,16 @@ func repairCombinedBody(cx chunkCtx, contract, fullSigs, body string, errs []str
 			verr = append(verr, controllerTuxedoErrs(b)...)
 			return append(verr, txGateErrs(b, cx.calls)...)
 		},
+		Rejected: func(payload string) { rej = payload },
 	})
 	opts.Ledger.Get(cx.unit.ID, string(cx.unit.Kind), cx.unit.Name).Attempts += chatCalls
 	cx.res.LLMCalls += chatCalls
 	if err != nil {
 		telemetry.Log(cx.ctx).Warn("combined repair rejected",
 			"unit", cx.unit.Name, "error", err.Error())
-		return "", false
+		return "", rej, false
 	}
-	return fixed, true
+	return fixed, "", true
 }
 
 // txLocalDeclRe spots a var-declared tx handle the repair's closure

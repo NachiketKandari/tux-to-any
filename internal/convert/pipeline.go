@@ -352,8 +352,11 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		if opts.Client == nil {
 			return nil, fmt.Errorf("convert: endpoint %s needs the LLM client but none is configured", u.Name)
 		}
-		body, _, err := controllerBody(ctx, opts, res, svc, u, dbBodies, sr)
+		body, rejected, _, err := controllerBody(ctx, opts, res, svc, u, dbBodies, sr)
 		if err != nil {
+			// Keep the last rejected output visible (commented, behind a
+			// panicking placeholder) — an empty controller helps nobody.
+			appendRejectedController(ctx, opts, res, svc, u, ctrlFilePath, rejected, err)
 			opts.Ledger.Set(u.ID, ledger.StatusFailed, err.Error())
 			res.Failed = append(res.Failed, u.Name)
 			continue
@@ -397,13 +400,17 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			if opts.Client == nil {
 				return nil, fmt.Errorf("convert: fn helper %s needs the LLM client but none is configured", u.Name)
 			}
-			body, _, err := fnHelperBody(ctx, opts, res, svc, u, dbBodies)
+			body, rejected, _, err := fnHelperBody(ctx, opts, res, svc, u, dbBodies)
 			if err != nil {
+				// Same visible-fallback posture as the controller path: the
+				// rejected helper stays commented behind its panicking
+				// placeholder instead of vanishing from fns.go.
+				appendRejectedFnHelper(ctx, opts, res, svc, u, fnFilePath, rejected, err)
 				opts.Ledger.Set(u.ID, ledger.StatusFailed, err.Error())
 				res.Failed = append(res.Failed, u.Name)
 				continue
 			}
-			if err := appendFnHelper(ctx, opts, res, svc, fnFilePath, body); err != nil {
+			if err := appendFnHelper(ctx, opts, res, svc, fnFilePath, u.Name, body); err != nil {
 				opts.Ledger.Set(u.ID, ledger.StatusFailed, err.Error())
 				res.Failed = append(res.Failed, u.Name)
 				continue
@@ -434,14 +441,14 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 // per-seam policy (retry through chat errors, the separate validation-
 // feedback message) stays local. Scenario endpoints (sr != nil for a
 // scenario slice) swap the branch view for the flattened slice (G-SCEN6).
-func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Service, u plan.Unit, dbBodies map[string]dbOut, sr *scenRun) (body, prompt string, err error) {
+func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Service, u plan.Unit, dbBodies map[string]dbOut, sr *scenRun) (body, rejected, prompt string, err error) {
 	c := svc.ConditionOf(u.Name)
 	if c == nil {
-		return "", "", fmt.Errorf("convert: no condition for endpoint %s", u.Name)
+		return "", "", "", fmt.Errorf("convert: no condition for endpoint %s", u.Name)
 	}
 	queries, calls, err := svc.BranchCalls(c, opts.Plan)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	view := budget.View{Source: branchSource(opts.Source, c.StartLine, c.EndLine)}
 	scen := (*scenPrompt)(nil)
@@ -451,7 +458,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		if sc := svc.ScenarioOf(u.Name); sc != nil {
 			view, err = scenarioView(opts, svc, sc, sr.tree, calls)
 			if err != nil {
-				return "", "", err
+				return "", "", "", err
 			}
 			axisVar = sc.Var
 			scen = scenPromptOf(sc, sr.diff)
@@ -463,7 +470,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	if scen == nil {
 		view, err = budget.ReplaceQueries(view.Source, queries, calls)
 		if err != nil {
-			return "", "", fmt.Errorf("convert: query replacement for %s: %w", u.Name, err)
+			return "", "", "", fmt.Errorf("convert: query replacement for %s: %w", u.Name, err)
 		}
 		if opts.FlowDraft {
 			draft = flowDraft(opts, svc, c)
@@ -558,7 +565,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	sort.Strings(methods)
 	contract, err := svc.ControllerPromptContext(u.Name, opts.Plan, methods)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	prompt = buildPrompt(view, dbSignaturesFor(opts.Plan, dbBodies, methods), contract, u.Name, draft, opts.Plan.Stubs, legacyHelpers(opts.Plan, view.Source),
 		legacyConstants(opts.Main, c, opts.Main.Entry), legacyErrorCodes(c), scen)
@@ -579,15 +586,16 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		telemetry.Log(ctx).Info("endpoint split into statement fragments", "unit", u.Name, "reason", chunkReason)
 		// Statement-boundary fragments, one bounded seam call per fragment,
 		// combined body through the full gates.
-		body, cerr := controllerBodyChunked(chunkCtx{
+		body, chunkRej, cerr := controllerBodyChunked(chunkCtx{
 			ctx: ctx, opts: opts, res: res, svc: svc, unit: u, db: dbBodies,
 			cond: c, view: view, scen: scen, axisVar: axisVar, prompt: prompt, calls: calls,
 		})
 		if cerr != nil {
-			return "", prompt, cerr
+			return "", chunkRej, prompt, cerr
 		}
-		return body, prompt, nil
+		return body, "", prompt, nil
 	}
+	rej := ""
 	accepted, chatCalls, notes, err := llm.RunSeam(ctx, llm.SeamInput{
 		Unit: u.ID, Kind: string(u.Kind), Name: u.Name,
 		Template: u.TemplateID, LLM: u.LLM, Repair: opts.RetryRepair,
@@ -605,6 +613,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 			verr = append(verr, controllerTuxedoErrs(body)...)
 			return append(verr, txGateErrs(body, calls)...)
 		},
+		Rejected: func(payload string) { rej = payload },
 	})
 	res.LLMCalls += chatCalls
 	opts.Ledger.Get(u.ID, string(u.Kind), u.Name).Attempts += chatCalls
@@ -612,12 +621,12 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		if chatCalls == 0 {
 			// The prompt was rejected before any chat call: over the input
 			// ceiling — a wiring problem, not a validation failure.
-			return "", prompt, fmt.Errorf("convert: %w — trim the mapping or raise run.maxPromptTokens", err)
+			return "", rej, prompt, fmt.Errorf("convert: %w — trim the mapping or raise run.maxPromptTokens", err)
 		}
-		return "", prompt, fmt.Errorf("validation failed after %d attempts: %s", chatCalls, strings.Join(notes, "; "))
+		return "", rej, prompt, fmt.Errorf("validation failed after %d attempts: %s", chatCalls, strings.Join(notes, "; "))
 	}
 	opts.Ledger.Set(u.ID, ledger.StatusValidated, "")
-	return accepted, prompt, nil
+	return accepted, "", prompt, nil
 }
 
 const systemPrompt = `You emit the body of a Go controller method translated from a legacy Pro*C/Tuxedo branch.
@@ -655,18 +664,18 @@ Rules:
 // same no-raw-SQL contract the branch path enforces — plus the DB
 // signatures, the legacy error codes, and the stub list; then runs the LLM
 // seam with the parse/name/required-call gates.
-func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Service, u plan.Unit, dbBodies map[string]dbOut) (body, prompt string, err error) {
+func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Service, u plan.Unit, dbBodies map[string]dbOut) (body, rejected, prompt string, err error) {
 	h, ok := fnHelperOf(opts.Plan, u.Name)
 	if !ok {
-		return "", "", fmt.Errorf("convert: no fn record for helper %s", u.Name)
+		return "", "", "", fmt.Errorf("convert: no fn record for helper %s", u.Name)
 	}
 	fnSource := branchSource(opts.Source, h.StartLine, h.EndLine)
 	if strings.TrimSpace(fnSource) == "" {
-		return "", "", fmt.Errorf("convert: fn helper %s has an empty source span (%d-%d)", u.Name, h.StartLine, h.EndLine)
+		return "", "", "", fmt.Errorf("convert: fn helper %s has an empty source span (%d-%d)", u.Name, h.StartLine, h.EndLine)
 	}
 	calls, err := svc.StoreCallsFor(u.QueryIDs, opts.Plan)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	queries := make([]*ir.Query, 0, len(u.QueryIDs))
 	for _, id := range u.QueryIDs {
@@ -681,7 +690,7 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 	}
 	view, err := budget.ReplaceQueries(fnSource, queries, calls)
 	if err != nil {
-		return "", "", fmt.Errorf("convert: query replacement for fn %s: %w", u.Name, err)
+		return "", "", "", fmt.Errorf("convert: query replacement for fn %s: %w", u.Name, err)
 	}
 	// Same deterministic view passes as the controller seam (a helper body
 	// carries the same legacy seams — unpack probes, err legs, scaffold):
@@ -734,6 +743,7 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 	prompt = buildFnPrompt(h, structName, view.Source,
 		dbSignaturesFor(opts.Plan, dbBodies, methods), svc.FnRowContracts(opts.Plan, u.QueryIDs),
 		fnErrorCodes(view.Source), legacyHelpers(opts.Plan, view.Source), opts.Plan.Stubs)
+	rej := ""
 	accepted, chatCalls, notes, err := llm.RunSeam(ctx, llm.SeamInput{
 		Unit: u.ID, Kind: string(u.Kind), Name: u.Name,
 		Template: u.TemplateID, LLM: u.LLM, Repair: opts.RetryRepair,
@@ -746,16 +756,17 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 		Gate: func(body string) []string {
 			return fnHelperGate(body, h, structName, view.Source, receiverOf(opts))
 		},
+		Rejected: func(payload string) { rej = payload },
 	})
 	res.LLMCalls += chatCalls
 	if err != nil {
 		if chatCalls == 0 {
-			return "", prompt, fmt.Errorf("convert: %w — raise run.maxPromptTokens", err)
+			return "", rej, prompt, fmt.Errorf("convert: %w — raise run.maxPromptTokens", err)
 		}
-		return "", prompt, fmt.Errorf("validation failed after %d attempts: %s", chatCalls, strings.Join(notes, "; "))
+		return "", rej, prompt, fmt.Errorf("validation failed after %d attempts: %s", chatCalls, strings.Join(notes, "; "))
 	}
 	opts.Ledger.Get(u.ID, string(u.Kind), u.Name).Attempts += chatCalls
-	return accepted, prompt, nil
+	return accepted, "", prompt, nil
 }
 
 // fnHelperGate validates one seam attempt: the fixed receiver/name shape,
@@ -902,7 +913,19 @@ func fnHelperOf(p *plan.Plan, goName string) (plan.FnHelper, bool) {
 // controller/interface.go (the controller-interface unit) and fns.go must
 // not redeclare them. Imports are derived from the file text — only what
 // it references — so the file never carries unused imports for Tier B.
-func appendFnHelper(ctx context.Context, opts Options, res *Result, svc *gen.Service, path, body string) error {
+func appendFnHelper(ctx context.Context, opts Options, res *Result, svc *gen.Service, path, name, body string) error {
+	_, err := writeFnArtifact(ctx, opts, res, svc, path, name, body)
+	return err
+}
+
+// writeFnArtifact merges one complete helper method into controller/fns.go
+// and reports whether it wrote: a rejected placeholder for the same method
+// is replaced, a live method with that name wins, and the scaffold (struct
+// + constructor) is created on first use only for fn-lib plans — a service
+// run's struct lives in controller/interface.go and fns.go must not
+// redeclare it. Imports are derived from the file text so the file never
+// carries unused imports for Tier B.
+func writeFnArtifact(ctx context.Context, opts Options, res *Result, svc *gen.Service, path, name, body string) (bool, error) {
 	structName := common.LowerFirst(svc.Mapping.Service) + "Controller"
 	dbImport := svc.Mapping.ImportPath("db")
 	dbQual := dbImport[strings.LastIndexByte(dbImport, '/')+1:]
@@ -911,9 +934,16 @@ func appendFnHelper(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	if _, statErr := os.Stat(path); statErr == nil {
 		existing, rerr := os.ReadFile(path)
 		if rerr != nil {
-			return rerr
+			return false, rerr
 		}
-		merged = string(existing) + "\n" + strings.TrimRight(body, "\n") + "\n"
+		src := string(existing)
+		if stripped, ok := stripRejectedBlock(src, name); ok {
+			src = stripped
+		}
+		if hasLiveMethod(src, name) {
+			return false, nil
+		}
+		merged = src + "\n" + strings.TrimRight(body, "\n") + "\n"
 	} else {
 		merged = "package controller\n\n"
 		if opts.Plan == nil || opts.Plan.FnLib {
@@ -923,33 +953,59 @@ func appendFnHelper(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		}
 		merged += strings.TrimRight(body, "\n") + "\n"
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
+			return false, err
 		}
 	}
 	formatted, ferr := goast.Emit("convert: fn helpers file", merged)
 	if ferr != nil {
-		return ferr
+		return false, ferr
 	}
 	if err := os.WriteFile(path, []byte(formatted), 0o644); err != nil {
-		return err
+		return false, err
 	}
 	if imports := deriveFnImports(formatted, dbImport, svc.ModelsPkg); len(imports) > 0 {
 		if err := goast.AddImports(path, imports...); err != nil {
-			return err
+			return false, err
 		}
 		if final, rerr := os.ReadFile(path); rerr == nil {
 			if norm, nerr := goast.Emit("convert: fn helpers file", string(final)); nerr == nil {
 				if werr := os.WriteFile(path, []byte(norm), 0o644); werr != nil {
-					return werr
+					return false, werr
 				}
 			}
 		}
 	}
 	if err := validateFile(ctx, opts, path); err != nil {
-		return err
+		return false, err
 	}
 	res.Files = append(res.Files, path)
-	return nil
+	return true, nil
+}
+
+// appendRejectedFnHelper keeps a failed service helper's last rejected
+// output visible the same way the controller path does: commented inside a
+// panicking placeholder with the prescribed signature (which callers were
+// generated against). Fn-lib helpers keep their legacy posture — no
+// callers exist, so nothing is gained by a placeholder.
+func appendRejectedFnHelper(ctx context.Context, opts Options, res *Result, svc *gen.Service, u plan.Unit, path, rejected string, cause error) {
+	h, ok := fnHelperOf(opts.Plan, u.Name)
+	if !ok || !h.Fixed || strings.TrimSpace(rejected) == "" {
+		return
+	}
+	structName := common.LowerFirst(svc.Mapping.Service) + "Controller"
+	body := rejectedBodyComment(h.GoName, rejected, cause) +
+		"\n\tpanic(\"tuxgo: " + h.GoName + " rejected — the commented output above is the last rejected attempt; fix the view or rerun\")"
+	method := fnHelperDecl(h, structName) + " {\n" + body + "\n}\n"
+	wrote, err := writeFnArtifact(ctx, opts, res, svc, path, h.GoName, rejectedBlock(h.GoName, method))
+	if err != nil {
+		telemetry.Log(ctx).Warn("rejected helper output not kept", "unit", u.Name, "error", err.Error())
+		return
+	}
+	if !wrote {
+		return
+	}
+	telemetry.Log(ctx).Info("rejected helper output kept commented", "unit", u.Name)
+	res.Warnings = append(res.Warnings, u.Name+" failed validation — the last rejected output is kept commented in fns.go (panicking placeholder)")
 }
 
 // deriveFnImports lists the import paths the fn file's text references:
@@ -1713,20 +1769,31 @@ func appendControllerMethod(ctx context.Context, opts Options, res *Result, svc 
 	if err != nil {
 		return err
 	}
+	_, err = writeControllerArtifact(ctx, opts, res, svc, path, u.Name, method)
+	return err
+}
+
+// writeControllerArtifact merges one rendered method into the controller
+// file and reports whether it wrote. A rejected placeholder for the same
+// method is replaced (never duplicated); a live method with that name wins
+// (resume guard: the ledger is the resume record, but a cleared/stale
+// ledger against an existing file would restack the method — generation is
+// deterministic, so bytes would be identical). Imports stay content-gated.
+func writeControllerArtifact(ctx context.Context, opts Options, res *Result, svc *gen.Service, path, name, method string) (bool, error) {
 	var merged string
 	if _, statErr := os.Stat(path); statErr == nil {
 		existing, rerr := os.ReadFile(path)
 		if rerr != nil {
-			return rerr
+			return false, rerr
 		}
-		// Resume guard (audit 2026-09-16): the ledger is the resume record,
-		// but a cleared/stale ledger against an existing file would restack
-		// the same method. A method with this name already present wins —
-		// generation is deterministic, so bytes would be identical.
-		if strings.Contains(string(existing), ") "+u.Name+"(") {
-			return nil
+		src := string(existing)
+		if stripped, ok := stripRejectedBlock(src, name); ok {
+			src = stripped
 		}
-		merged = string(existing) + "\n" + strings.TrimRight(method, "\n") + "\n"
+		if hasLiveMethod(src, name) {
+			return false, nil
+		}
+		merged = src + "\n" + strings.TrimRight(method, "\n") + "\n"
 	} else {
 		// The base header carries only what every method needs; errors/fmt
 		// (and the tx/sqlx pair below) are added content-gated so a body
@@ -1734,16 +1801,16 @@ func appendControllerMethod(ctx context.Context, opts Options, res *Result, svc 
 		// syntax-only runs would keep the gap latent until Tier B.
 		header := "package controller\n\nimport (\n\t\"context\"\n\n\t\"" + svc.Module + "/pkg/logger\"\n\t\"" + svc.ModelsPkg + "\"\n)\n"
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
+			return false, err
 		}
 		merged = header + "\n" + strings.TrimRight(method, "\n") + "\n"
 	}
 	formatted, ferr := goast.Emit("convert: controller file", merged)
 	if ferr != nil {
-		return ferr
+		return false, ferr
 	}
 	if err := os.WriteFile(path, []byte(formatted), 0o644); err != nil {
-		return err
+		return false, err
 	}
 	// Tx bodies need imports the fixed header never carried: utils for the
 	// ExecTransaction wrapper, sqlx for the tx handle. Previously every
@@ -1765,14 +1832,99 @@ func appendControllerMethod(ctx context.Context, opts Options, res *Result, svc 
 	}
 	if len(wantImports) > 0 {
 		if err := goast.AddImports(path, wantImports...); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := validateFile(ctx, opts, path); err != nil {
-		return err
+		return false, err
 	}
 	res.Files = append(res.Files, path)
-	return nil
+	return true, nil
+}
+
+// appendRejectedController keeps a failed seam's last rejected output
+// visible: the output rides commented inside a panicking placeholder method
+// (the stub-and-carry-on posture of the fn stubs) instead of the method
+// disappearing. Best-effort: the unit still fails in the ledger, so resume
+// retries, and writeControllerArtifact replaces the placeholder when a
+// later attempt succeeds.
+func appendRejectedController(ctx context.Context, opts Options, res *Result, svc *gen.Service, u plan.Unit, path, rejected string, cause error) {
+	if strings.TrimSpace(rejected) == "" {
+		return
+	}
+	body := rejectedBodyComment(u.Name, rejected, cause) +
+		"\n\tpanic(\"tuxgo: " + u.Name + " rejected — the commented output above is the last rejected attempt; fix the view or rerun\")"
+	method, err := svc.RenderControllerMethod(u.Name, body)
+	if err != nil {
+		telemetry.Log(ctx).Warn("rejected output not kept", "unit", u.Name, "error", err.Error())
+		return
+	}
+	wrote, err := writeControllerArtifact(ctx, opts, res, svc, path, u.Name, rejectedBlock(u.Name, method))
+	if err != nil {
+		telemetry.Log(ctx).Warn("rejected output not kept", "unit", u.Name, "error", err.Error())
+		return
+	}
+	if !wrote {
+		return
+	}
+	telemetry.Log(ctx).Info("rejected output kept commented", "unit", u.Name)
+	res.Warnings = append(res.Warnings, u.Name+" failed validation — the last rejected output is kept commented in the controller (panicking placeholder)")
+}
+
+// rejectedBlock wraps a placeholder method in strip markers so a later
+// accepted body replaces it instead of stacking a duplicate.
+func rejectedBlock(name, method string) string {
+	return "// tuxgo:REJECTED-BEGIN " + name + "\n" + method + "\n// tuxgo:REJECTED-END " + name + "\n"
+}
+
+// stripRejectedBlock removes a previously kept rejected placeholder for
+// name (markers included) from src.
+func stripRejectedBlock(src, name string) (string, bool) {
+	begin := "// tuxgo:REJECTED-BEGIN " + name
+	end := "// tuxgo:REJECTED-END " + name
+	i := strings.Index(src, begin)
+	if i < 0 {
+		return src, false
+	}
+	j := strings.Index(src[i:], end)
+	if j < 0 {
+		return src, false
+	}
+	j += i + len(end)
+	if j < len(src) && src[j] == '\n' {
+		j++
+	}
+	return src[:i] + src[j:], true
+}
+
+// hasLiveMethod reports whether src declares a real method named name —
+// line-anchored, so commented rejected signatures never count.
+func hasLiveMethod(src, name string) bool {
+	re := regexp.MustCompile(`(?m)^func \([^)]*\) ` + regexp.QuoteMeta(name) + `\(`)
+	return re.MatchString(src)
+}
+
+// rejectedBodyComment renders the header + commented payload of a kept
+// rejected output: every payload line becomes a `//` comment (any content
+// stays inert), and the marker text inside the payload is neutralized so it
+// can never collide with the block markers.
+func rejectedBodyComment(name, rejected string, cause error) string {
+	rejected = strings.ReplaceAll(rejected, "tuxgo:REJECTED", "tuxgo_REJECTED")
+	var b strings.Builder
+	fmt.Fprintf(&b, "// tuxgo:REJECTED — %s: every attempt failed validation; the last rejected output is kept below, compiled out.\n", name)
+	if cause != nil {
+		fmt.Fprintf(&b, "// rejection: %s\n", strings.ReplaceAll(strings.TrimSpace(cause.Error()), "\n", " "))
+	}
+	b.WriteString("//\n")
+	for _, ln := range strings.Split(strings.TrimRight(rejected, "\n"), "\n") {
+		ln = strings.TrimRight(ln, "\r")
+		if ln == "" {
+			b.WriteString("//\n")
+			continue
+		}
+		b.WriteString("// " + ln + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // renderTPCallPlaceholders writes controller/tpcall_placeholders.go for the

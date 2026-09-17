@@ -154,6 +154,36 @@ func TestRunSeamExhaustionReturnsJoinedGateError(t *testing.T) {
 	}
 }
 
+// TestRunSeamRejectedCallback pins the visible-fallback hook: every gated
+// payload reaches Rejected (the last one on total failure), while chat
+// errors have no payload to offer.
+func TestRunSeamRejectedCallback(t *testing.T) {
+	c := &stubClient{responses: []chatOutcome{{content: "v1"}, {content: "v2"}}}
+	in := seamInput(c, nil)
+	in.MaxRetries = 1
+	in.Gate = func(string) []string { return []string{"bad"} }
+	var got []string
+	in.Rejected = func(p string) { got = append(got, p) }
+	payload, calls, _, err := RunSeam(context.Background(), in)
+	if err == nil || payload != "" || calls != 2 {
+		t.Fatalf("payload=%q calls=%d err=%v", payload, calls, err)
+	}
+	if strings.Join(got, ",") != "v1,v2" {
+		t.Fatalf("rejected payloads = %v, want [v1 v2]", got)
+	}
+
+	boom := errors.New("connection refused")
+	c2 := &stubClient{responses: []chatOutcome{{err: boom}}}
+	in2 := seamInput(c2, nil)
+	in2.MaxRetries = 0
+	got = nil
+	in2.Rejected = func(p string) { got = append(got, p) }
+	_, _, _, err = RunSeam(context.Background(), in2)
+	if err == nil || len(got) != 0 {
+		t.Fatalf("chat error fired Rejected (%v, err=%v)", got, err)
+	}
+}
+
 func TestRunSeamChatErrorAbortPolicy(t *testing.T) {
 	boom := errors.New("connection refused")
 	c := &stubClient{responses: []chatOutcome{{err: boom}}}

@@ -70,6 +70,13 @@ type SeamInput struct {
 	// attempt. nil = any in-budget response is accepted.
 	Gate func(payload string) []string
 
+	// Rejected, when set, receives the extracted payload of every gated
+	// attempt. Callers use it as a visible fallback artifact when all
+	// attempts fail (a rejected body kept in comments beats an empty
+	// method); on success the last call is moot. Never called for chat
+	// errors or over-cap responses (no payload exists).
+	Rejected func(payload string)
+
 	// AbortOnChatError returns the chat error immediately (after archiving)
 	// instead of feeding it back and retrying. Transport failures usually
 	// mean the endpoint is down, so seams that cannot make progress abort;
@@ -202,6 +209,9 @@ func RunSeam(ctx context.Context, in SeamInput) (payload string, calls int, note
 			gateErrs = in.Gate(payload)
 		}
 		if len(gateErrs) > 0 {
+			if in.Rejected != nil {
+				in.Rejected(payload)
+			}
 			lastErr = errors.New(strings.Join(gateErrs, "; "))
 			telemetry.Log(ctx).Warn("llm attempt rejected — retrying",
 				"name", in.Name, "attempt", attempt+1, "max", maxAttempts,
