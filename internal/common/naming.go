@@ -2,6 +2,19 @@ package common
 
 import "strings"
 
+// EscapeLeadingDigit prefixes "X" when s starts with a digit ("1ST_AMT" →
+// "X1ST_AMT"), keeping source-derived names valid Go identifiers. The
+// escape is a letter, not "_", so struct fields, row/request types and
+// store methods stay exported — JSON tags and cross-package references
+// keep working. Every Go-path naming policy applies it, so digit-leading
+// FML/SQL tokens never fail the render gate (goast.Emit's parse check).
+func EscapeLeadingDigit(s string) string {
+	if s != "" && s[0] >= '0' && s[0] <= '9' {
+		return "X" + s
+	}
+	return s
+}
+
 // Export upper-cases the first rune ("nav" → "Nav"). One home for
 // plan.interfaceName and gen.exportName (A3.2).
 func Export(s string) string {
@@ -9,7 +22,7 @@ func Export(s string) string {
 	if len(r) == 0 {
 		return s
 	}
-	return strings.ToUpper(string(r[0])) + string(r[1:])
+	return EscapeLeadingDigit(strings.ToUpper(string(r[0])) + string(r[1:]))
 }
 
 // LowerFirst lower-cases the first rune ("NavController" → "navController").
@@ -37,7 +50,7 @@ func CamelGo(s string) string {
 		sb.WriteRune([]rune(strings.ToUpper(string(r[0])))[0])
 		sb.WriteString(string(r[1:]))
 	}
-	return sb.String()
+	return EscapeLeadingDigit(sb.String())
 }
 
 // CamelLowerGo renders a snake_case identifier with the first segment kept
@@ -58,7 +71,7 @@ func CamelLowerGo(s string) string {
 		sb.WriteRune([]rune(strings.ToUpper(string(r[0])))[0])
 		sb.WriteString(string(r[1:]))
 	}
-	return sb.String()
+	return EscapeLeadingDigit(sb.String())
 }
 
 // CamelPy renders an identifier as CamelCase preserving inner case, after

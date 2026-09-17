@@ -169,12 +169,14 @@ func (s *Service) responseType(endpoint string) string {
 // RowName derives the models struct carrying one query's result row: the
 // mapping pin's Row when set, else the method name minus its verb. The verb
 // list mirrors plan.methodName's emitted prefixes (Get/Insert/Update/Delete/
-// Merge — A2.6 added Merge, which plan emits for unpinned MERGE units).
+// Merge — A2.6 added Merge, which plan emits for unpinned MERGE units). A
+// digit-leading result takes the common X escape — never "_", which would
+// leave the row type unexported and break db/controller references.
 func (s *Service) RowName(queryID, methodName string) string {
 	if pin, ok := s.Pin(queryID); ok && pin.Row != "" {
-		return pin.Row
+		return common.EscapeLeadingDigit(pin.Row)
 	}
-	return s.Profile().Naming().Row(methodName)
+	return common.EscapeLeadingDigit(s.Profile().Naming().Row(methodName))
 }
 
 // FnRowContracts renders the row struct definitions a fn helper's store
