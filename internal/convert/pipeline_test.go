@@ -851,6 +851,32 @@ func TestControllerTuxedoGate(t *testing.T) {
 	}
 }
 
+// TestMethodLanded pins the merged-file resume guard: a ledger-appended
+// controller/fn-helper unit skips regeneration only when its live method is
+// still on disk. Missing files, foreign methods, and commented rejected
+// placeholders are all a miss (regenerate); only a real declaration lands.
+func TestMethodLanded(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ctrl.go")
+	src := "package controller\n\nfunc (s *navController) NavHistory(c context.Context) {}\n" +
+		"// tuxgo:REJECTED-BEGIN SipFreedem\n// func (s *navController) SipFreedem(\n// tuxgo:REJECTED-END SipFreedem\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !methodLanded(path, "NavHistory") {
+		t.Error("live method not detected")
+	}
+	if methodLanded(path, "SipFreedem") {
+		t.Error("commented rejected placeholder counted as landed")
+	}
+	if methodLanded(path, "NoSuchMethod") {
+		t.Error("foreign method counted as landed")
+	}
+	if methodLanded(filepath.Join(dir, "missing.go"), "NavHistory") {
+		t.Error("missing file counted as landed")
+	}
+}
+
 // TestCleanBodyNormalizesNullString pins the extraction fixup: two-level
 // .String() (the model's NullString spelling) becomes the .String field,
 // while single-level calls (e.g. time.Time.String()) pass through.

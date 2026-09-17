@@ -384,16 +384,29 @@ func stubNames(opts Options) map[string]bool {
 // repairControllerBody is the extract-side deterministic repair for
 // controller bodies: cleanBody, the arm-wrapper unwrap, and the terminal
 // return. The repairs run before the gates so the model is not asked to fix
-// shapes the pipeline can own deterministically.
+// shapes the pipeline can own deterministically. The rune-literal fix is
+// parse-dependent, so it re-runs after the structural strips: a body that
+// re-adds the leading arm header does not parse, cleanBody's fix no-ops on
+// it, and without the second pass the gate burns a retry on literals the
+// pipeline could have owned.
 func repairControllerBody(ctx context.Context, unit, axisVar, content string) string {
 	body := cleanBody(content)
+	stripped := false
 	if fixed, ok := stripLeadingArmChain(body); ok {
 		telemetry.Log(ctx).Info("leading arm chain stripped", "unit", unit)
 		body = fixed
+		stripped = true
 	}
 	if axisVar != "" {
 		if fixed, ok := repairArmWrapper(body, axisVar); ok {
 			telemetry.Log(ctx).Info("arm wrapper unwrapped", "unit", unit, "axis", axisVar)
+			body = fixed
+			stripped = true
+		}
+	}
+	if stripped {
+		if fixed := fixRuneLiterals(body); fixed != body {
+			telemetry.Log(ctx).Info("rune literals rewritten after strip", "unit", unit)
 			body = fixed
 		}
 	}

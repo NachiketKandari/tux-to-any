@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -96,6 +97,36 @@ func TestFixRuneLiteralsSliceBounds(t *testing.T) {
 	// The rune fix still applies next to a slice expression.
 	if got := fixRuneLiterals("flg := 'Y'\nb := s[:1]\n_ = b\nreturn flg, nil"); !strings.Contains(got, `flg := "Y"`) {
 		t.Errorf("rune fix lost with slice present: %q", got)
+	}
+}
+
+// TestRepairControllerBodyStripsArmThenFixesRunes is the GetMfFreed-attempt0
+// regression: the payload re-added the leading else-if header AND carried
+// 'N'/'Y' rune literals. cleanBody's fix no-ops on the unparseable header,
+// so the repair must re-apply the rune fix after the strip — otherwise the
+// gate burns a retry on literals the pipeline could have owned.
+func TestRepairControllerBodyStripsArmThenFixesRunes(t *testing.T) {
+	in := "else if request.MfGrowthFlg == \"F\" {\n" +
+		"\tc_d2u_active_flg := 'N'\n" +
+		"\tc_enable_d2u_flg := 'N'\n" +
+		"\tif c_d2u_active_flg == 'Y' {\n" +
+		"\t\tc_enable_d2u_flg = 'Y'\n" +
+		"\t} else {\n" +
+		"\t\tc_enable_d2u_flg = 'N'\n" +
+		"\t}\n" +
+		"\t_ = c_enable_d2u_flg\n" +
+		"}\n"
+	got := repairControllerBody(context.Background(), "GetMfFreed", "", in)
+	if strings.Contains(got, "else if") {
+		t.Fatalf("arm header survived repair:\n%s", got)
+	}
+	if errs := runeLiteralErrs(got); len(errs) != 0 {
+		t.Fatalf("rune literals survived repair: %v\n%s", errs, got)
+	}
+	for _, want := range []string{`"N"`, `"Y"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %s after repair:\n%s", want, got)
+		}
 	}
 }
 

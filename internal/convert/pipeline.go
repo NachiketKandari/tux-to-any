@@ -342,9 +342,13 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	for _, u := range unitsOf(opts.Plan, plan.KindControllerMethod) {
-		opts.Ledger.Get(u.ID, string(u.Kind), u.Name) // register before any transition
-		if opts.Ledger.Get(u.ID, string(u.Kind), u.Name).Status == ledger.StatusAppended {
-			continue // resume: already converted
+		entry := opts.Ledger.Get(u.ID, string(u.Kind), u.Name) // register before any transition
+		if entry.Status == ledger.StatusAppended {
+			if methodLanded(ctrlFilePath, u.Name) {
+				continue // resume: method already on disk
+			}
+			telemetry.Log(ctx).Info("controller method missing despite appended ledger — regenerating",
+				"unit", u.Name, "path", ctrlFilePath)
 		}
 		if opts.SkipLLM {
 			// Deterministic-only mode: leave controller bodies for a later
@@ -392,9 +396,13 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, ferr
 		}
 		for _, u := range fnUnits {
-			opts.Ledger.Get(u.ID, string(u.Kind), u.Name) // register before any transition
-			if opts.Ledger.Get(u.ID, string(u.Kind), u.Name).Status == ledger.StatusAppended {
-				continue // resume: already converted
+			entry := opts.Ledger.Get(u.ID, string(u.Kind), u.Name) // register before any transition
+			if entry.Status == ledger.StatusAppended {
+				if methodLanded(fnFilePath, u.Name) {
+					continue // resume: helper already on disk
+				}
+				telemetry.Log(ctx).Info("fn helper missing despite appended ledger — regenerating",
+					"unit", u.Name, "path", fnFilePath)
 			}
 			if opts.SkipLLM {
 				opts.Ledger.Set(u.ID, ledger.StatusSkipped, "llm disabled (run.llm: false)")
@@ -1908,6 +1916,20 @@ func hasLiveMethod(src, name string) bool {
 	return re.MatchString(src)
 }
 
+// methodLanded reports whether path exists and declares a live method named
+// name — the merged-file resume guard. Ledger-appended controller/fn-helper
+// units skip regeneration only when their method is still on disk; a cleared
+// staged tree with a kept ledger must regenerate instead of silently leaving
+// the tree incomplete. Any read failure is a miss (conservative: regenerate
+// and let the write surface the real error).
+func methodLanded(path, name string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return hasLiveMethod(string(data), name)
+}
+
 // rejectedBodyComment renders the header + commented payload of a kept
 // rejected output: every payload line becomes a `//` comment (any content
 // stays inert), and the marker text inside the payload is neutralized so it
@@ -1947,7 +1969,12 @@ func renderTPCallPlaceholders(ctx context.Context, opts Options, res *Result, sv
 		opts.Ledger.Get(u.ID, string(u.Kind), u.Name) // register before transitions
 	}
 	if e := opts.Ledger.Get(units[0].ID, string(units[0].Kind), units[0].Name); e.Status == ledger.StatusPlaceholder {
-		return nil // resume: the placeholder file already landed
+		if _, serr := os.Stat(path); serr == nil {
+			return nil // resume: the placeholder file already landed
+		} else if !os.IsNotExist(serr) {
+			return fmt.Errorf("convert: stat tpcall placeholders: %w", serr)
+		}
+		telemetry.Log(ctx).Info("placeholder file missing despite ledger — regenerating", "path", path)
 	}
 	content, err := svc.PlaceholderFile(opts.Plan)
 	if err != nil {
@@ -2090,23 +2117,49 @@ func renamedUnits(p *plan.Plan, l *ledger.Ledger) []string {
 
 // fnStubLanded reports whether the fnstub file unit already converted — the
 // resume shortcut that keeps stub synthesis a first-run cost. It reads the
-// ledger map directly (no Get) so the probe never mutates resume state.
+// ledger map directly (no Get) so the probe never mutates resume state. A
+// cleared staged tree with a kept ledger must re-run synthesis: otherwise
+// generateFile would rewrite panicking stubs over the synthesized ones with
+// an empty synth map.
 func fnStubLanded(opts Options) bool {
 	id := unitID(opts.Plan, plan.KindFnStub)
 	if id == "" {
 		return true // no stubs — nothing to synthesize
 	}
 	e, ok := opts.Ledger.Units[id]
-	return ok && e.Status == ledger.StatusAppended
+	if !ok || e.Status != ledger.StatusAppended {
+		return false
+	}
+	if opts.Plan == nil || opts.Plan.Mapping == nil {
+		return true
+	}
+	path, err := opts.absPath(opts.BaseDir, opts.Plan.Mapping.ImportPath("controller")+"/fnstubs.go")
+	if err != nil {
+		return true
+	}
+	if _, serr := os.Stat(path); serr == nil {
+		return true
+	} else if !os.IsNotExist(serr) {
+		return true // let generateFile surface the stat error without burning synthesis
+	}
+	return false
 }
 
 // generateFile renders a deterministic artifact, writes it (unless the
-// ledger already marked it appended — resume), validates Tier A, and
-// records the ledger + audit trail.
+// ledger already marked it appended AND the file is still on disk —
+// resume), validates Tier A, and records the ledger + audit trail. A resume
+// whose staged tree was cleared must regenerate: an appended ledger entry
+// with no file falls through instead of silently leaving the tree
+// incomplete.
 func generateFile(ctx context.Context, opts Options, res *Result, id, kind, name, path string, render func() (string, error)) error {
 	e := opts.Ledger.Get(id, kind, name)
 	if e.Status == ledger.StatusAppended {
-		return nil // resume
+		if _, serr := os.Stat(path); serr == nil {
+			return nil // resume: artifact already on disk
+		} else if !os.IsNotExist(serr) {
+			return fmt.Errorf("convert: stat %s: %w", path, serr)
+		}
+		telemetry.Log(ctx).Info("staged artifact missing despite appended ledger — regenerating", "unit", name, "path", path)
 	}
 	content, err := render()
 	if err != nil {
