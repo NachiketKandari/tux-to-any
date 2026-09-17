@@ -24,9 +24,12 @@ import (
 // chain and response shape. Convergent is true when the return sits
 // outside every branch body (function-tail return): every dispatch arm
 // flows into it, so the outcome alone under-splits and Arms carries the
-// per-arm split the condition layer must supply (the mainTux shape).
+// per-arm split the condition layer must supply (the convergent-tail
+// shape: several content arms, one shared tail return).
 type ReturnOutcome struct {
 	ReturnLine   int      `json:"return_line"`
+	Kind        string   `json:"kind,omitempty"` // "return" (default) or "forward"
+	ForwardTo   string   `json:"forward_to,omitempty"`
 	Buffer       string   `json:"buffer,omitempty"`
 	InsideBranch bool     `json:"inside_branch"`
 	GuardChain   []string `json:"guard_chain,omitempty"`
@@ -54,7 +57,8 @@ type ReturnArm struct {
 
 // noiseCondSubstr marks guard predicates that are plumbing, not business
 // dispatch: SQL status, FML presence checks, debug switches, buffer-alloc
-// NULL checks. These dominate raw if-counts (e.g. sub_trn's ~1800 ifs)
+// NULL checks. These dominate raw if-counts (e.g. ~1800 ifs in the large
+// transaction file, most of them SQLCODE/DEBUG/Ferror guards)
 // but never delimit services.
 var noiseCondSubstr = []string{
 	"SQLCODE", "sqlca", "Ferror", "FNOTPRES", "Fget32",
@@ -78,15 +82,28 @@ func IsNoiseCond(cond string) bool {
 // only); success is arg0 == TPSUCCESS. TPFAIL legs are error exits, not
 // outcomes.
 func SuccessReturnSites(facts *scanner.SourceFacts, fn string) []scanner.FunctionCall {
+	return terminalSites(facts, fn, false)
+}
+
+// ForwardSites lists tpforward(...) call lines in fn. tpforward ends the
+// service by delegating the request to another service — a success
+// terminal with no local reply, invisible to TPSUCCESS-only scans.
+func ForwardSites(facts *scanner.SourceFacts, fn string) []scanner.FunctionCall {
+	return terminalSites(facts, fn, true)
+}
+
+func terminalSites(facts *scanner.SourceFacts, fn string, forward bool) []scanner.FunctionCall {
 	var out []scanner.FunctionCall
 	for _, c := range facts.Calls {
-		if c.Func != fn || c.Name != "tpreturn" {
+		if c.Func != fn {
 			continue
 		}
-		if !strings.Contains(c.Args, "TPSUCCESS") {
-			continue
+		if forward && c.Name == "tpforward" {
+			out = append(out, c)
 		}
-		out = append(out, c)
+		if !forward && c.Name == "tpreturn" && strings.Contains(c.Args, "TPSUCCESS") {
+			out = append(out, c)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
 	return out
@@ -102,6 +119,31 @@ func returnBuffer(args string) string {
 	}
 	b := strings.TrimSpace(parts[2])
 	// strip C casts "(char *)" repeatedly, then &, *, parens
+	for {
+		t := strings.TrimSpace(b)
+		if strings.HasPrefix(t, "(") {
+			if i := strings.Index(t, ")"); i >= 0 {
+				b = t[i+1:]
+				continue
+			}
+		}
+		break
+	}
+	b = strings.Trim(b, "&*() \t")
+	if i := strings.Fields(b); len(i) > 0 {
+		b = i[0]
+	}
+	return b
+}
+
+// forwardBuffer extracts tpforward's delegated buffer (arg1):
+// tpforward(svc, data, len, flags).
+func forwardBuffer(args string) string {
+	parts := splitCallArgs(args)
+	if len(parts) < 2 {
+		return ""
+	}
+	b := strings.TrimSpace(parts[1])
 	for {
 		t := strings.TrimSpace(b)
 		if strings.HasPrefix(t, "(") {
@@ -170,19 +212,32 @@ func branchPath(tree *Tree, line int) []*Node {
 	return best
 }
 
-// DiscoverByReturn groups by success-return site (effect) and labels each
-// outcome with its causing guard chain (cause). Tail returns outside any
-// branch are marked Convergent with per-arm censuses so the caller can
-// apply the condition split inside the outcome.
+// DiscoverByReturn groups by success-terminal site (effect) and labels each
+// outcome with its causing guard chain (cause). tpforward delegations are
+// outcomes of kind "forward" (no local reply shape — Adds stays empty and
+// ForwardTo names the delegate). Tail returns outside any branch are marked
+// Convergent with per-arm censuses so the caller can apply the condition
+// split inside the outcome.
 func DiscoverByReturn(tree *Tree, conditions []ir.Condition, facts *scanner.SourceFacts, fn string) []ReturnOutcome {
 	sites := SuccessReturnSites(facts, fn)
+	for _, s := range ForwardSites(facts, fn) {
+		sites = append(sites, s)
+	}
+	sort.Slice(sites, func(i, j int) bool { return sites[i].Line < sites[j].Line })
 	out := make([]ReturnOutcome, 0, len(sites))
 	for _, s := range sites {
 		path := branchPath(tree, s.Line)
 		oc := ReturnOutcome{
 			ReturnLine:   s.Line,
-			Buffer:       returnBuffer(s.Args),
 			InsideBranch: len(path) > 0,
+		}
+		if s.Name == "tpforward" {
+			oc.Kind = "forward"
+			oc.ForwardTo = forwardService(s.Args)
+			oc.Buffer = forwardBuffer(s.Args)
+		} else {
+			oc.Kind = "return"
+			oc.Buffer = returnBuffer(s.Args)
 		}
 		for _, b := range path {
 			if IsNoiseCond(b.Cond) {

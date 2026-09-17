@@ -18,6 +18,7 @@ import (
 	"tux-to-any/internal/llm"
 	"tux-to-any/internal/plan"
 	"tux-to-any/internal/telemetry"
+	tsscan "tux-to-any/internal/tsscan"
 )
 
 // runDiscover implements `tuxgo discover <file|dir>` — the PRD-2026-09-10
@@ -141,6 +142,7 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *con
 				}
 			}
 			printScenarioSummary(f, axis, scens)
+			printReturnCrossCheck(tree, facts, f)
 			if qualifying == 0 {
 				fmt.Printf("- %s: axis %s — no scenario carries FML traffic (reads or writes); map manually if you know better\n", f.Entry, axis)
 			} else {
@@ -167,6 +169,7 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *con
 				continue
 			}
 			fmt.Printf("- %s: no dispatch axis — condition-based discovery\n", f.Entry)
+			printReturnCrossCheck(tree, facts, f)
 			aiNames := aiNameEndpoints(ctx, log, client, bd, f, tree, candidates, src, rec)
 			draft = renderDraft(f, candidates, dirMode, aiNames)
 			printDiscoverSummary(f, tree, candidates)
@@ -482,6 +485,43 @@ func writeSuggestion(sb *strings.Builder, sug aiSuggestion) {
 		fmt.Fprintf(sb, "    route: %-15s # deterministic — edit freely\n", strconv.Quote(sug.Route))
 	default:
 		fmt.Fprintf(sb, "    route: %-15s # ai-suggested — edit freely\n", strconv.Quote(sug.Route))
+	}
+}
+
+// printReturnCrossCheck is the return-anchored II validation line: every
+// success terminal (tpreturn(TPSUCCESS)/tpforward) is an outcome the
+// condition/axis split must account for. It reports in-branch outcomes vs
+// convergent tail returns (whose arms carry the split) and forwarded
+// delegations — advisory only, never changes the draft.
+func printReturnCrossCheck(tree *flow.Tree, facts *tsscan.SourceFacts, f *ir.File) {
+	if tree == nil || facts == nil || f == nil || f.Entry == "" {
+		return
+	}
+	outs := flow.DiscoverByReturn(tree, f.Conditions, facts, f.Entry)
+	if len(outs) == 0 {
+		return
+	}
+	inBranch, conv, forwards := 0, 0, []string{}
+	for _, o := range outs {
+		switch {
+		case o.Kind == "forward":
+			forwards = append(forwards, fmt.Sprintf("L%d→%s", o.ReturnLine, o.ForwardTo))
+		case o.Convergent:
+			conv++
+		default:
+			inBranch++
+		}
+	}
+	fmt.Printf("  outcomes: %d success terminal(s) — %d in-branch, %d convergent tail(s)",
+		len(outs), inBranch, conv)
+	if len(forwards) > 0 {
+		fmt.Printf(", %d forward(s) [%s]", len(forwards), strings.Join(forwards, ", "))
+	}
+	fmt.Println()
+	for _, o := range outs {
+		if o.Convergent {
+			fmt.Printf("    tail L%d: %d arm(s) feed it — split inside by arm\n", o.ReturnLine, len(o.Arms))
+		}
 	}
 }
 

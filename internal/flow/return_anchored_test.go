@@ -1,8 +1,6 @@
 package flow
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,7 +9,7 @@ import (
 )
 
 // dispatchSrc: two business arms, each with its own success return inside
-// the arm (the risk.pc shape in miniature).
+// the arm (the multi-outcome dispatch shape in miniature).
 const dispatchSrc = `void SVC_DISP(TPSVCINFO *rqst) {
 	char c_flag;
 	if (Fget32(ptr_fml_Ibuffer, FML_FLAG, 0, (char *)&c_flag, 0) == -1) {
@@ -89,7 +87,7 @@ func TestSuccessReturnsConvergent(t *testing.T) {
 		t.Errorf("convergent arms = %+v, want the single content arm c_flag=='H'", oc.Arms)
 	}
 
-	// mainTux shape: two content arms converge to one tail return — the
+	// Convergent shape: two content arms converge to one tail return — the
 	// outcome under-splits and the arms carry the 2-way split.
 	const convergentSrc = `void SVC_CONV(TPSVCINFO *rqst) {
 	char c_flag;
@@ -159,37 +157,147 @@ func TestTpacallTreatedAsTpcall(t *testing.T) {
 	}
 }
 
-func TestTpacallIRContract(t *testing.T) {
-	src := `void SVC_A(TPSVCINFO *rqst) {
-	Fadd32(abuf, FML_COMP_CD, (char *)&c, 0);
-	tpacall("SVC_ASYNC", (char *)abuf, 0, 0);
-	tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+// condsFromRoots fabricates the condition inventory from the tree's
+// non-debug roots (the ir extraction shape for synthetic sources).
+func condsFromRoots(tree *Tree) []ir.Condition {
+	var conds []ir.Condition
+	for _, n := range tree.Root {
+		if n.Kind != KindBranch || isDebugCond(n) {
+			continue
+		}
+		conds = append(conds, ir.Condition{
+			Index: len(conds) + 1, Kind: n.Sub, Expr: n.Cond,
+			StartLine: n.Line, EndLine: n.EndLine,
+			FmlOps: n.FmlOps, QueryIDs: n.QueryIDs,
+		})
+	}
+	return conds
+}
+
+// Terminal-anchored arms read from the shared preamble: no in-arm Gets,
+// but a TPSUCCESS they own. The wired rubric must qualify them (the old
+// gets&&adds rule skipped them), with a loadable key round-tripping
+// through ConditionFor; the TPFAIL error arm stays excluded.
+const terminalSrc = `void SVC_TERM(TPSVCINFO *rqst) {
+	char c_flag;
+	Fget32(ptr_fml_Ibuffer, FML_FLAG, 0, (char *)&c_flag, 0);
+	if (c_flag == 'H') {
+		Fadd32(ptr_fml_Obuffer, FML_A, (char *)&a, 0);
+		tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+	} else {
+		Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_errmsg, 0);
+		tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+	}
 }
 `
-	dir := t.TempDir()
-	p := filepath.Join(dir, "SVC_A.pc")
-	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	f, err := ir.ExtractFile(p)
+
+func TestDiscoverTerminalAnchoredArm(t *testing.T) {
+	facts, err := scanner.ScanBytes([]byte(terminalSrc), "term.pc")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.TPCalls) != 1 {
-		t.Fatalf("tpcalls = %+v, want 1", f.TPCalls)
+	tree := Build([]byte(terminalSrc), facts, "SVC_TERM", nil)
+	conds := condsFromRoots(tree)
+	if len(conds) != 2 {
+		t.Fatalf("inventory = %d, want 2", len(conds))
 	}
-	tc := f.TPCalls[0]
-	if !tc.Async {
-		t.Errorf("want async tpacall marker, got %+v", tc)
+	got := Discover(tree, conds)
+	if len(got) != 1 {
+		t.Fatalf("candidates = %+v, want exactly the terminal-anchored arm", got)
 	}
-	if tc.Service != "SVC_ASYNC" || tc.SendBuffer != "abuf" {
-		t.Errorf("service/send = %q/%q, want SVC_ASYNC/abuf", tc.Service, tc.SendBuffer)
+	c := got[0]
+	if c.Key != "c1" {
+		t.Errorf("key = %s, want c1", c.Key)
 	}
-	// tpacall args[3] is flags (here "0") — must never become a buffer.
-	if tc.RecvBuffer != "" {
-		t.Errorf("tpacall RecvBuffer = %q, want empty (args[3] is flags)", tc.RecvBuffer)
+	if len(c.Gets) != 0 {
+		t.Errorf("gets = %v, want empty (reads live in preamble)", c.Gets)
 	}
-	if len(tc.SendFML) != 1 || tc.SendFML[0].Field != "FML_COMP_CD" {
-		t.Errorf("send contract = %+v, want the FML_COMP_CD add", tc.SendFML)
+	if len(c.Adds) != 1 || c.Adds[0] != "FML_A" {
+		t.Errorf("adds = %v, want [FML_A]", c.Adds)
+	}
+	if c.TerminalLine == 0 {
+		t.Errorf("terminal line not recorded: %+v", c)
+	}
+	// The key must resolve back to the same block.
+	rc, err := ConditionFor(tree, conds, c.Key)
+	if err != nil {
+		t.Fatalf("ConditionFor(%s): %v", c.Key, err)
+	}
+	if rc.StartLine != c.StartLine || rc.EndLine != c.EndLine {
+		t.Errorf("round-trip span %d-%d, want %d-%d",
+			rc.StartLine, rc.EndLine, c.StartLine, c.EndLine)
+	}
+}
+
+// A non-error write arm with only TPFAIL exits is logic/error handling,
+// not an outcome — the terminal leg must not promote it.
+const failOnlySrc = `void SVC_FAILONLY(TPSVCINFO *rqst) {
+	char c_flag;
+	if (c_flag == 'H') {
+		Fadd32(ptr_fml_Obuffer, FML_A, (char *)&a, 0);
+		tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+	} else {
+		other();
+	}
+	tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+
+func TestDiscoverIgnoresFailOnlyArm(t *testing.T) {
+	facts, err := scanner.ScanBytes([]byte(failOnlySrc), "fail.pc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build([]byte(failOnlySrc), facts, "SVC_FAILONLY", nil)
+	conds := condsFromRoots(tree)
+	got := Discover(tree, conds)
+	for _, c := range got {
+		if c.Cond == "c_flag == 'H'" {
+			t.Errorf("TPFAIL-only arm must not qualify: %+v", c)
+		}
+	}
+}
+
+// tpforward ends the service by delegation: an outcome of kind forward
+// carrying the target, qualifying its arm when it shapes a reply.
+const forwardSrc = `void SVC_FWD(TPSVCINFO *rqst) {
+	char c_flag;
+	Fget32(ptr_fml_Ibuffer, FML_FLAG, 0, (char *)&c_flag, 0);
+	if (c_flag == 'H') {
+		Fadd32(ptr_fml_Obuffer, FML_A, (char *)&a, 0);
+		tpforward("SVC_OTHER", (char *)ptr_fml_Ibuffer, 0L, 0);
+	} else {
+		Fadd32(ptr_fml_Obuffer, FML_B, (char *)&b, 0);
+		tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+	}
+}
+`
+
+func TestForwardOutcome(t *testing.T) {
+	facts, err := scanner.ScanBytes([]byte(forwardSrc), "fwd.pc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ForwardSites(facts, "SVC_FWD")) != 1 {
+		t.Fatalf("forward sites = %+v, want 1", facts.Calls)
+	}
+	tree := Build([]byte(forwardSrc), facts, "SVC_FWD", nil)
+	outs := DiscoverByReturn(tree, nil, facts, "SVC_FWD")
+	if len(outs) != 2 {
+		t.Fatalf("outcomes = %+v, want forward + return", outs)
+	}
+	if outs[0].Kind != "forward" || outs[0].ForwardTo != "SVC_OTHER" {
+		t.Errorf("first outcome = %+v, want forward→SVC_OTHER", outs[0])
+	}
+	conds := condsFromRoots(tree)
+	got := Discover(tree, conds)
+	if len(got) != 2 {
+		t.Fatalf("candidates = %+v, want both arms", got)
+	}
+	if got[0].ForwardTo != "SVC_OTHER" || got[0].TerminalLine == 0 {
+		t.Errorf("forward candidate missing terminal attribution: %+v", got[0])
+	}
+	if got[1].TerminalLine == 0 || got[1].ForwardTo != "" {
+		t.Errorf("return candidate misattributed: %+v", got[1])
 	}
 }

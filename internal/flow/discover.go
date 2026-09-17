@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"tux-to-any/internal/ir"
+	scanner "tux-to-any/internal/tsscan"
 )
 
 // Candidate is one discovered API candidate (PRD-2026-09-10 endpoint
@@ -25,6 +26,14 @@ type Candidate struct {
 	Codes           []string `json:"codes,omitempty"`
 	QueryIDs        []string `json:"query_ids,omitempty"`
 	Redundant       bool     `json:"redundant,omitempty"`
+	// TerminalLine is the success-terminal this arm owns: a
+	// tpreturn(TPSUCCESS,...) or tpforward(...) line in the arm's own
+	// span (0 when the arm carries no terminal). ForwardTo names the
+	// tpforward target service ("" for tpreturn outcomes). Arms whose
+	// reads live in the shared entry preamble carry no Gets — the
+	// terminal is what marks them convertible (return-anchored II).
+	TerminalLine int    `json:"terminal_line,omitempty"`
+	ForwardTo    string `json:"forward_to,omitempty"`
 }
 
 // Discover walks the tree and returns the API candidates sorted by line:
@@ -32,7 +41,39 @@ type Candidate struct {
 // plus qualifying nested branches (key c<n>.<k>). An if whose adds are all
 // error emissions fails the rubric — it is a guard (the read collapses into
 // the request struct), never an endpoint.
+//
+// Qualification is return-anchored (experiment exp/return-anchored-detection,
+// now wired): a branch qualifies on request reads AND non-error response
+// writes, OR on non-error response writes plus a success terminal the arm
+// itself owns (tpreturn(TPSUCCESS,...) / tpforward(...)). The second leg
+// covers dispatch arms whose reads live in the shared entry preamble
+// (24 TPSUCCESS arms in the large dispatch file, most with no in-arm
+// Fget32) — the terminal
+// is the outcome evidence, and gen's requestFields unions the consumed
+// preamble reads back into the request contract, so the candidate's
+// request never renders empty for lack of in-arm Gets.
 func Discover(tree *Tree, conditions []ir.Condition) []Candidate {
+	var fn string
+	var facts *scanner.SourceFacts
+	if tree != nil {
+		fn = tree.Function
+		facts = tree.facts
+	}
+	qualifies := func(n *Node) (bool, int, string) {
+		census := fmlCensus(n)
+		if len(census.gets) > 0 && len(census.adds) > 0 {
+			line, fwd := successTerminal(n, facts, fn)
+			return true, line, fwd
+		}
+		if len(census.adds) == 0 {
+			return false, 0, ""
+		}
+		line, fwd := successTerminal(n, facts, fn)
+		if line == 0 {
+			return false, 0, ""
+		}
+		return true, line, fwd
+	}
 	var out []Candidate
 	// walkChildren examines branch children under a qualifying parent key.
 	// The qualifier counter k is shared across the parent's whole subtree
@@ -52,14 +93,15 @@ func Discover(tree *Tree, conditions []ir.Condition) []Candidate {
 					walk(c)
 					continue
 				}
-				census := fmlCensus(c)
-				if len(census.gets) == 0 || len(census.adds) == 0 {
+				ok, termLine, fwd := qualifies(c)
+				if !ok {
 					// Guard or logic-only — not a candidate, but its subtree can
 					// hold candidates under the same parent.
 					walk(c)
 					continue
 				}
 				k++
+				census := fmlCensus(c)
 				cand := Candidate{
 					Key:             fmt.Sprintf("%s.%d", parentKey, k),
 					ParentCondition: parentIdx,
@@ -71,6 +113,8 @@ func Discover(tree *Tree, conditions []ir.Condition) []Candidate {
 					ErrorAdds:       census.errorAdds,
 					Codes:           fmlCodes(c),
 					QueryIDs:        c.QueryIDs,
+					TerminalLine:    termLine,
+					ForwardTo:       fwd,
 				}
 				if parentCand != nil {
 					pc := fmlCensus(parentCand)
@@ -89,7 +133,8 @@ func Discover(tree *Tree, conditions []ir.Condition) []Candidate {
 		}
 		census := fmlCensus(root)
 		idx := conditionIndexOf(root, conditions)
-		if len(census.gets) == 0 || len(census.adds) == 0 || idx == 0 {
+		ok, termLine, fwd := qualifies(root)
+		if !ok || idx == 0 {
 			// Guard/logic-only root — not a candidate itself, but its
 			// subtree can hold candidates. Anchor them to the condition
 			// inventory when the root maps to one (DIS-D3 keys are c<n>.<k>;
@@ -112,6 +157,8 @@ func Discover(tree *Tree, conditions []ir.Condition) []Candidate {
 			ErrorAdds:       census.errorAdds,
 			Codes:           fmlCodes(root),
 			QueryIDs:        root.QueryIDs,
+			TerminalLine:    termLine,
+			ForwardTo:       fwd,
 		})
 		walkChildren(root, "c"+strconv.Itoa(idx), idx, root)
 	}
@@ -289,7 +336,7 @@ func ConditionFor(tree *Tree, conditions []ir.Condition, ref string) (*ir.Condit
 		if err != nil || k < 1 {
 			return nil, fmt.Errorf("flow: malformed candidate reference %q", ref)
 		}
-		found := kthQualifyingChild(current, k)
+		found := kthQualifyingChild(tree, current, k)
 		if found == nil {
 			return nil, fmt.Errorf("flow: candidate reference %q — branch at line %d has fewer qualifying nested branch(es)", ref, current.Line)
 		}
@@ -317,9 +364,28 @@ func rootFor(tree *Tree, c *ir.Condition) *Node {
 }
 
 // kthQualifyingChild replays Discover's key assignment: the k-th qualifying
-// branch in the same depth-first order the walk used for keys.
-func kthQualifyingChild(n *Node, k int) *Node {
+// branch in the same depth-first order the walk used for keys. The
+// qualifier is Discover's (reads+writes, or writes+owned success
+// terminal) — the two must never drift or refs resolve to the wrong block.
+func kthQualifyingChild(tree *Tree, n *Node, k int) *Node {
 	count := 0
+	var fn string
+	var facts *scanner.SourceFacts
+	if tree != nil {
+		fn = tree.Function
+		facts = tree.facts
+	}
+	qualifies := func(x *Node) bool {
+		census := fmlCensus(x)
+		if len(census.gets) > 0 && len(census.adds) > 0 {
+			return true
+		}
+		if len(census.adds) == 0 {
+			return false
+		}
+		line, _ := successTerminal(x, facts, fn)
+		return line != 0
+	}
 	var walk func(n *Node) *Node
 	walk = func(n *Node) *Node {
 		for _, c := range n.Children {
@@ -329,8 +395,7 @@ func kthQualifyingChild(n *Node, k int) *Node {
 				}
 				continue
 			}
-			census := fmlCensus(c)
-			if len(census.gets) == 0 || len(census.adds) == 0 {
+			if !qualifies(c) {
 				if f := walk(c); f != nil {
 					return f
 				}
@@ -344,6 +409,63 @@ func kthQualifyingChild(n *Node, k int) *Node {
 		return nil
 	}
 	return walk(n)
+}
+
+// successTerminal finds the success terminal the branch itself owns: a
+// tpreturn(TPSUCCESS,...) or tpforward(...) line inside the node's span
+// but outside every descendant branch's span (a nested terminal belongs
+// to the nested arm, never the parent). Returns the line and, for
+// tpforward, the target service ("" for tpreturn outcomes). Zero line =
+// none owned. TPFAIL legs are error exits, never outcomes.
+func successTerminal(n *Node, facts *scanner.SourceFacts, fn string) (line int, forwardTo string) {
+	if n == nil || facts == nil {
+		return 0, ""
+	}
+	var spans [][2]int
+	var collect func(x *Node)
+	collect = func(x *Node) {
+		for _, c := range x.Children {
+			if c.Kind == KindBranch {
+				spans = append(spans, [2]int{c.Line, c.EndLine})
+			}
+			collect(c)
+		}
+	}
+	collect(n)
+	owned := func(l int) bool {
+		if l < n.Line || l > n.EndLine {
+			return false
+		}
+		for _, s := range spans {
+			if l >= s[0] && l <= s[1] {
+				return false
+			}
+		}
+		return true
+	}
+	for i := range facts.Calls {
+		c := &facts.Calls[i]
+		if c.Func != fn || !owned(c.Line) {
+			continue
+		}
+		switch {
+		case c.Name == "tpreturn" && strings.Contains(c.Args, "TPSUCCESS"):
+			return c.Line, ""
+		case c.Name == "tpforward":
+			return c.Line, forwardService(c.Args)
+		}
+	}
+	return 0, ""
+}
+
+// forwardService extracts tpforward's target service (arg0): a string
+// literal in every corpus sample, trimmed defensively.
+func forwardService(args string) string {
+	parts := splitCallArgs(args)
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Trim(strings.TrimSpace(parts[0]), "\" \t")
 }
 
 // synthCondition converts a branch node into the condition-shaped value the
