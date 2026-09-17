@@ -160,9 +160,11 @@ type TPCall struct {
 	RecvFML     []FmlOp `json:"recv_fml,omitempty"`
 	StartLine   int     `json:"start_line"`
 	EndLine     int     `json:"end_line"`
-	// Function is call-site attribution (the enclosing legacy fn).
-	// Surfaced in the IR JSON archive only; no in-process reader
-	// (engine-wiring audit Tier-2 note).
+	// Async marks the tpacall (async, no inline reply) variant. Sync
+	// tpcall carries service+send+recv buffers; tpacall carries
+	// service+send only and the reply arrives via a later tpgetrply,
+	// so RecvBuffer/RecvFML stay empty by construction — never flags.
+	Async    bool   `json:"async,omitempty"`
 	Function  string `json:"function,omitempty"`
 	Ambiguous bool   `json:"ambiguous,omitempty"`
 }

@@ -21,6 +21,7 @@ func buildTPCalls(facts *tsscan.SourceFacts, f *File, ops []FmlOp, opts Options)
 			StartLine: c.Line,
 			EndLine:   c.Line,
 			Function:  c.Func,
+			Async:     c.Name == "tpacall",
 		}
 		if len(args) > 0 {
 			tc.Service = stringLit(args[0])
@@ -28,7 +29,11 @@ func buildTPCalls(facts *tsscan.SourceFacts, f *File, ops []FmlOp, opts Options)
 		if len(args) > 1 {
 			tc.SendBuffer = baseIdent(args[1])
 		}
-		if len(args) > 3 {
+		// tpcall(svc, send, sendlen, recv, recvlen, flags): args[3] is
+		// the recv buffer. tpacall(svc, send, sendlen, flags): args[3]
+		// is flags — never a buffer. Leave RecvBuffer empty for the
+		// async variant; the reply arrives via tpgetrply.
+		if len(args) > 3 && c.Name != "tpacall" {
 			tc.RecvBuffer = baseIdent(args[3])
 		}
 		lo, hi := enclosingSpan(facts, c)

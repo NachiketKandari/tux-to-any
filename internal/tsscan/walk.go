@@ -595,7 +595,7 @@ func (w *walker) recordCall(n wasitter.Node) {
 		Name: name,
 		Line: int(sp.Row) + 1, Col: int(sp.Column) + 1,
 		Args:      args,
-		IsTpCall:  name == "tpcall",
+		IsTpCall:  IsTpCallName(name),
 		IsFnPref:  strings.HasPrefix(name, "fn_"),
 		IsChkPref: strings.HasPrefix(name, "chk_"),
 		Func:      w.fnCtx(),

@@ -117,6 +117,13 @@ type FunctionDef struct {
 
 // FunctionCall is a call site. Args is the raw text between the call's
 // parens ("" when the parenthesization is unbalanced).
+// IsTpCall is true for both tpcall (sync) and tpacall (async): tpacall is
+// the async variant with no inline reply buffer, but for discovery,
+// analysis scoring, buffer roles, and placeholder generation it carries
+// the same outbound-service dependency signal. Use Name to distinguish
+// sync ("tpcall") from async ("tpacall") when the difference matters
+// (e.g. tpacall has no recv-buffer arg — args[3] is flags, and the reply
+// arrives via a later tpgetrply).
 type FunctionCall struct {
 	Name      string
 	Line      int
@@ -126,6 +133,13 @@ type FunctionCall struct {
 	IsFnPref  bool
 	IsChkPref bool
 	Func      string
+}
+
+// IsTpCallName reports whether a callee name is a Tuxedo service call —
+// tpcall or its async sibling tpacall. Case-sensitive: ATMI names are
+// lowercase in every corpus sample.
+func IsTpCallName(name string) bool {
+	return name == "tpcall" || name == "tpacall"
 }
 
 // Directive is a raw preprocessor fact, recorded but never interpreted.

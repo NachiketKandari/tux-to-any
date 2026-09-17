@@ -221,7 +221,7 @@ func stubSynthGate(body, goName string) []string {
 }
 
 var (
-	sqlTuxedoRef  = regexp.MustCompile(`(?i)\b(SELECT|INSERT|UPDATE|DELETE|MERGE|CURSOR|EXEC\s+SQL|tpcall|Fadd32|Fget32|FNOTPRES|tpalloc|tpfree|tpreturn|userlog|errlog|sqlca)\b`)
+	sqlTuxedoRef  = regexp.MustCompile(`(?i)\b(SELECT|INSERT|UPDATE|DELETE|MERGE|CURSOR|EXEC\s+SQL|tpcall|tpacall|tpgetrply|Fadd32|Fget32|FNOTPRES|tpalloc|tpfree|tpreturn|userlog|errlog|sqlca)\b`)
 	stubIntReturn = regexp.MustCompile(`\)\s*int\s*\{`)
 )
 

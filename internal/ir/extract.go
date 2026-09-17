@@ -428,7 +428,9 @@ func buildBuffers(facts *tsscan.SourceFacts, f *File, ops []FmlOp, opts Options)
 		if len(args) >= 2 {
 			add(baseIdent(args[1]))
 		}
-		if len(args) >= 4 {
+		// tpacall has no recv-buffer arg (args[3] is flags) — only
+		// tpcall contributes a recv buffer here.
+		if len(args) >= 4 && c.Name != "tpacall" {
 			add(baseIdent(args[3]))
 		}
 	}

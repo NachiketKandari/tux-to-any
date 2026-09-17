@@ -1522,7 +1522,7 @@ var tuxedoCallRe = regexp.MustCompile(`(?i)(?:s\.)?\b(tpreturn|tpalloc|tpfree|tp
 
 // tuxedoRefRe matches legacy runtime references (directives, buffer types,
 // indicator macros, cursor state) with no Go equivalent in a controller.
-var tuxedoRefRe = regexp.MustCompile(`(?i)(EXEC\s+SQL|FBFR32|SQLCODE|SQLCA|SETNULL\s*\(|SETLEN\s*\(|MEMSET\s*\(|unsafe\.Pointer|tpcall\s*\()`)
+var tuxedoRefRe = regexp.MustCompile(`(?i)(EXEC\s+SQL|FBFR32|SQLCODE|SQLCA|SETNULL\s*\(|SETLEN\s*\(|MEMSET\s*\(|unsafe\.Pointer|tpacall\s*\(|tpcall\s*\()`)
 
 // controllerTuxedoErrs rejects transliterated Tuxedo/FML runtime usage in a
 // controller body: the view still shows the legacy runtime calls, but the
