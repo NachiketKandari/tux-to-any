@@ -106,11 +106,11 @@ func bigFixture(t *testing.T, promptCeiling, outputCeiling int) (Options, *llm.F
 // TestSplitStatements pins the chunker's boundary rules: `} else` chains
 // stay glued to their if, unbraced headers glue their single body
 // statement, braces inside string literals never shift the depth, comment
-// lines never close a unit, and the entry's own closing brace is dropped.
+// lines never close a unit, and a trailing real block close is kept.
 func TestSplitStatements(t *testing.T) {
 	units := splitStatements(chunkView)
 	joined := strings.Join(units, "\n")
-	want := chunkView[:strings.LastIndex(chunkView, "\n")] // minus the trailing method-brace line
+	want := chunkView
 	if joined != want {
 		t.Errorf("split lost bytes:\n got %q\nwant %q", joined, want)
 	}
@@ -154,6 +154,24 @@ func TestSplitStatements(t *testing.T) {
 	}
 }
 
+// TestTrailingRealBlockCloseKept pins the Phase 3 contract: a view whose
+// last statement is a braced block keeps its closing `}` — scenario views
+// never carry the entry's own brace lines, so trailing brace-only lines are
+// real code (pre-fix dropTrailingMethodBrace stripped any of them, including
+// legitimate arm closes).
+func TestTrailingRealBlockCloseKept(t *testing.T) {
+	view := "if (a) {\n  s.store.One(c);\n}"
+	units := splitStatements(view)
+	if got := strings.Join(units, "\n"); got != view {
+		t.Errorf("trailing real block close dropped:\n got %q\nwant %q", got, view)
+	}
+	view = "/*L10*/  s.store.One(c);\n/*L11*/}"
+	units = splitStatements(view)
+	if got := strings.Join(units, "\n"); got != view {
+		t.Errorf("provenance-marked trailing block close dropped:\n got %q\nwant %q", got, view)
+	}
+}
+
 // TestSplitStatementsBlankLineChain pins the chain-glue lookahead: blank
 // lines between a block close and its `else` continuation must not break
 // the unit — the next unit starting mid-chain makes the model emit a
@@ -161,7 +179,7 @@ func TestSplitStatements(t *testing.T) {
 func TestSplitStatementsBlankLineChain(t *testing.T) {
 	view := "if (a) {\n  s.store.One(c);\n}\n\nelse {\n  s.store.Two(c);\n}\ns.store.Three(c);\n}"
 	units := splitStatements(view)
-	if got, want := strings.Join(units, "\n"), view[:strings.LastIndex(view, "\n")]; got != want {
+	if got, want := strings.Join(units, "\n"), view; got != want {
 		t.Errorf("split lost bytes:\n got %q\nwant %q", got, want)
 	}
 	for _, u := range units {
@@ -255,7 +273,7 @@ func TestGroupFragmentsChainAtomic(t *testing.T) {
 		}
 		re += c
 	}
-	if want := chunkView[:strings.LastIndex(chunkView, "\n")]; re != want {
+	if want := chunkView; re != want {
 		t.Errorf("chunks do not reassemble the view")
 	}
 }
@@ -273,7 +291,7 @@ func TestGroupFragmentsBudget(t *testing.T) {
 		}
 		re += c
 	}
-	if want := chunkView[:strings.LastIndex(chunkView, "\n")]; re != want {
+	if want := chunkView; re != want {
 		t.Errorf("chunks do not reassemble the view")
 	}
 	// A unit larger than the budget rides alone in its own chunk.

@@ -202,7 +202,9 @@ func (sc *sliceScanner) scanLine(line string) {
 // preprocessor continuations held open. A unit may end inside a braced
 // block (mid-block fragments); validateFragment compensates the brace
 // delta when parsing. Concatenating the units reproduces the view
-// byte-for-byte (minus the dropped trailing method brace).
+// byte-for-byte — scenario views never carry the entry's own brace lines
+// (the MethodTemplate owns them), so a trailing block close is real code
+// and stays.
 func splitStatements(view string) []string {
 	lines := strings.Split(view, "\n")
 	sc := &sliceScanner{}
@@ -240,28 +242,6 @@ func splitStatements(view string) []string {
 	if len(cur) > 0 {
 		units = append(units, strings.Join(cur, "\n"))
 	}
-	return dropTrailingMethodBrace(units)
-}
-
-// dropTrailingMethodBrace removes the entry function's own closing brace —
-// the method template owns it, so it never belongs in a converted body.
-// Provenance markers may prefix the brace line (`/*L21716*/}`), so the
-// check strips block comments before comparing.
-func dropTrailingMethodBrace(units []string) []string {
-	if len(units) == 0 {
-		return units
-	}
-	last := strings.Split(units[len(units)-1], "\n")
-	for len(last) > 0 && braceOnlyLine(last[len(last)-1]) {
-		last = last[:len(last)-1]
-	}
-	for len(last) > 0 && strings.TrimSpace(last[len(last)-1]) == "" {
-		last = last[:len(last)-1]
-	}
-	if len(last) == 0 {
-		return units[:len(units)-1]
-	}
-	units[len(units)-1] = strings.Join(last, "\n")
 	return units
 }
 
@@ -305,25 +285,6 @@ func glueChainUnits(units []string) []string {
 		out = append(out, u)
 	}
 	return out
-}
-
-// braceOnlyLine reports whether a line's code content (block comments
-// stripped) is exactly the method's closing brace.
-func braceOnlyLine(line string) bool {
-	s := line
-	for {
-		i := strings.Index(s, "/*")
-		if i < 0 {
-			break
-		}
-		j := strings.Index(s[i+2:], "*/")
-		if j < 0 {
-			s = s[:i]
-			break
-		}
-		s = s[:i] + s[i+2+j+2:]
-	}
-	return strings.TrimSpace(s) == "}"
 }
 
 // stripLeadingComments trims leading block comments (the flattened render's
