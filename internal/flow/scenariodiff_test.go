@@ -33,7 +33,7 @@ const renderSrc = `void SVC_DEMO(TPSVCINFO *rqst) {
 }
 `
 
-func renderScenarios(t *testing.T) ([]*Scenario, string) {
+func renderScenarios(t *testing.T) ([]*Scenario, *Tree, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "SVC_DEMO.pc")
 	if err := os.WriteFile(path, []byte(renderSrc), 0o644); err != nil {
@@ -52,11 +52,11 @@ func renderScenarios(t *testing.T) ([]*Scenario, string) {
 	if axis == nil {
 		t.Fatal("no axis")
 	}
-	return Scenarios(tree, axis), renderSrc
+	return Scenarios(tree, axis), tree, renderSrc
 }
 
 func TestRenderScenarioMarkers(t *testing.T) {
-	scens, src := renderScenarios(t)
+	scens, tree, src := renderScenarios(t)
 	var a *Scenario
 	for _, sc := range scens {
 		if sc.Value == "A" {
@@ -66,7 +66,7 @@ func TestRenderScenarioMarkers(t *testing.T) {
 	if a == nil {
 		t.Fatal("no A scenario")
 	}
-	out := RenderScenario(a, "SVC_DEMO", []byte(src), nil)
+	out := RenderScenario(a, tree, "SVC_DEMO", []byte(src), nil)
 	// Header stats + provenance prefixes + fold markers.
 	for _, want := range []string{
 		"/* scenario: trn_cd == 'A'",
@@ -95,7 +95,7 @@ func TestRenderScenarioMarkers(t *testing.T) {
 }
 
 func TestDiffScenarioSetAlgebra(t *testing.T) {
-	scens, _ := renderScenarios(t)
+	scens, _, _ := renderScenarios(t)
 	if len(scens) != 2 {
 		t.Fatalf("scenarios = %d, want P and A", len(scens))
 	}

@@ -63,7 +63,7 @@ func TestScenarioGoldens(t *testing.T) {
 		entry := f.Entry
 		t.Run(entry, func(t *testing.T) {
 			for _, sc := range scens {
-				got := RenderScenario(sc, entry, src, f)
+				got := RenderScenario(sc, tree, entry, src, f)
 				golden := filepath.Join(goldenDir, entry+"."+sc.Var+"_"+scenarioFileValue(sc.Value)+".pc")
 				scenCompareFile(t, golden, got, update)
 			}

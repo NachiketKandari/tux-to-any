@@ -1557,13 +1557,45 @@ type scenarioHeader struct {
 	Residue   []string
 }
 
+// entryBraceLines returns the entry function's own brace lines (1-based) when
+// those source lines are bare `{`/`}` — the boundary lines a scenario slice
+// never carries. Slice spans stay brace-inclusive: a residual run takes its
+// [from,to] edges even when an edge is a folded-out bare brace (flow.go
+// residualRun), so a leading `{`-only run can be absorbed into the first
+// root's span and a trailing run can clamp to the entry `}`. Filtering at
+// emission keeps KeptLines/BodyExtent metadata untouched — coverage checks
+// key on arm header lines, which a bare brace can never be. The exact-match
+// guard skips `}}`-on-one-line, signature+brace lines, and comment tails.
+// Fragment trees bail: their braces are synthesized outside the source.
+func entryBraceLines(tree *Tree, src []byte) map[int]bool {
+	out := map[int]bool{}
+	if tree == nil || tree.facts == nil || tree.facts.Fragment || len(src) == 0 || tree.EndLine <= tree.StartLine {
+		return out
+	}
+	code := maskedLines(tree.facts, splitLines(src))
+	at := func(l int) string {
+		if l < 1 || l > len(code) {
+			return ""
+		}
+		return strings.TrimSpace(code[l-1])
+	}
+	if at(tree.StartLine) == "{" {
+		out[tree.StartLine] = true
+	}
+	if at(tree.EndLine) == "}" {
+		out[tree.EndLine] = true
+	}
+	return out
+}
+
 // RenderScenario emits the flattened .pc for one scenario (G-SCEN3): a
 // deterministic header (stats + query/tx line), then the source with
 // /*L<n>*/ provenance prefixes on every kept line — preamble first, body
 // second (fold markers between), UNFOLDED markers inline at residue sites.
 // The rendering is a consumer view of the Scenario — never a second source
-// of truth (SCEN-D6).
-func RenderScenario(sc *Scenario, entry string, src []byte, irFile *ir.File) string {
+// of truth (SCEN-D6). The entry function's own bare brace lines never render
+// (entryBraceLines): a slice is a fragment; the wrapper owns those braces.
+func RenderScenario(sc *Scenario, tree *Tree, entry string, src []byte, irFile *ir.File) string {
 	lines := bytes.Split(src, []byte("\n"))
 	get := func(l int) string {
 		if l < 1 || l > len(lines) {
@@ -1572,6 +1604,17 @@ func RenderScenario(sc *Scenario, entry string, src []byte, irFile *ir.File) str
 		return string(lines[l-1])
 	}
 	trim := func(s string) string { return strings.TrimRight(s, " \t\r") }
+	braces := entryBraceLines(tree, src)
+	// The comment/string state passes read the comment-masked code image;
+	// stripComments finishes what maskedLines starts (a multi-line comment's
+	// opener line keeps its pre-comment text there).
+	var code []string
+	if tree != nil && tree.facts != nil {
+		code = maskedLines(tree.facts, splitLines(src))
+		for i := range code {
+			code[i] = stripComments(code[i])
+		}
+	}
 
 	h := scenarioHeader{Entry: entry, Var: sc.Var, Value: sc.Value, Kept: sc.Counts.Kept,
 		Dropped: sc.Counts.Dropped, Unfolded: sc.Counts.Unfolded, Queries: sc.Queries, Residue: sc.Residue}
@@ -1627,6 +1670,14 @@ func RenderScenario(sc *Scenario, entry string, src []byte, irFile *ir.File) str
 	// all in original order with /*L<n>*/ prefixes; fold annotations ride
 	// the branch header lines. Chain siblings share boundary lines, so the
 	// emitted set dedups (a line renders once).
+	//
+	// Boundary-safety (Root cause B): a prefix landing inside an open comment
+	// terminates it early — commented-out code becomes live text and brace
+	// counts inflate — and a prefix inside a continued string literal splices
+	// into the literal. Lines that start inside a comment/string omit the
+	// prefix; the rendered comment state resyncs with comment-delimiter-only
+	// lines when the dropped set swallowed an opener (`/*`) or closer (`*/`).
+	// No semantic text is ever injected.
 	ann := map[int]string{}
 	var annotate func(nodes []*SliceNode)
 	annotate = func(nodes []*SliceNode) {
@@ -1643,14 +1694,36 @@ func RenderScenario(sc *Scenario, entry string, src []byte, irFile *ir.File) str
 		}
 	}
 	annotate(sc.Body)
+	srcStartC, srcEndC := commentLineStates(tree, len(lines))
+	srcStartS, srcEndS := literalLineStates(code)
 	emitted := map[int]bool{}
+	rendC := false
+	emitLine := func(l int, body bool) {
+		if srcStartC[l] != rendC {
+			if rendC {
+				sb.WriteString("*/\n") // dropped closer — resync out of the comment
+			} else {
+				sb.WriteString("/*\n") // dropped opener — keep the interior commented
+			}
+		}
+		prefix := ""
+		if !srcStartC[l] && !srcStartS[l] {
+			prefix = fmt.Sprintf("/*L%d*/", l)
+		}
+		suffix := ""
+		if body && !srcEndC[l] && !srcEndS[l] {
+			suffix = ann[l]
+		}
+		fmt.Fprintf(&sb, "%s%s%s\n", prefix, trim(get(l)), suffix)
+		rendC = srcEndC[l]
+	}
 	emit := func(from, to int) {
 		for l := from; l <= to; l++ {
-			if l < 1 || l > len(lines) || emitted[l] {
+			if l < 1 || l > len(lines) || emitted[l] || braces[l] {
 				continue
 			}
 			emitted[l] = true
-			fmt.Fprintf(&sb, "/*L%d*/%s\n", l, trim(get(l)))
+			emitLine(l, false)
 		}
 	}
 	if len(sc.Preamble) > 0 {
@@ -1661,13 +1734,82 @@ func RenderScenario(sc *Scenario, entry string, src []byte, irFile *ir.File) str
 		sb.WriteString("\n/* ---- body under " + sc.Var + " == '" + sc.Value + "' ---- */\n")
 	}
 	for _, l := range bodyLines(sc) {
-		if emitted[l] {
+		if emitted[l] || braces[l] {
 			continue
 		}
 		emitted[l] = true
-		fmt.Fprintf(&sb, "/*L%d*/%s%s\n", l, trim(get(l)), ann[l])
+		emitLine(l, true)
 	}
 	return sb.String()
+}
+
+// commentLineStates derives each source line's block-comment state (1-based,
+// sized n+1) from the scanner's comment spans: start[l] when line l begins
+// inside a multi-line comment, end[l] when it ends still inside one. The
+// start test keeps the plan's exact rule — the closing `*/` beginning at
+// column 1 still means the line opens inside the comment.
+func commentLineStates(tree *Tree, n int) (start, end []bool) {
+	start = make([]bool, n+1)
+	end = make([]bool, n+1)
+	if tree == nil || tree.facts == nil {
+		return start, end
+	}
+	for _, c := range tree.facts.Comments {
+		if c.EndLine <= c.StartLine {
+			continue // single-line comment: no line-to-line carry
+		}
+		for l := c.StartLine; l < c.EndLine && l <= n; l++ {
+			if l >= 1 {
+				end[l] = true
+			}
+		}
+		for l := c.StartLine + 1; l <= c.EndLine && l <= n; l++ {
+			if c.EndLine > l || c.EndCol > 1 {
+				start[l] = true
+			}
+		}
+	}
+	return start, end
+}
+
+// literalLineStates scans the comment-masked code image and reports per line
+// (1-based, sized len(code)+1) whether the line starts inside a string/char
+// literal continued from the previous line (trailing backslash) and whether
+// it ends with one still open.
+func literalLineStates(code []string) (start, end []bool) {
+	start = make([]bool, len(code)+1)
+	end = make([]bool, len(code)+1)
+	inLiteral := false
+	var quote byte
+	for i, line := range code {
+		l := i + 1
+		start[l] = inLiteral
+		escaped := false
+		for j := 0; j < len(line); j++ {
+			ch := line[j]
+			if escaped {
+				escaped = false
+				continue
+			}
+			if inLiteral {
+				switch ch {
+				case '\\':
+					escaped = true
+				case quote:
+					inLiteral = false
+				}
+				continue
+			}
+			if ch == '"' || ch == '\'' {
+				inLiteral, quote = true, ch
+			}
+		}
+		end[l] = inLiteral && escaped
+		if !end[l] {
+			inLiteral = false // unterminated literals end at the newline, like C
+		}
+	}
+	return start, end
 }
 
 // bodyLines lists the scenario body's kept original line numbers in
@@ -2177,6 +2319,9 @@ func (sc *Scenario) BodyExtent() [2]int {
 // controller prompt's deterministic base (G-SCEN6): preamble first, then
 // body, original line order, kept lines verbatim (no provenance prefixes —
 // the /*L<n>*/ rendering is the human artifact, not the prompt payload).
+// The entry function's own bare brace lines never render (entryBraceLines):
+// the chunker owns wrapper-relative brace handling, so the slice stays a
+// fragment by design.
 // It returns the slice text plus, per reachable query, the inclusive
 // [start,end] line range of the query's SQL region within the slice —
 // the replacement coordinates budget.ReplaceQueries consumes. A query's
@@ -2198,12 +2343,14 @@ func ScenarioSource(sc *Scenario, tree *Tree, src []byte) (string, map[string][2
 	}
 	var out []int
 	seen := map[int]bool{}
+	braces := entryBraceLines(tree, src)
 	add := func(from, to int) {
 		for l := from; l <= to; l++ {
-			if !seen[l] {
-				seen[l] = true
-				out = append(out, l)
+			if seen[l] || braces[l] {
+				continue
 			}
+			seen[l] = true
+			out = append(out, l)
 		}
 	}
 	for i := 0; i+1 < len(sc.Preamble); i += 2 {

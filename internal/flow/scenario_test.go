@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -835,5 +836,378 @@ func TestExprTouchesAxisRawWholeIdent(t *testing.T) {
 		if touch(bad, "trn_cd", "") {
 			t.Errorf("%q must not touch axis trn_cd", bad)
 		}
+	}
+}
+
+// entryBraceOpenSrc reproduces the risk.pc boundary shape: the residual run
+// starting at the entry `{` line absorbs it into the first root's span
+// (root Line == body start), and the last root's span clamps to the entry
+// `}` — both brace lines are brace-inclusive span edges.
+const entryBraceOpenSrc = `void SVC_DEMO(TPSVCINFO *rqst)
+{
+        FBFR32  *ptr_fml_Ibuffer;
+        if (!(strcmp(sql_trn_cd.arr, "P")))
+                trn_cd = 'P';
+        if (!(strcmp(sql_trn_cd.arr, "R")))
+                trn_cd = 'R';
+        if (!(strcmp(sql_trn_cd.arr, "A")))
+                trn_cd = 'A';
+        if (trn_cd == 'A') {
+                work_a();
+        }
+        tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+
+// entryBraceLostSrc reproduces the declaration-anchored shape: the
+// declaration anchor at the first body line drops the leading `{`-only run
+// (its residual run has no code, so it returns nil), while the trailing run
+// still absorbs the entry `}`.
+const entryBraceLostSrc = `void SVC_DEMO(TPSVCINFO *rqst)
+{
+	char trn_cd;
+	if (Fget32(ptr_fml_Ibuffer, FML_TRANS_CD, 0, (char *)sql_trn_cd.arr, 0) == -1) {
+		Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_errmsg, 0);
+		tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+	}
+	if (!(strcmp(sql_trn_cd.arr, "P")))
+		trn_cd = 'P';
+	if (!(strcmp(sql_trn_cd.arr, "R")))
+		trn_cd = 'R';
+	if (!(strcmp(sql_trn_cd.arr, "A")))
+		trn_cd = 'A';
+	if (trn_cd == 'A') {
+		work_a();
+	}
+	tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+
+// scenarioFromSrc runs the full SCEN-1/2 pipeline over in-memory source.
+func scenarioFromSrc(t *testing.T, src string) (*Scenario, *Tree) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "SVC_DEMO.pc")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return scenarioFromFileTree(t, path, "A")
+}
+
+// containsLine reports whether text holds a line exactly equal to want
+// (trailing \r ignored) — the leak oracle: entry brace lines are compared
+// verbatim, so an indented branch close never false-positives.
+func containsLine(text, want string) bool {
+	for _, l := range strings.Split(text, "\n") {
+		if strings.TrimRight(l, "\r") == want {
+			return true
+		}
+	}
+	return false
+}
+
+// braceBalance counts braces in text with a comment/string-aware scanner —
+// the acceptance oracle for slice/artifact boundary fidelity.
+func braceBalance(t *testing.T, text string) int {
+	t.Helper()
+	depth := 0
+	inBlock := false
+	var quote byte
+	for _, line := range strings.Split(text, "\n") {
+		escaped := false
+		for i := 0; i < len(line); i++ {
+			ch := line[i]
+			if escaped {
+				escaped = false
+				continue
+			}
+			if inBlock {
+				if ch == '*' && i+1 < len(line) && line[i+1] == '/' {
+					inBlock = false
+					i++
+				}
+				continue
+			}
+			if quote != 0 {
+				if ch == '\\' {
+					escaped = true
+					continue
+				}
+				if ch == quote {
+					quote = 0
+				}
+				continue
+			}
+			switch {
+			case ch == '/' && i+1 < len(line) && line[i+1] == '/':
+				i = len(line)
+			case ch == '/' && i+1 < len(line) && line[i+1] == '*':
+				inBlock = true
+				i++
+			case ch == '"' || ch == '\'':
+				quote = ch
+			case ch == '{':
+				depth++
+			case ch == '}':
+				depth--
+			}
+		}
+	}
+	if inBlock || quote != 0 {
+		t.Errorf("slice leaves an unterminated comment/string open")
+	}
+	return depth
+}
+
+// TestScenarioSourceExcludesEntryBraces pins the boundary invariant for the
+// controller prompt slice: the entry function's own bare brace lines never
+// render — pre-fix they leaked through residual-run span edges (a leading
+// `{` run absorbed into the first root, a trailing run clamped to the entry
+// `}`), leaving the decoded slice brace-unbalanced.
+func TestScenarioSourceExcludesEntryBraces(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{"opener-in-span (risk-style)", entryBraceOpenSrc},
+		{"opener-lost (nav-style)", entryBraceLostSrc},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sc, tree := scenarioFromSrc(t, tc.src)
+			text, _ := ScenarioSource(sc, tree, []byte(tc.src))
+			if bal := braceBalance(t, text); bal != 0 {
+				t.Errorf("slice brace balance = %d, want 0:\n%s", bal, text)
+			}
+			lines := strings.Split(tc.src, "\n")
+			entryOpen := strings.TrimRight(lines[tree.StartLine-1], "\r")
+			entryClose := strings.TrimRight(lines[tree.EndLine-1], "\r")
+			if containsLine(text, entryOpen) {
+				t.Errorf("entry `{` line (L%d) leaked into the slice:\n%s", tree.StartLine, text)
+			}
+			if containsLine(text, entryClose) {
+				t.Errorf("entry `}` line (L%d) leaked into the slice:\n%s", tree.EndLine, text)
+			}
+			if !strings.Contains(text, "work_a();") {
+				t.Errorf("slice lost the kept body statement:\n%s", text)
+			}
+		})
+	}
+}
+
+// TestRenderScenarioExcludesEntryBraces pins the same invariant on the
+// artifact: no provenance prefix for an entry brace line, and the rendered
+// code region stays brace-balanced.
+func TestRenderScenarioExcludesEntryBraces(t *testing.T) {
+	for _, tc := range []struct{ name, src string }{
+		{"opener-in-span (risk-style)", entryBraceOpenSrc},
+		{"opener-lost (nav-style)", entryBraceLostSrc},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sc, tree := scenarioFromSrc(t, tc.src)
+			out := RenderScenario(sc, tree, "SVC_DEMO", []byte(tc.src), nil)
+			for _, l := range []int{tree.StartLine, tree.EndLine} {
+				if strings.Contains(out, fmt.Sprintf("/*L%d*/", l)) {
+					t.Errorf("artifact still emits the entry brace line L%d:\n%s", l, out)
+				}
+			}
+			if bal := braceBalance(t, out); bal != 0 {
+				t.Errorf("rendered artifact brace balance = %d, want 0:\n%s", bal, out)
+			}
+		})
+	}
+}
+
+// TestEntryBraceLinesExactMatchGuard pins the helper's exact-match rule:
+// `}}` on one line, `} else` continuations, and comment tails never classify
+// as entry braces; bare `{`/`}` do.
+func TestEntryBraceLinesExactMatchGuard(t *testing.T) {
+	cases := []struct {
+		name       string
+		src        string
+		start, end int
+		excluded   map[int]bool
+	}{
+		{"bare open", "{\na;\n", 1, 2, map[int]bool{1: true}},
+		{"bare close", "a;\n}\n", 1, 2, map[int]bool{2: true}},
+		{"both bare", "{\na;\n}\n", 1, 3, map[int]bool{1: true, 3: true}},
+		{"same-line }}", "a;\n}}\n", 1, 2, nil},
+		{"else continuation", "a;\n} else {\nb;\n", 2, 3, nil},
+		{"comment tail", "a; /* } */\nfoo();\n", 1, 2, nil},
+		{"signature+brace", "void f() {\na;\n", 1, 2, nil},
+		{"comment-masked brace", "{\n/* } */\na;\n", 1, 3, map[int]bool{1: true}},
+		{"degenerate span", "{\n}\n", 1, 1, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := &Tree{StartLine: tc.start, EndLine: tc.end, facts: &scanner.SourceFacts{}}
+			got := entryBraceLines(tree, []byte(tc.src))
+			for l := 1; l <= len(strings.Split(tc.src, "\n")); l++ {
+				if got[l] != tc.excluded[l] {
+					t.Errorf("line %d excluded = %v, want %v (got map %v)", l, got[l], tc.excluded[l], got)
+				}
+			}
+		})
+	}
+	if got := entryBraceLines(nil, []byte("{\n}\n")); len(got) != 0 {
+		t.Errorf("nil tree = %v, want no exclusions", got)
+	}
+	frag := &Tree{StartLine: 1, EndLine: 2, facts: &scanner.SourceFacts{Fragment: true}}
+	if got := entryBraceLines(frag, []byte("{\na;\n}\n")); len(got) != 0 {
+		t.Errorf("fragment tree = %v, want no exclusions", got)
+	}
+}
+
+// commentBlockSrc reproduces the commented-banner boundary shape (Root cause
+// B): a banner-commented-out block with braces sits inside the kept A arm,
+// and a backslash-continued string literal follows. Pre-fix the renderer
+// prefixed every emitted line — the prefixes terminated the comment early
+// (the commented code became live and brace counts inflated) and would have
+// spliced into the continued string.
+const commentBlockSrc = `void SVC_DEMO(TPSVCINFO *rqst)
+{
+	char trn_cd;
+	if (Fget32(ptr_fml_Ibuffer, FML_TRANS_CD, 0, (char *)sql_trn_cd.arr, 0) == -1) {
+		Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_errmsg, 0);
+		tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+	}
+	if (!(strcmp(sql_trn_cd.arr, "P")))
+		trn_cd = 'P';
+	if (!(strcmp(sql_trn_cd.arr, "R")))
+		trn_cd = 'R';
+	if (!(strcmp(sql_trn_cd.arr, "A")))
+		trn_cd = 'A';
+	if (trn_cd == 'A') {
+		/******** Ver 9.3 commented out start ********
+		work_disabled();
+		{
+			dead();
+		}
+		******** Ver 9.3 commented out end **********/
+		userlog("multi line \
+continuation");
+		work_a();
+	}
+	tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+
+// TestRenderScenarioCommentSafePrefixes pins the provenance-prefix boundary
+// invariant: a prefix never lands inside an open comment or a continued
+// string literal, so the rendered artifact stays comment-faithful and its
+// brace balance matches ScenarioSource's.
+func TestRenderScenarioCommentSafePrefixes(t *testing.T) {
+	sc, tree := scenarioFromSrc(t, commentBlockSrc)
+	text, _ := ScenarioSource(sc, tree, []byte(commentBlockSrc))
+	out := RenderScenario(sc, tree, "SVC_DEMO", []byte(commentBlockSrc), nil)
+	// Comment interior (L16-20) and the string continuation (L22) never
+	// carry a provenance prefix.
+	for _, l := range []int{16, 17, 18, 19, 20, 22} {
+		if strings.Contains(out, fmt.Sprintf("/*L%d*/", l)) {
+			t.Errorf("prefix injected on comment/string-interior line L%d:\n%s", l, out)
+		}
+	}
+	// The comment keeps its braces buried: no prefix means the opener on
+	// L15 still swallows the block through L20.
+	if !strings.Contains(out, "work_disabled();") {
+		t.Errorf("commented-out block missing from the artifact:\n%s", out)
+	}
+	if bal := braceBalance(t, out); bal != 0 {
+		t.Errorf("rendered artifact brace balance = %d, want 0:\n%s", bal, out)
+	}
+	if srcBal := braceBalance(t, text); srcBal != 0 {
+		t.Errorf("source slice brace balance = %d, want 0:\n%s", srcBal, text)
+	}
+	// The string continuation stays one literal in the artifact: the second
+	// physical line renders verbatim, prefix-free.
+	if !strings.Contains(out, "\ncontinuation\");\n") {
+		t.Errorf("continued string literal lost its continuation line:\n%s", out)
+	}
+}
+
+// TestRenderScenarioCommentResync pins the dropped-delimiter recovery: when
+// the dropped set swallows a comment closer (or opener), the renderer injects
+// a bare `*/` (or `/*`) line — comments only, no semantic text — so the
+// emitted lines keep their source comment state.
+func TestRenderScenarioCommentResync(t *testing.T) {
+	// The closer on L3 sits inside a dropped statement span; the emitted
+	// L1 opens the comment, so the resync must close it before L4.
+	src := "pre_work(); /* disabled:\ndropped();\n*/\nlive();\n"
+	sc := &Scenario{Var: "trn_cd", Value: "A", Body: []*SliceNode{
+		{Kind: KindStmt, Line: 1, EndLine: 1, Fold: FoldKept},
+		{Kind: KindStmt, Line: 4, EndLine: 4, Fold: FoldKept},
+	}}
+	tree := &Tree{facts: &scanner.SourceFacts{NumLines: 4, Comments: []scanner.Comment{
+		{Kind: scanner.CommentBlock, StartLine: 1, StartCol: 16, EndLine: 3, EndCol: 2},
+	}}}
+	out := RenderScenario(sc, tree, "SVC_DEMO", []byte(src), nil)
+	if !strings.Contains(out, "*/\n/*L4*/live();") {
+		t.Errorf("dropped comment closer not resynced:\n%s", out)
+	}
+	if bal := braceBalance(t, out); bal != 0 {
+		t.Errorf("resync artifact brace balance = %d, want 0:\n%s", bal, out)
+	}
+
+	// The opener on L2 is dropped; the emitted L3-L4 are comment interior in
+	// source, so the renderer must inject `/*` before them (else live code).
+	src = "first();\n/* dropped open\ninterior();\n*/\nlast();\n"
+	sc = &Scenario{Var: "trn_cd", Value: "A", Body: []*SliceNode{
+		{Kind: KindStmt, Line: 1, EndLine: 1, Fold: FoldKept},
+		{Kind: KindStmt, Line: 3, EndLine: 4, Fold: FoldKept},
+		{Kind: KindStmt, Line: 5, EndLine: 5, Fold: FoldKept},
+	}}
+	tree = &Tree{facts: &scanner.SourceFacts{NumLines: 5, Comments: []scanner.Comment{
+		{Kind: scanner.CommentBlock, StartLine: 2, StartCol: 1, EndLine: 4, EndCol: 2},
+	}}}
+	out = RenderScenario(sc, tree, "SVC_DEMO", []byte(src), nil)
+	if !strings.Contains(out, "/*\ninterior();") {
+		t.Errorf("dropped comment opener not resynced:\n%s", out)
+	}
+	if strings.Contains(out, "/*L3*/") || strings.Contains(out, "/*L4*/") {
+		t.Errorf("prefix injected inside the resynced comment:\n%s", out)
+	}
+	if bal := braceBalance(t, out); bal != 0 {
+		t.Errorf("resync artifact brace balance = %d, want 0:\n%s", bal, out)
+	}
+}
+
+// TestLiteralLineStates pins the string-continuation tracker: only a
+// backslash-terminated open literal carries into the next line, and it ends
+// at the closing quote (or at the newline when unterminated, like C).
+func TestLiteralLineStates(t *testing.T) {
+	code := []string{
+		`char *s = "line one \`,
+		`line two";`,
+		`foo("x");`,
+		`bar("unterminated`,
+		`baz();`,
+	}
+	start, end := literalLineStates(code)
+	wantStart := []bool{false, true, false, false, false}
+	wantEnd := []bool{true, false, false, false, false}
+	for i := range code {
+		l := i + 1
+		if start[l] != wantStart[i] || end[l] != wantEnd[i] {
+			t.Errorf("line %d: start=%v end=%v, want start=%v end=%v",
+				l, start[l], end[l], wantStart[i], wantEnd[i])
+		}
+	}
+}
+
+// TestCommentLineStates pins the comment-state derivation: a multi-line
+// comment marks its interior lines start-in-comment (the closer's line still
+// starts in-comment) and the lines before its close end-in-comment.
+func TestCommentLineStates(t *testing.T) {
+	tree := &Tree{facts: &scanner.SourceFacts{Comments: []scanner.Comment{
+		{Kind: scanner.CommentBlock, StartLine: 2, StartCol: 1, EndLine: 5, EndCol: 3},
+		{Kind: scanner.CommentLine, StartLine: 7, StartCol: 1, EndLine: 7, EndCol: 20},
+	}}}
+	start, end := commentLineStates(tree, 8)
+	wantStart := []bool{false, false, false, true, true, true, false, false, false}
+	wantEnd := []bool{false, false, true, true, true, false, false, false, false}
+	for l := 1; l <= 8; l++ {
+		if start[l] != wantStart[l] || end[l] != wantEnd[l] {
+			t.Errorf("line %d: start=%v end=%v, want start=%v end=%v",
+				l, start[l], end[l], wantStart[l], wantEnd[l])
+		}
+	}
+	if start, end := commentLineStates(nil, 3); len(start) != 4 || len(end) != 4 {
+		t.Errorf("nil tree: sizes = %d/%d, want 4/4", len(start), len(end))
 	}
 }

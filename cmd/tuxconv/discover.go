@@ -149,7 +149,7 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *con
 			}
 			if !stdout {
 				scenDir := filepath.Join(filepath.Dir(out), config.DefaultScenDir)
-				paths, aerr := scenarioArtifacts(log, scenDir, f.Entry, src, scens, f)
+				paths, aerr := scenarioArtifacts(log, scenDir, f.Entry, src, scens, f, tree)
 				if aerr != nil {
 					return written, aerr
 				}

@@ -43,7 +43,7 @@ func scenarioFileBase(entry string, sc *flow.Scenario) string {
 // map two distinct values onto one name ("a.b" and "a_b"), so a repeated
 // base gains a numbered suffix instead of silently clobbering the first
 // artifact (deterministic in scenario order).
-func scenarioArtifacts(log *slog.Logger, dir, entry string, src []byte, scens []*flow.Scenario, irFile *ir.File) ([]string, error) {
+func scenarioArtifacts(log *slog.Logger, dir, entry string, src []byte, scens []*flow.Scenario, irFile *ir.File, tree *flow.Tree) ([]string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func scenarioArtifacts(log *slog.Logger, dir, entry string, src []byte, scens []
 		}
 		seen[base] = true
 		path := filepath.Join(dir, base)
-		if err := os.WriteFile(path, []byte(flow.RenderScenario(sc, entry, src, irFile)), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(flow.RenderScenario(sc, tree, entry, src, irFile)), 0o644); err != nil {
 			return written, fmt.Errorf("scenarios: write %s: %w", path, err)
 		}
 		written = append(written, path)
