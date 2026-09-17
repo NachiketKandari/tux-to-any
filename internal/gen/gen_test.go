@@ -129,6 +129,50 @@ func TestGenModels(t *testing.T) {
 	}
 }
 
+// TestModelFileDigitLeadingNames pins the leading-digit escape end to end:
+// FML fields, row host vars and mapping row pins that start with a digit
+// (FML_1ST_AMT, sql_1qty, "1stRow") render as X-prefixed exported names and
+// pass the goast.Emit parse gate instead of failing the whole run.
+func TestModelFileDigitLeadingNames(t *testing.T) {
+	s, p, _ := genNavFixture(t)
+	if got := fieldFromFML("FML_1ST_AMT"); got != "X1stAmt" {
+		t.Errorf("fieldFromFML = %q, want X1stAmt", got)
+	}
+	if c := s.conditionOf(s.Mapping.Endpoints[0]); c != nil {
+		c.FmlOps = append(c.FmlOps, ir.FmlOp{Kind: ir.FmlGet, Field: "FML_1ST_AMT"})
+	} else {
+		t.Fatal("fixture endpoint has no condition")
+	}
+	pin := s.Mapping.DBMethods["cur_demo_hist"]
+	pin.Row = "1stRow"
+	s.Mapping.DBMethods["cur_demo_hist"] = pin
+	if got := s.RowName("cur_demo_hist", "GetNavHistory"); got != "X1stRow" {
+		t.Errorf("RowName pin = %q, want X1stRow", got)
+	}
+	q := s.Query("cur_demo_hist")
+	q.RowShape[0] = "sql_1qty"
+	q.Aliases = nil
+	fields, err := s.rowFields(q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fields[0].Name != "X1qty" || fields[0].DBTag != "1QTY" {
+		t.Errorf("rowFields = %q/%q, want X1qty/1QTY", fields[0].Name, fields[0].DBTag)
+	}
+	out, err := s.ModelFile(p)
+	if err != nil {
+		t.Fatalf("ModelFile: %v", err)
+	}
+	for _, want := range []string{"type X1stRow struct", "X1qty", "db:\"1QTY\"", "X1stAmt", "json:\"FML_1ST_AMT\""} {
+		if !strings.Contains(out, want) {
+			t.Errorf("models missing %q\n%s", want, out)
+		}
+	}
+	if _, ferr := goast.Emit("test: digit names", out); ferr != nil {
+		t.Fatalf("rendered models fail the parse gate: %v\n%s", ferr, out)
+	}
+}
+
 func TestGenDBMethodsAndInterface(t *testing.T) {
 	s, p, fns := genNavFixture(t)
 	file, err := s.DBMethodsFile(p)

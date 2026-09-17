@@ -33,6 +33,21 @@ func TestNamingPolicies(t *testing.T) {
 			t.Errorf("CamelPy(%q) = %q, want %q", in, got, want)
 		}
 	}
+	// Digit-leading tokens take the X escape: valid Go identifiers that
+	// stay exported (the render-gate failure class).
+	if got := Export("1st"); got != "X1st" {
+		t.Errorf("Export(1st): %q", got)
+	}
+	for in, want := range map[string]string{"1_NAV": "X1Nav", "9": "X9"} {
+		if got := CamelGo(in); got != want {
+			t.Errorf("CamelGo(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{"1st_amt": "X1stAmt", "1qty": "X1qty"} {
+		if got := CamelLowerGo(in); got != want {
+			t.Errorf("CamelLowerGo(%q) = %q, want %q", in, got, want)
+		}
+	}
 	if got := PyIdent("mf-nav.x"); got != "mf_nav_x" {
 		t.Errorf("PyIdent: %q", got)
 	}
