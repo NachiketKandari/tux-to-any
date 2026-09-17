@@ -10,6 +10,7 @@ import (
 	"tux-to-any/internal/common"
 	"tux-to-any/internal/flow"
 	"tux-to-any/internal/ir"
+	scanner "tux-to-any/internal/tsscan"
 )
 
 // Kind classifies a generation unit.
@@ -108,12 +109,27 @@ func txHelperRole(name string) string {
 
 // FnHelper is one fn-library function's conversion anchor: the legacy fn
 // name, the Go method name the unit renders, and the fn's source span —
-// the side-table the convert seam reads for KindFnHelper units.
+// the side-table the convert seam reads for KindFnHelper units. Params and
+// Return carry the deterministic Go signature (same-file helpers): both
+// the helper seam and its callers receive it verbatim, so the two
+// independent LLM outputs agree.
 type FnHelper struct {
 	Name      string `json:"name"`    // legacy fn name (fn_is_demo_active)
 	GoName    string `json:"go_name"` // the unit's method name (FnIsDemoActive)
 	StartLine int    `json:"start_line"`
 	EndLine   int    `json:"end_line"`
+	// Params is the kept legacy parameter list in order, with Go types.
+	// Empty when the declaration could not be read (fn-lib mode keeps its
+	// legacy behavior then).
+	Params []FnParam `json:"params,omitempty"`
+	// Return is the Go return type ("int" for the legacy status contract,
+	// "" for void).
+	Return string `json:"return,omitempty"`
+	// Fixed marks a service-run helper whose signature is prescribed to
+	// both seams (the caller and the helper) because independent LLM
+	// outputs must agree. Fn-lib helpers have no in-tree callers, so their
+	// parameter list stays the seam's choice.
+	Fixed bool `json:"fixed_signature,omitempty"`
 }
 
 // Plan is the deterministic decomposition of one conversion run.
@@ -306,6 +322,64 @@ func Build(opts Options) (*Plan, error) {
 				canonical[q.ID] = q
 				dbQueries = append(dbQueries, q)
 			}
+		}
+	}
+
+	// Same-file helper fns (user directive 2026-09-17): a fn_* function the
+	// main file itself defines and its own code calls is a helper — it
+	// plans as a KindFnHelper unit (controller/fns.go) with a deterministic
+	// Go signature, and its call sites call the generated method. The entry
+	// function and chk_* session plumbing are not helpers; a helper whose
+	// declaration cannot be read confidently keeps its legacy handling.
+	var sameFile []localHelper
+	if strings.TrimSpace(opts.Source) != "" {
+		facts, ferr := scanner.ScanBytes([]byte(opts.Source), opts.Main.Path)
+		if ferr != nil {
+			return nil, fmt.Errorf("plan: same-file helper scan: %w", ferr)
+		}
+		called := map[string]bool{}
+		for _, c := range facts.Calls {
+			called[c.Name] = true
+		}
+		goNames := map[string]bool{}
+		for _, def := range facts.Functions {
+			if def.Name == opts.Main.Entry || strings.HasPrefix(def.Name, "chk_") || !called[def.Name] {
+				continue
+			}
+			params, ret, ok := helperSignature(def, opts.Source)
+			if !ok {
+				p.Warnings = append(p.Warnings, fmt.Sprintf(
+					"%s is a same-file helper but its declaration could not be read — its calls keep the legacy drop handling", def.Name))
+				continue
+			}
+			end := def.BodyEndLine
+			if end <= def.BodyStartLine {
+				end = facts.NumLines
+			}
+			goName := common.Export(common.CamelGo(def.Name))
+			for goNames[goName] {
+				goName += "X"
+			}
+			goNames[goName] = true
+			h := localHelper{name: def.Name, goName: goName, start: def.BodyStartLine, end: end, params: params, ret: ret}
+			for _, q := range opts.Main.Queries {
+				if q.OwningFunction != def.Name {
+					continue
+				}
+				canon := q
+				if q.DuplicateOf != "" {
+					if cq := queryByID[q.DuplicateOf]; cq != nil {
+						canon = cq
+					}
+				}
+				h.qids = append(h.qids, canon.ID)
+				if !seen[canon.ID] {
+					seen[canon.ID] = true
+					canonical[canon.ID] = canon
+					dbQueries = append(dbQueries, canon)
+				}
+			}
+			sameFile = append(sameFile, h)
 		}
 	}
 
@@ -517,6 +591,24 @@ func Build(opts Options) (*Plan, error) {
 		TemplateID: "controller_interface_file",
 		Deps:       ctrlIDs,
 	})
+	// Same-file helper units: one LLM gap per helper fn (fns.go), the
+	// controller-method seams call the generated methods.
+	for _, h := range sameFile {
+		estimate := opts.Budget.Count(branchSource(opts.Source, h.start, h.end))
+		add(Unit{
+			ID: fmt.Sprintf("u%02d", len(p.Units)+1), Kind: KindFnHelper, Name: h.goName,
+			SourceFile: opts.Main.Path, SourceLines: lineSpan(h.start, h.end),
+			QueryIDs:   h.qids,
+			TargetPath: m.ImportPath("controller") + "/fns.go",
+			TemplateID: "fn_helper", LLM: true,
+			TokenEstimate: estimate,
+			Deps:          []string{ifaceID},
+		})
+		p.FnHelpers = append(p.FnHelpers, FnHelper{
+			Name: h.name, GoName: h.goName, StartLine: h.start, EndLine: h.end,
+			Params: h.params, Return: h.ret, Fixed: true,
+		})
+	}
 	if len(p.Stubs) > 0 {
 		add(Unit{
 			ID: fmt.Sprintf("u%02d", len(p.Units)+1), Kind: KindFnStub, Name: "fnstubs.go",

@@ -76,6 +76,7 @@ func BuildFnLib(opts Options) (*Plan, error) {
 		return nil, fmt.Errorf("plan: fn library scan: %w", err)
 	}
 	spans := map[string][2]int{}
+	defs := map[string]scanner.FunctionDef{}
 	order := make([]string, 0, len(facts.Functions))
 	for _, fn := range facts.Functions {
 		end := fn.BodyEndLine
@@ -83,6 +84,7 @@ func BuildFnLib(opts Options) (*Plan, error) {
 			end = facts.NumLines
 		}
 		spans[fn.Name] = [2]int{fn.BodyStartLine, end}
+		defs[fn.Name] = fn
 		order = append(order, fn.Name)
 	}
 
@@ -173,7 +175,8 @@ func BuildFnLib(opts Options) (*Plan, error) {
 			}
 		}
 		goName := common.Export(common.CamelGo(name))
-		p.FnHelpers = append(p.FnHelpers, FnHelper{Name: name, GoName: goName, StartLine: start, EndLine: end})
+		params, ret, _ := helperSignature(defs[name], opts.Source)
+		p.FnHelpers = append(p.FnHelpers, FnHelper{Name: name, GoName: goName, StartLine: start, EndLine: end, Params: params, Return: ret})
 		deps := []string{}
 		if ifaceID != "" {
 			deps = []string{ifaceID}

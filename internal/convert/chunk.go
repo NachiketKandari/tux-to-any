@@ -107,10 +107,10 @@ type chunkCtx struct {
 // call) — translate that logic into idiomatic Go. Output is code only to
 // keep token spend on the body: no prose, no markdown fences, no SQL.
 const systemPromptFragment = `You emit the statements of ONE fragment of a larger Go controller method body. Fragments arrive in order, possibly cut mid-block: emit exactly the braces the fragment shows. Input is flattened (SQL already store calls); the template owns the wrapper + START/END logs.
-OUTPUT: bare Go statements of this fragment only — no wrapper/package/imports/helpers/types, no prose/fences/comments (S-codes live in error text), minimal blank lines. Stay terse: the fragment must fit the output ceiling. Never re-emit other fragments.
+OUTPUT: bare Go statements of this fragment only — no wrapper/package/imports/helpers/types, no prose/fences/comments (S-codes live in error text), minimal blank lines. Stay terse: fit the output ceiling. Never re-emit other fragments.
 SIGNATURE (fixed, verbatim): c, request, named returns data and err. Never req/resp/Response. Never shadow data/err with :=.
 INPUTS: request.<Field> exactly as defined.
-STORE: every s.store.* call shown appears exactly once, exact params in order, results captured. No other s.* calls. Never SQL.
+STORE: every s.store.* call shown appears exactly once, exact params/order, results captured; s.<Name>(...) calls are generated helpers — call as shown. No other s.* calls. Never SQL.
 FIELDS: verbatim struct/row names; sql.NullString via row.X.String.
 LITERALS (Go only): "Y" never 'Y'; 0 never '\0'; == never =.
 ERRORS: after every err-returning call: if err != nil { return nil, err }. A variable error message uses errors.New(msg) — never fmt.Errorf(variable). Return (return data, err / return nil, err) ONLY where this fragment's view shows one; otherwise fall through.
@@ -124,8 +124,8 @@ FLOW: same loops/branches/order; dead-looking branches still implemented; every 
 // across them (single body, one declaration per local, balanced braces) and
 // emits code only.
 const systemPromptComposer = `You stitch ordered Go fragment bodies into ONE coherent controller method body — merge, don't re-translate. The template owns the wrapper + START/END logs.
-OUTPUT: bare merged Go statements only — no wrapper/package/imports/helpers/types, no prose/fences/comments, minimal blank lines. Stay terse: the body must fit the output ceiling.
-KEEP: every shown s.store.* call exactly once, same condition and order, exact params, results captured. No other s.* calls. Never SQL.
+OUTPUT: bare merged Go statements only — no wrapper/package/imports/helpers/types, no prose/fences/comments, minimal blank lines. Stay terse: fit the output ceiling.
+KEEP: every shown s.store.* call exactly once, same condition and order, exact params, results captured; s.<Name>(...) calls are generated helpers — keep as shown. No other s.* calls. Never SQL.
 UNIFY: one declaration per local (reuse earlier, := on first use only); brace joints join without adding/dropping braces; data/err never shadowed with :=.
 SIGNATURE: c, request, data and err; return nil, err on error paths, data, err on success — where shown, else fall through.
 LEGACY MAP (intent, never spelling): FML pack → append shaped rows to data; tpreturn(TPSUCCESS) → return data, err; error legs → return nil + S-code; CLOSE/SETNULL/buffer bookkeeping/userlog → drop. Never emit tpreturn/tpalloc/Fadd32/Fget32/errlog/userlog/EXEC SQL/FBFR32/unsafe.
@@ -454,15 +454,32 @@ func filterByPresence(items []string, text string) []string {
 	return out
 }
 
-// filterHelpers keeps the helper-mapping lines whose fn the chunk text calls.
+// filterHelpers keeps the helper-mapping lines whose fn the chunk text
+// calls — either the legacy spelling (external fns) or the rewritten Go
+// call (same-file helpers, `fn_x(...) → s.FnX(...)`).
 func filterHelpers(helpers []string, text string) []string {
 	var out []string
 	for _, h := range helpers {
-		if fn := strings.SplitN(h, "(", 2)[0]; strings.Contains(text, fn) {
+		if helperLineMentions(h, text) {
 			out = append(out, h)
 		}
 	}
 	return out
+}
+
+// helperLineMentions reports whether the chunk text calls the helper the
+// line maps: the legacy fn name, or the Go call after the arrow.
+func helperLineMentions(line, text string) bool {
+	if fn := strings.SplitN(line, "(", 2)[0]; strings.Contains(text, fn) {
+		return true
+	}
+	if i := strings.Index(line, "→ s."); i >= 0 {
+		rest := line[i+len("→ "):]
+		if j := strings.Index(rest, "("); j > 0 && strings.Contains(text, rest[:j]) {
+			return true
+		}
+	}
+	return false
 }
 
 // filterStubs keeps the stubbed-helper entries the chunk text calls.

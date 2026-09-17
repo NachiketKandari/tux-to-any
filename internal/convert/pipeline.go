@@ -8,8 +8,13 @@
 package convert
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/printer"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -509,6 +514,14 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		view.Source = scrubbed
 		telemetry.Log(ctx).Info("session args dropped from unresolved-fn views", "unit", u.Name, "dropped", dropped)
 	}
+	// Same-file helper calls (user directive 2026-09-17): the view carries
+	// the generated controller method call s.<GoName>(...) with exactly the
+	// args the helper signature keeps — the model copies it, and the
+	// REQUIRED-CALLS gate demands it like every store call.
+	if renamed, n := rewriteHelperCalls(view.Source, helperFns(opts.Plan)); n > 0 {
+		view.Source = renamed
+		telemetry.Log(ctx).Info("same-file helper calls rewritten", "unit", u.Name, "calls", n)
+	}
 	// Deterministic scaffold elision (micro-chunk step 1): pure
 	// Tuxedo/Pro*C scaffold the tuxedo gate would reject in output never
 	// reaches the model — fewer echo-failures, smaller prompts. Dropped
@@ -608,11 +621,11 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 }
 
 const systemPrompt = `You emit the body of a Go controller method translated from a legacy Pro*C/Tuxedo branch.
-OUTPUT: bare Go statements only — no package/imports/func wrapper/helpers/types, no prose/fences/comments (S-codes live in error text), minimal blank lines. Stay terse: the body must fit the output ceiling.
+OUTPUT: bare Go statements only — no package/imports/func wrapper/helpers/types, no prose/fences/comments (S-codes live in error text), minimal blank lines. Stay terse: fit the output ceiling.
 SIGNATURE (fixed, verbatim): c context.Context, request *models.X, named returns data and err. Never req/resp/Response. Never shadow data/err with :=.
 HEADER: a leading else-if header is the method's own condition — never emit it or a leading }. Start at the first statement under it.
 INPUTS: request.<Field> exactly as defined — the only input source.
-STORE: every s.store.* call in the view appears exactly once, exact params in order, results captured to locals. No other s.* calls. Never SQL.
+STORE: every s.store.* call appears exactly once, exact params/order, results captured to locals; s.<Name>(...) calls are generated helpers — call as shown. No other s.* calls. Never SQL.
 FIELDS: verbatim struct/row names (CToDateString is not CToDate + String); sql.NullString via its .String field.
 LITERALS (Go only): "Y" never 'Y'; 0 never '\0'; == never =.
 ERRORS: after every err-returning call: if err != nil { return nil, err }. Every path ends return data, err / return nil, err. A variable error message uses errors.New(msg) — fmt.Errorf takes a constant format string, never a variable.
@@ -626,8 +639,9 @@ FLOW: same loops/branches/order; dead-looking branches still implemented.`
 const fnHelperSystem = `You convert one legacy Pro*C/Tuxedo helper function (a fn library) into ONE Go method.
 Rules:
 - Emit ONLY one complete Go method declaration: func (s *Receiver) Name(...) ... — no package clause, no imports, no helper functions or types.
-- The receiver and method name are fixed and provided verbatim in the prompt.
+- The receiver and method name are fixed and provided verbatim in the prompt. When the prompt shows the complete fixed signature, declare exactly that parameter list and return type — same names, types, and order: callers are generated against it.
 - The first parameter is c context.Context (the store calls need it); the legacy parameters follow in order: char*/varchar value params become string, long becomes int64, int stays int; a parameter the legacy writes through a pointer (an out-param) becomes a pointer parameter (*string, *int64).
+- A call shown as s.<Name>(...) is a generated controller helper method — call it exactly as shown, passing your declared identifiers in that order.
 - Keep the legacy int status return: -1 on the failure paths, the legacy success value otherwise. Never add a Go error return.
 - Call the database exclusively through the store signatures provided — exactly the parameters each signature shows, same count and order, once per legacy SQL statement, in the legacy order. Never write SQL anywhere (no raw strings, no string literals containing SQL).
 - Copy row struct field names character-exact from the definitions provided — never fuse names and never invent fields; a sql.NullString reads through its .String FIELD (no parentheses: row.X.String).
@@ -669,15 +683,45 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 	if err != nil {
 		return "", "", fmt.Errorf("convert: query replacement for fn %s: %w", u.Name, err)
 	}
+	// Same deterministic view passes as the controller seam (a helper body
+	// carries the same legacy seams — unpack probes, err legs, scaffold):
+	// the model copies mapped Go instead of echoing spellings the gates
+	// reject. The Fget32 request unpack map is nil here — a helper's gets
+	// read the tpcall reply buffer, never the request.
 	view.Source = stripDeadComments(view.Source)
-	view.Source, _ = stripLegacyScaffold(view.Source)
-	view.Source, _ = stripPreludeDecls(view.Source)
+	if rewritten, seams, _ := rewriteLegacySeams(view.Source, nil); seams.Gets+seams.ErrAdds+seams.Ssn > 0 {
+		view.Source = rewritten
+	}
+	if txed, n := rewriteTxTemplate(view.Source); n > 0 {
+		view.Source = txed
+	}
+	if probed, elided := stripFMLProbes(view.Source); elided > 0 {
+		view.Source = probed
+	}
 	// Session-arg scrub (micro-chunk step 3): same contract as the
 	// controller seam — unresolved-fn calls lose the middleware-owned
 	// session/buffer args the stub signature is not meant to carry.
 	if scrubbed, dropped := stripSessionArgs(view.Source, stubFnNames(opts.Plan)); dropped > 0 {
 		view.Source = scrubbed
 		telemetry.Log(ctx).Info("session args dropped from unresolved-fn views", "unit", u.Name, "dropped", dropped)
+	}
+	// Nested same-file helper calls (same rewrite as the controller seam):
+	// the view carries s.<GoName>(...) so the required-call contract holds
+	// inside helper bodies too.
+	if renamed, n := rewriteHelperCalls(view.Source, helperFns(opts.Plan)); n > 0 {
+		view.Source = renamed
+		telemetry.Log(ctx).Info("same-file helper calls rewritten", "unit", u.Name, "calls", n)
+	}
+	view.Source, _ = stripLegacyScaffold(view.Source)
+	view.Source, _ = stripPreludeDecls(view.Source)
+	if inlined, n := inlineLegacyConstants(view.Source, effectiveDefines(opts.Main, &ir.Condition{EndLine: h.EndLine}, h.Name)); n > 0 {
+		view.Source = inlined
+	}
+	// Store-call capture rendering: same accepted shape as the controller
+	// seam (every result assigned) — the view carries it so the model
+	// copies instead of the bare call the stale-err gate rejects.
+	if assigned, n := assignStoreCalls(view.Source, receiverOf(opts), storeCallShapes(svc, calls)); n > 0 {
+		view.Source = assigned
 	}
 	telemetry.Log(ctx).Info("sql replaced by store calls", "unit", u.Name,
 		"queries", len(view.Report), "shrink_pct", fmt.Sprintf("%.0f", view.ShrinkPct()))
@@ -687,9 +731,9 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 	}
 	sort.Strings(methods)
 	structName := common.LowerFirst(svc.Mapping.Service) + "Controller"
-	prompt = buildFnPrompt(u.Name, structName, view.Source,
+	prompt = buildFnPrompt(h, structName, view.Source,
 		dbSignaturesFor(opts.Plan, dbBodies, methods), svc.FnRowContracts(opts.Plan, u.QueryIDs),
-		fnErrorCodes(view.Source), opts.Plan.Stubs)
+		fnErrorCodes(view.Source), legacyHelpers(opts.Plan, view.Source), opts.Plan.Stubs)
 	accepted, chatCalls, notes, err := llm.RunSeam(ctx, llm.SeamInput{
 		Unit: u.ID, Kind: string(u.Kind), Name: u.Name,
 		Template: u.TemplateID, LLM: u.LLM, Repair: opts.RetryRepair,
@@ -700,7 +744,7 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 		},
 		Extract: cleanBody,
 		Gate: func(body string) []string {
-			return fnHelperGate(body, u.Name, structName, view.Source, receiverOf(opts))
+			return fnHelperGate(body, h, structName, view.Source, receiverOf(opts))
 		},
 	})
 	res.LLMCalls += chatCalls
@@ -715,12 +759,17 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 }
 
 // fnHelperGate validates one seam attempt: the fixed receiver/name shape,
-// a parse-clean complete method, and the required-call contract.
-func fnHelperGate(body, goName, structName, view, receiver string) []string {
+// the prescribed parameter list (callers were generated against it), a
+// parse-clean complete method, and the required-call contract.
+func fnHelperGate(body string, h plan.FnHelper, structName, view, receiver string) []string {
 	var errs []string
-	sig := "func (s *" + structName + ") " + goName + "("
+	sig := "func (s *" + structName + ") " + h.GoName + "("
 	if !strings.Contains(body, sig) {
 		errs = append(errs, "the method must be declared with the fixed receiver and name: "+sig+"...) — emit one complete Go method, nothing else")
+	} else if want := fnHelperDecl(h, structName); h.Fixed && (len(h.Params) > 0 || h.Return != "") {
+		if got, ok := parsedFnSignature(body); ok && got != normalizeSignature(want) {
+			errs = append(errs, "signature contract: the method must be declared exactly as "+want+" — callers are generated against this parameter list")
+		}
 	}
 	if _, ferr := goast.Emit("convert: fn helper", "package controller\n\n"+body); ferr != nil {
 		errs = append(errs, validate.TrimGoErrors(ferr.Error())...)
@@ -728,13 +777,66 @@ func fnHelperGate(body, goName, structName, view, receiver string) []string {
 	return append(errs, requiredCallErrs(view, body, receiver)...)
 }
 
+// fnHelperDecl renders the prescribed method declaration for one helper:
+// the context parameter, the derived legacy parameters in order, and the
+// legacy status return (empty for void).
+func fnHelperDecl(h plan.FnHelper, structName string) string {
+	parts := make([]string, 0, len(h.Params)+1)
+	parts = append(parts, "c context.Context")
+	for _, p := range h.Params {
+		parts = append(parts, p.Name+" "+p.Type)
+	}
+	decl := "func (s *" + structName + ") " + h.GoName + "(" + strings.Join(parts, ", ") + ")"
+	if h.Return != "" {
+		decl += " " + h.Return
+	}
+	return decl
+}
+
+// parsedFnSignature renders the first method declaration in the body as a
+// whitespace-normalized signature string ("" when the body does not parse
+// or declares no method — parse errors are reported by the caller's gate).
+func parsedFnSignature(body string) (string, bool) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "helper.go", "package controller\n\n"+body, 0)
+	if err != nil {
+		return "", false
+	}
+	for _, d := range file.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Recv == nil {
+			continue
+		}
+		var buf bytes.Buffer
+		if perr := printer.Fprint(&buf, fset, fd); perr != nil {
+			return "", false
+		}
+		got := buf.String()
+		if i := strings.IndexByte(got, '{'); i >= 0 {
+			got = got[:i]
+		}
+		return normalizeSignature(got), true
+	}
+	return "", false
+}
+
+// normalizeSignature collapses whitespace so printer output and the
+// prescribed declaration compare structurally.
+func normalizeSignature(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
 // buildFnPrompt assembles the fn helper's deterministic context: the
-// SQL-replaced fn view, the DB contract for its queries, the row struct
-// definitions, the required-call list, the legacy error codes, and the
-// stub section.
-func buildFnPrompt(goName, structName, view, dbContract, rowContracts string, errCodes []string, stubs []plan.Stub) string {
+// prescribed signature, the SQL-replaced fn view, the DB contract for its
+// queries, the row struct definitions, the required-call list, the legacy
+// error codes, nested helper calls, and the stub section.
+func buildFnPrompt(h plan.FnHelper, structName, view, dbContract, rowContracts string, errCodes, helpers []string, stubs []plan.Stub) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Legacy helper function — emit the complete Go method (s *%s) %s.\n\n", structName, goName)
+	fmt.Fprintf(&sb, "Legacy helper function — emit the complete Go method (s *%s) %s.\n\n", structName, h.GoName)
+	if h.Fixed && (len(h.Params) > 0 || h.Return != "") {
+		sb.WriteString("Signature (fixed, verbatim): " + fnHelperDecl(h, structName) + "\n" +
+			"Declare exactly this method — same parameter names, types, and order: callers are generated against this signature.\n\n")
+	}
 	sb.WriteString("Legacy function, with every SQL block already replaced by its store call:\n\n" + view + "\n\n")
 	if dbContract != "" {
 		writeDBContract(&sb, dbContract)
@@ -749,6 +851,13 @@ func buildFnPrompt(goName, structName, view, dbContract, rowContracts string, er
 	if len(errCodes) > 0 {
 		sb.WriteString("Legacy error codes — retain them (error-message out-param text, else a comment): " +
 			strings.Join(errCodes, ", ") + "\n\n")
+	}
+	if len(helpers) > 0 {
+		sb.WriteString("Same-file helper calls in this function — generated controller methods: call each as shown, with the mapped arguments in order:\n")
+		for _, hl := range helpers {
+			sb.WriteString("  - " + hl + "\n")
+		}
+		sb.WriteString("\n")
 	}
 	if len(stubs) > 0 {
 		sb.WriteString("Stubbed helpers — legacy fns with no source in the corpus. Each has a generated package-level stub (variadic args, int return, panics at runtime); call the RIGHT stub for each legacy fn and pass only identifiers your method declares (declare zero-value locals for C-only names; out-pointers become &local):\n")
@@ -787,11 +896,12 @@ func fnHelperOf(p *plan.Plan, goName string) (plan.FnHelper, bool) {
 }
 
 // appendFnHelper appends the accepted fn helper method to
-// controller/fns.go, creating the deterministic scaffold on first use —
-// the controller struct (store field) plus constructor. Fn libraries have
-// no controller-interface unit (helper signatures are seam-derived, so no
-// interface is claimed). Imports are derived from the file text — only
-// what it references — so the file never carries unused imports for Tier B.
+// controller/fns.go, creating the deterministic scaffold on first use — in
+// fn-lib mode the controller struct (store field) plus constructor, while
+// a service run's struct + constructor already live in
+// controller/interface.go (the controller-interface unit) and fns.go must
+// not redeclare them. Imports are derived from the file text — only what
+// it references — so the file never carries unused imports for Tier B.
 func appendFnHelper(ctx context.Context, opts Options, res *Result, svc *gen.Service, path, body string) error {
 	structName := common.LowerFirst(svc.Mapping.Service) + "Controller"
 	dbImport := svc.Mapping.ImportPath("db")
@@ -805,11 +915,13 @@ func appendFnHelper(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		}
 		merged = string(existing) + "\n" + strings.TrimRight(body, "\n") + "\n"
 	} else {
-		merged = "package controller\n\n" +
-			"type " + structName + " struct {\n\tstore " + dbQual + "." + storeIface + "\n}\n\n" +
-			"func New" + common.Export(svc.Mapping.Service) + "Controller(store " + dbQual + "." + storeIface + ") *" + structName + " {\n" +
-			"\treturn &" + structName + "{store: store}\n}\n\n" +
-			strings.TrimRight(body, "\n") + "\n"
+		merged = "package controller\n\n"
+		if opts.Plan == nil || opts.Plan.FnLib {
+			merged += "type " + structName + " struct {\n\tstore " + dbQual + "." + storeIface + "\n}\n\n" +
+				"func New" + common.Export(svc.Mapping.Service) + "Controller(store " + dbQual + "." + storeIface + ") *" + structName + " {\n" +
+				"\treturn &" + structName + "{store: store}\n}\n\n"
+		}
+		merged += strings.TrimRight(body, "\n") + "\n"
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
@@ -841,9 +953,15 @@ func appendFnHelper(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 }
 
 // deriveFnImports lists the import paths the fn file's text references:
-// the db package (the struct's store field), context, models, fmt, errors.
+// the db package (only when the struct's store field is declared or a body
+// names a db type — a service run's fns.go has neither, so the import stays
+// out), context, models, fmt, errors.
 func deriveFnImports(text, dbPkg, modelsPkg string) []string {
-	out := []string{dbPkg}
+	var out []string
+	dbQual := dbPkg[strings.LastIndexByte(dbPkg, '/')+1:]
+	if strings.Contains(text, dbQual+".") {
+		out = append(out, dbPkg)
+	}
 	if strings.Contains(text, "context.Context") {
 		out = append(out, "context")
 	}
@@ -1026,9 +1144,10 @@ var fnCallRe = regexp.MustCompile(`(?i)\b(fn_[a-z0-9_]+)\s*\(`)
 
 // legacyHelpers maps the legacy fn_* calls a branch view shows to their Go
 // equivalents: SQL-bearing fns name the db method that owns their lookup
-// (from the plan's fn-namespaced units), pure-logic fns are named for
-// inlining. Unresolved fns ride the stubs section instead. One line per
-// fn, deterministic order.
+// (from the plan's fn-namespaced units), same-file helpers name the
+// generated method on this controller (controller/fns.go) with its exact
+// signature, pure-logic fns are named for inlining. Unresolved fns ride the
+// stubs section instead. One line per fn, deterministic order.
 func legacyHelpers(p *plan.Plan, view string) []string {
 	fnMethod := map[string]string{}
 	for _, u := range p.Units {
@@ -1051,6 +1170,20 @@ func legacyHelpers(p *plan.Plan, view string) []string {
 	}
 	var out []string
 	seen := map[string]bool{}
+	// Same-file helpers first (deterministic plan order): the call-site
+	// rewrite turns the view's call into s.<GoName>(...), so presence
+	// accepts either spelling.
+	for _, h := range p.FnHelpers {
+		fn := strings.ToLower(h.Name)
+		if seen[fn] {
+			continue
+		}
+		if !strings.Contains(view, h.Name) && !strings.Contains(view, "s."+h.GoName+"(") {
+			continue
+		}
+		seen[fn] = true
+		out = append(out, helperCallLine(h))
+	}
 	for _, m := range fnCallRe.FindAllStringSubmatch(view, -1) {
 		fn := strings.ToLower(m[1])
 		if seen[fn] || stubbed[fn] {
@@ -1070,6 +1203,22 @@ func legacyHelpers(p *plan.Plan, view string) []string {
 	return out
 }
 
+// helperCallLine renders the prompt line for one same-file helper: the
+// legacy call maps to the generated controller method, with the exact
+// deterministic signature both seams were given.
+func helperCallLine(h plan.FnHelper) string {
+	parts := make([]string, 0, len(h.Params)+1)
+	parts = append(parts, "c context.Context")
+	for _, p := range h.Params {
+		parts = append(parts, p.Name+" "+p.Type)
+	}
+	sig := "s." + h.GoName + "(" + strings.Join(parts, ", ") + ")"
+	if h.Return != "" {
+		sig += " " + h.Return
+	}
+	return fmt.Sprintf("%s(...) → %s — generated controller method (controller/fns.go): call it with the mapped arguments in order, middleware-owned args dropped; the legacy status return is kept", h.Name, sig)
+}
+
 // stubFnNames collects the unresolved fns' legacy spellings (plan.Stub.Fn)
 // — the callees stripSessionArgs scrubs middleware-owned args from.
 func stubFnNames(p *plan.Plan) map[string]bool {
@@ -1081,6 +1230,19 @@ func stubFnNames(p *plan.Plan) map[string]bool {
 		names[st.Fn] = true
 	}
 	return names
+}
+
+// helperFns indexes the plan's same-file helpers by their legacy fn name
+// (the spelling the views carry before the call-site rewrite).
+func helperFns(p *plan.Plan) map[string]plan.FnHelper {
+	if p == nil || len(p.FnHelpers) == 0 {
+		return nil
+	}
+	m := make(map[string]plan.FnHelper, len(p.FnHelpers))
+	for _, h := range p.FnHelpers {
+		m[h.Name] = h
+	}
+	return m
 }
 
 func buildPrompt(view budget.View, dbContract, contract, endpoint, draft string, stubs []plan.Stub, helpers, constants, errCodes []string, scen *scenPrompt) string {
@@ -1199,16 +1361,30 @@ func storeCallRe(receiver string) *regexp.Regexp {
 	return regexp.MustCompile(regexp.QuoteMeta(receiver) + `([A-Za-z0-9_]+)\(`)
 }
 
-// requiredCalls lists the unique store method names in the view, in order,
-// prefixed with the profile's store receiver.
+// helperCallRe matches a bare s.<Name>( selector call: the same-file
+// helper methods (controller/fns.go) the view shows after the call-site
+// rewrite. Store-receiver calls never match — their selector has a dot
+// before the method name.
+var helperCallRe = regexp.MustCompile(`\bs\.([A-Za-z0-9_]+)\(`)
+
+// requiredCalls lists the unique calls the view requires, in order: every
+// store method with the profile's receiver prefix, plus every bare
+// s.<Name>( helper call. The body must contain each one.
 func requiredCalls(view string, receiver string) []string {
-	var names []string
-	for _, m := range storeCallRe(receiver).FindAllStringSubmatch(view, -1) {
-		names = append(names, m[1])
-	}
 	var out []string
-	for _, n := range common.UniqueStable(names) {
-		out = append(out, receiver+n)
+	seen := map[string]bool{}
+	add := func(call string) {
+		if call == "" || seen[call] {
+			return
+		}
+		seen[call] = true
+		out = append(out, call)
+	}
+	for _, m := range storeCallRe(receiver).FindAllStringSubmatch(view, -1) {
+		add(receiver + m[1])
+	}
+	for _, m := range helperCallRe.FindAllStringSubmatch(view, -1) {
+		add("s." + m[1])
 	}
 	return out
 }
