@@ -229,6 +229,42 @@ func TestDiscoverTerminalAnchoredArm(t *testing.T) {
 	}
 }
 
+// A reads+writes arm ending in an unconditional TPFAIL shapes a response
+// nobody receives — not a candidate even on the classic leg, and not a
+// tail-feeder either.
+const trapReadsSrc = `void SVC_TRAPREADS(TPSVCINFO *rqst) {
+	char c_flag;
+	Fget32(ptr_fml_Ibuffer, FML_FLAG, 0, (char *)&c_flag, 0);
+	if (c_flag == 'H') {
+		Fget32(ptr_fml_Ibuffer, FML_COMP_CD, 0, (char *)&sql_comp, 0);
+		Fadd32(ptr_fml_Obuffer, FML_A, (char *)&a, 0);
+		tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+	} else {
+		Fget32(ptr_fml_Ibuffer, FML_SCH_CD, 0, (char *)&sql_sch, 0);
+		Fadd32(ptr_fml_Obuffer, FML_B, (char *)&b, 0);
+	}
+	tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+
+func TestDiscoverIgnoresTrapWithReads(t *testing.T) {
+	facts, err := scanner.ScanBytes([]byte(trapReadsSrc), "trapreads.pc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build([]byte(trapReadsSrc), facts, "SVC_TRAPREADS", nil)
+	conds := condsFromRoots(tree)
+	got := Discover(tree, conds)
+	if len(got) != 1 || got[0].Key != "c2" {
+		t.Fatalf("candidates = %+v, want only the fall-through else arm c2", got)
+	}
+	// c2 qualifies on its own reads+writes (leg 1), so no tail marking —
+	// the point is the trap arm is gone from every leg.
+	if got[0].TerminalLine != 0 || got[0].FeedsTail != 0 {
+		t.Errorf("c2 must be a plain leg-1 candidate: %+v", got[0])
+	}
+}
+
 // A non-error write arm with only TPFAIL exits is logic/error handling,
 // not an outcome — the terminal leg must not promote it.
 const failOnlySrc = `void SVC_FAILONLY(TPSVCINFO *rqst) {

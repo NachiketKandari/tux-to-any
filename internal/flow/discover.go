@@ -67,20 +67,11 @@ func Discover(tree *Tree, conditions []ir.Condition) []Candidate {
 		fn = tree.Function
 		facts = tree.facts
 	}
+	// qualifies is the single candidate test shared by emission and by
+	// ConditionFor's DFS replay (kthQualifyingChild) — the two must never
+	// drift or refs resolve to the wrong block.
 	qualifies := func(n *Node) (bool, int, string) {
-		census := fmlCensus(n)
-		if len(census.gets) > 0 && len(census.adds) > 0 {
-			line, fwd := successTerminal(n, facts, fn)
-			return true, line, fwd
-		}
-		if len(census.adds) == 0 {
-			return false, 0, ""
-		}
-		line, fwd := successTerminal(n, facts, fn)
-		if line == 0 {
-			return false, 0, ""
-		}
-		return true, line, fwd
+		return branchQualifies(n, facts, fn)
 	}
 	var out []Candidate
 	emitted := map[int]bool{}
@@ -419,10 +410,36 @@ func rootFor(tree *Tree, c *ir.Condition) *Node {
 	return nil
 }
 
+// branchQualifies is the one candidate test: a branch is an API candidate
+// iff it shapes a non-error response (adds, optionally queries — queries
+// ride the tail-feeder pass) AND proves it is an outcome. Proof, in order:
+// own a success terminal (tpreturn TPSUCCESS / tpforward), else carry
+// request reads — unless the arm is an unconditional trap (shapes a
+// response nobody receives: failure exit with no owned code after it).
+// Guards (error-only adds), logic-only arms, and terminal-less write arms
+// fail. TPFAIL legs are error exits, never proof.
+func branchQualifies(n *Node, facts *scanner.SourceFacts, fn string) (bool, int, string) {
+	census := fmlCensus(n)
+	if len(census.adds) == 0 {
+		return false, 0, ""
+	}
+	line, fwd := successTerminal(n, facts, fn)
+	if line != 0 {
+		return true, line, fwd
+	}
+	if len(census.gets) == 0 {
+		return false, 0, ""
+	}
+	if endsInExit(n, facts, fn) {
+		return false, 0, ""
+	}
+	return true, 0, ""
+}
+
 // kthQualifyingChild replays Discover's key assignment: the k-th qualifying
-// branch in the same depth-first order the walk used for keys. The
-// qualifier is Discover's (reads+writes, or writes+owned success
-// terminal) — the two must never drift or refs resolve to the wrong block.
+// branch in the same depth-first order the walk used for keys, using the
+// shared branchQualifies test — the two must never drift or refs resolve
+// to the wrong block.
 func kthQualifyingChild(tree *Tree, n *Node, k int) *Node {
 	count := 0
 	var fn string
@@ -430,17 +447,6 @@ func kthQualifyingChild(tree *Tree, n *Node, k int) *Node {
 	if tree != nil {
 		fn = tree.Function
 		facts = tree.facts
-	}
-	qualifies := func(x *Node) bool {
-		census := fmlCensus(x)
-		if len(census.gets) > 0 && len(census.adds) > 0 {
-			return true
-		}
-		if len(census.adds) == 0 {
-			return false
-		}
-		line, _ := successTerminal(x, facts, fn)
-		return line != 0
 	}
 	var walk func(n *Node) *Node
 	walk = func(n *Node) *Node {
@@ -451,7 +457,7 @@ func kthQualifyingChild(tree *Tree, n *Node, k int) *Node {
 				}
 				continue
 			}
-			if !qualifies(c) {
+			if ok, _, _ := branchQualifies(c, facts, fn); !ok {
 				if f := walk(c); f != nil {
 					return f
 				}
