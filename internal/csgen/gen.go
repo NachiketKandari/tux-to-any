@@ -40,6 +40,17 @@ type Options struct {
 	// bodies are never re-generated — each one is re-gated and reused or
 	// loudly degraded. Keyed by endpoint name.
 	Resumed map[string]string
+	// Templates is the template provider (user overlay over the embedded
+	// set); nil = the embedded defaults.
+	Templates templates.Provider
+}
+
+// provider resolves the run's template set (nil-safe embedded default).
+func (o Options) provider() templates.Provider {
+	if o.Templates == nil {
+		return templates.NewEmbeddedProvider()
+	}
+	return o.Templates
 }
 
 // Result is one generated tree: relative file paths → content, in
@@ -127,7 +138,7 @@ type fileData struct {
 func Generate(ctx context.Context, opts Options) (Result, error) {
 	res := Result{Files: map[string]string{}, Bodies: map[string]string{}}
 	p := opts.Plan
-	tz := templates.NewEmbeddedProvider()
+	tz := opts.provider()
 
 	root := p.Namespace
 	rootArea := root
@@ -200,7 +211,7 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 	for i := range epDatas {
 		if body, ok := opts.Resumed[epDatas[i].Name]; ok {
 			normalized := normalizeBody(body, bodyIndent)
-			if errs := armGates(p, epDatas[i], svc, i, normalized); len(errs) == 0 {
+			if errs := armGates(tz, p, epDatas[i], svc, i, normalized); len(errs) == 0 {
 				epDatas[i].TodoSlot = normalized
 				res.Filled = append(res.Filled, epDatas[i].Name)
 				res.Bodies[epDatas[i].Name] = normalized
@@ -268,8 +279,11 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 // the exact bytes Generate writes for the Service/<Service>.cs file. The
 // seam gate re-renders it per attempt so the structural gates always see
 // the assembled truth, never the raw block alone.
-func renderServiceFile(svc fileData) (string, error) {
-	return templates.NewEmbeddedProvider().Render(templates.CsServiceFile, svc)
+func renderServiceFile(prov templates.Provider, svc fileData) (string, error) {
+	if prov == nil {
+		prov = templates.NewEmbeddedProvider()
+	}
+	return prov.Render(templates.CsServiceFile, svc)
 }
 
 // buildEndpoints prepares the template view of every endpoint and the

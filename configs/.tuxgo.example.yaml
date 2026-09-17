@@ -128,6 +128,15 @@ convertcs:                   # .NET Core target defaults (flag > config > defaul
   namespace: ""              # draft-time root namespace (empty keeps the TODO placeholder)
   area: ""                   # draft-time dotted area, e.g. OAOApplication.CustomerAuthenticate
 
+templates:                   # user template overlay (also -templates <dir> on
+  dir: ""                    # convertgo/convertbatchpy/convertcs/gentest)
+                             # Dir of <template_id>.tmpl files overriding the embedded set;
+                             # ids without a file keep the embedded default. Start with
+                             # `tuxconv templates dump -out templates`, edit, then
+                             # `tuxconv templates verify -dir templates`; a bad dir/unknown
+                             # id/unparseable override fails the run. `templates list` shows
+                             # each id's origin (file vs embedded).
+
 paths:
   target: ../existing-go-service # RESERVED — no engine reads it (kept so existing
                              # configs load; Tier-B anchors on mainGo)

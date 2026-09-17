@@ -20,6 +20,7 @@ import (
 	"tux-to-any/internal/llm"
 	"tux-to-any/internal/plan"
 	"tux-to-any/internal/telemetry"
+	"tux-to-any/internal/templates"
 	"tux-to-any/internal/validate"
 )
 
@@ -40,6 +41,7 @@ func runConvert(ctx context.Context, args []string) error {
 	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: skip controller bodies (overrides run.llm)")
 	fragment := fs.Bool("fragment", false, "Force fragment mode on a single-file input (PF-3.1)")
 	retryRepair := fs.Bool("retry-repair", false, "Retry methodology A/B: rejected LLM attempts are sent back as an assistant turn for patching instead of regenerated (default off)")
+	templatesDir := fs.String("templates", "", "Directory of <template_id>.tmpl overrides (flag > templates.dir config; missing ids keep the embedded set)")
 
 	flagArgs, positional := reorderArgs(args)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -51,6 +53,11 @@ func runConvert(ctx context.Context, args []string) error {
 		return err
 	}
 	logConfigRouting(ctx, cfg, cfgSource)
+
+	tpl, err := templateProvider(ctx, cfg, *templatesDir)
+	if err != nil {
+		return err
+	}
 
 	target, err := resolveInput(positional, cfg)
 	if err != nil {
@@ -71,6 +78,7 @@ func runConvert(ctx context.Context, args []string) error {
 	w := &convertWiring{
 		cfg: wiring.cfg, budget: wiring.budget, validator: v, client: client,
 		audit: wiring.audit, llmEnabled: client != nil,
+		templates:   tpl,
 		retryRepair: *retryRepair || (cfg.Convert.RetryRepair != nil && *cfg.Convert.RetryRepair),
 	}
 
@@ -191,6 +199,7 @@ func runConvertFnLib(ctx context.Context, w *convertWiring, main *ir.File, baseR
 		Ledger: led, Validator: w.validator, MaxRetries: w.cfg.ValidateCfg.MaxRetries, Audit: w.audit,
 		Workers: workers,
 		SkipLLM: !w.llmEnabled, WithGorm: w.cfg.DB.WithGorm,
+		Templates:   w.templates,
 		FlowDraft:   false,
 		RetryRepair: w.retryRepair,
 	})
@@ -219,6 +228,9 @@ type convertWiring struct {
 	client     llm.Client
 	audit      *audit.Recorder
 	llmEnabled bool
+	// templates is the resolved template set (flag > config > embedded)
+	// every service in the run renders from.
+	templates templates.Provider
 	// retryRepair is the resolved retry methodology (CLI flag OR config
 	// convert.retryRepair) every service in the run uses.
 	retryRepair bool
@@ -287,6 +299,7 @@ func convertOneService(ctx context.Context, w *convertWiring, main *ir.File, fil
 		Ledger: led, Validator: w.validator, MaxRetries: w.cfg.ValidateCfg.MaxRetries, Audit: w.audit,
 		Workers: workers,
 		SkipLLM: !w.llmEnabled, WithGorm: w.cfg.DB.WithGorm,
+		Templates:   w.templates,
 		FlowDraft:   w.cfg.Convert.FlowDraft == nil || *w.cfg.Convert.FlowDraft,
 		TxWrap:      w.cfg.Convert.TxWrap == nil || *w.cfg.Convert.TxWrap,
 		RetryRepair: w.retryRepair,

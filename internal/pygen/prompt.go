@@ -39,7 +39,7 @@ func fillServiceBody(ctx context.Context, opts Options) (body string, calls int,
 			return reindent(llm.ExtractFenced(content, "python"))
 		},
 		Gate: func(serviceBody string) []string {
-			content := assembleModule(p, opts.SourcePath, serviceBody)
+			content := assembleModule(opts.provider(), p, opts.SourcePath, serviceBody)
 			issues := check(content)
 			issues = append(issues, txnIssues(content)...)
 			issues = append(issues, seamIssues(serviceBody)...)

@@ -31,6 +31,7 @@ func runGentest(ctx context.Context, args []string) error {
 	baseDir := fs.String("base", "", "Output base directory override (default: paths.staged — staged-first, the target tree is never written implicitly)")
 	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: skip the LLM gap-fill seam (overrides run.llm)")
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
+	templatesDir := fs.String("templates", "", "Directory of <template_id>.tmpl overrides (flag > templates.dir config; missing ids keep the embedded set)")
 
 	flagArgs, positional := reorderArgs(args)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -65,6 +66,11 @@ func runGentest(ctx context.Context, args []string) error {
 		return err
 	}
 	logConfigRouting(ctx, cfg, cfgSource)
+
+	tpl, err := templateProvider(ctx, cfg, *templatesDir)
+	if err != nil {
+		return err
+	}
 
 	tgt, err := testscan.Resolve(target, layerFilter)
 	if err != nil {
@@ -115,7 +121,7 @@ func runGentest(ctx context.Context, args []string) error {
 	res, err := testgen.Generate(ctx, tgt, rep, testgen.Options{
 		BaseDir: base, Workers: cfg.Concurrency.Workers, NoLLM: !llmEnabled,
 		Client: client, Budget: wiring.budget,
-		MaxRetries: cfg.ValidateCfg.MaxRetries, Audit: wiring.audit,
+		MaxRetries: cfg.ValidateCfg.MaxRetries, Audit: wiring.audit, Templates: tpl,
 	})
 	if err != nil {
 		return err

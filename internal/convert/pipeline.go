@@ -34,6 +34,7 @@ import (
 	"tux-to-any/internal/plan"
 	"tux-to-any/internal/profile"
 	"tux-to-any/internal/telemetry"
+	"tux-to-any/internal/templates"
 	"tux-to-any/internal/validate"
 )
 
@@ -86,6 +87,9 @@ type Options struct {
 	// regenerates from the original prompt. Only the message assembly
 	// changes — gates, budgets, and the retry count are identical.
 	RetryRepair bool
+	// Templates is the template provider (user overlay over the embedded
+	// set); nil = the embedded defaults.
+	Templates templates.Provider
 }
 
 // Result summarizes one convert run.
@@ -138,7 +142,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Plan == nil || opts.Main == nil || opts.Ledger == nil || opts.Validator == nil {
 		return nil, fmt.Errorf("convert: plan, main IR, ledger and validator are required")
 	}
-	svc, err := gen.NewService(gen.Options{Plan: opts.Plan, Main: opts.Main, FnFiles: opts.FnFiles, WithGorm: opts.WithGorm, Source: opts.Source})
+	svc, err := gen.NewService(gen.Options{Plan: opts.Plan, Main: opts.Main, FnFiles: opts.FnFiles, WithGorm: opts.WithGorm, Source: opts.Source, Templates: opts.Templates})
 	if err != nil {
 		return nil, err
 	}

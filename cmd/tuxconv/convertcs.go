@@ -31,8 +31,9 @@ func runConvertcs(ctx context.Context, args []string) error {
 	mappingFlag := fs.String("mapping", "", "convertcs mapping YAML (namespace/component/endpoints — required)")
 	noLLM := fs.Bool("no-llm", false, "deterministic-only run (service bodies keep tuxgo:TODO seams; overrides run.llm)")
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
+	templatesDir := fs.String("templates", "", "Directory of <template_id>.tmpl overrides (flag > templates.dir config; missing ids keep the embedded set)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir] [-config path]")
+		fmt.Fprintln(os.Stderr, "usage: tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir] [-config path] [-templates dir]")
 		fs.PrintDefaults()
 	}
 	flagArgs, positional := reorderArgs(args)
@@ -46,6 +47,11 @@ func runConvertcs(ctx context.Context, args []string) error {
 		return err
 	}
 	logConfigRouting(ctx, cfg, cfgSource)
+
+	tpl, err := templateProvider(ctx, cfg, *templatesDir)
+	if err != nil {
+		return err
+	}
 
 	// Flag > config > default precedence (C1).
 	target, err := resolveConvertcsInput(positional, cfg)
@@ -117,7 +123,7 @@ func runConvertcs(ctx context.Context, args []string) error {
 	res, err := csgen.Generate(ctx, csgen.Options{
 		Plan: plan, Source: string(src), NoLLM: noLLMEnabled || client == nil,
 		Client: client, Budget: wiring.budget, MaxRetries: cfg.ValidateCfg.MaxRetries,
-		Audit: wiring.audit, Resumed: resumed,
+		Audit: wiring.audit, Resumed: resumed, Templates: tpl,
 	})
 	if err != nil {
 		return err

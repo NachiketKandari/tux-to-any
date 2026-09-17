@@ -35,6 +35,17 @@ type Options struct {
 	Audit *audit.Recorder
 	// Check is the structural gate (injectable for tests); nil = pychk.Check.
 	Check func(src string) []pychk.Issue
+	// Templates is the template provider (user overlay over the embedded
+	// set); nil = the embedded defaults.
+	Templates templates.Provider
+}
+
+// provider resolves the run's template set (nil-safe embedded default).
+func (o Options) provider() templates.Provider {
+	if o.Templates == nil {
+		return templates.NewEmbeddedProvider()
+	}
+	return o.Templates
 }
 
 // Result is one generated module with its gate outcomes and report.
@@ -57,6 +68,7 @@ type Result struct {
 func Generate(ctx context.Context, opts Options) (Result, error) {
 	res := Result{}
 	p := opts.Plan
+	prov := opts.provider()
 	check := opts.Check
 	if check == nil {
 		check = pychk.Check
@@ -64,20 +76,20 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 
 	var secs []string
 	var serviceBody string
-	secs = append(secs, renderHeader(p, opts.SourcePath))
+	secs = append(secs, renderHeader(prov, p, opts.SourcePath))
 	secs = append(secs, banner("SQL Query Constants (source fidelity-gated via sqlchk)"))
 	for _, c := range p.Consts {
-		secs = append(secs, render(templates.PyBatchConst, constData{Name: c.Name, SQL: c.SQL}))
+		secs = append(secs, render(prov, templates.PyBatchConst, constData{Name: c.Name, SQL: c.SQL}))
 	}
 
 	if p.Shape == "simple" {
 		secs = append(secs, banner("Data Access Layer (pure cursor functions — mockable with a cursor double)"))
 		for _, fn := range p.DAL {
 			if fn.Kind == "fetch" {
-				secs = append(secs, render(templates.PyBatchDALFetch, dalFetchData{Name: fn.Name, Const: fn.Const, Source: strings.TrimPrefix(fn.Name, "fetch_")}))
+				secs = append(secs, render(prov, templates.PyBatchDALFetch, dalFetchData{Name: fn.Name, Const: fn.Const, Source: strings.TrimPrefix(fn.Name, "fetch_")}))
 				continue
 			}
-			secs = append(secs, render(templates.PyBatchDALDML, dalDMLData{
+			secs = append(secs, render(prov, templates.PyBatchDALDML, dalDMLData{
 				Name: fn.Name, Const: fn.Const, Mode: p.DMLLoop,
 				HasBinds:      len(fn.BindIdx) > 0,
 				Projection:    projection("r", fn.BindIdx),
@@ -88,15 +100,15 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 		for _, ph := range p.Phases {
 			calls = append(calls, entryCall{Key: resultKey(ph.Cursor), Method: ph.Method})
 		}
-		entry := render(templates.PyBatchEntrypoint, entrypointData{
+		entry := render(prov, templates.PyBatchEntrypoint, entrypointData{
 			Entrypoint: p.Entrypoint, ServiceName: p.ServiceName, Calls: calls,
 		})
 		var svc []string
-		svc = append(svc, render(templates.PyBatchServiceHead, serviceHeadData{
+		svc = append(svc, render(prov, templates.PyBatchServiceHead, serviceHeadData{
 			ClassName: p.ClassName, ServiceName: p.ServiceName, SourcePath: opts.SourcePath, RouterClass: p.Wrapper.RouterClass,
 		}))
 		for _, ph := range p.Phases {
-			svc = append(svc, render(templates.PyBatchPhase, phaseData{
+			svc = append(svc, render(prov, templates.PyBatchPhase, phaseData{
 				Index: ph.Index, Method: ph.Method, Cursor: ph.Cursor, Table: ph.Table,
 				FetchFn: ph.FetchFn, DMLFn: ph.DMLFn, Mode: p.DMLLoop,
 				ReadMode: p.Wrapper.ReadMode, WriteMode: p.Wrapper.WriteMode,
@@ -124,7 +136,7 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 			res.Notes = append(res.Notes, "no llm client available — placeholder body emitted")
 		}
 		serviceBody = body
-		secs = append(secs, repoSection(p, opts.SourcePath, body))
+		secs = append(secs, repoSection(prov, p, opts.SourcePath, body))
 	}
 
 	res.Content = strings.Join(secs, "\n\n") + "\n"
@@ -147,17 +159,17 @@ func Generate(ctx context.Context, opts Options) (Result, error) {
 // repo-shape module. Generate and assembleModule (the seam gate's view)
 // share it, so the structural gate always sees the exact bytes that would
 // be written (A2.4: the one assembly).
-func repoSection(p *pyplan.Plan, sourcePath, body string) string {
+func repoSection(prov templates.Provider, p *pyplan.Plan, sourcePath, body string) string {
 	var secs []string
 	secs = append(secs, banner("Repository (deterministic scaffold — BP-3)"))
 	var blocks []string
 	for _, m := range p.Repo {
-		blocks = append(blocks, renderRepoMethod(p, m))
+		blocks = append(blocks, renderRepoMethod(prov, p, m))
 	}
 	if strings.HasPrefix(strings.TrimSpace(body), "class ") {
 		secs = append(secs, strings.TrimRight(strings.TrimSpace(body), "\n"))
 	} else {
-		secs = append(secs, render(templates.PyBatchServiceShell, serviceShellData{
+		secs = append(secs, render(prov, templates.PyBatchServiceShell, serviceShellData{
 			RepoName: p.RepoName, ClassName: p.ClassName, ServiceName: p.ServiceName,
 			SourcePath: sourcePath, RouterClass: p.Wrapper.RouterClass,
 			RepoBlocks: strings.Join(blocks, "\n\n"), Body: body,
@@ -169,14 +181,14 @@ func repoSection(p *pyplan.Plan, sourcePath, body string) string {
 // assembleModule builds the full repo-shape module with one service body —
 // the seam gate's view of what Generate would write (the same repoSection
 // the write path uses).
-func assembleModule(p *pyplan.Plan, sourcePath, body string) string {
+func assembleModule(prov templates.Provider, p *pyplan.Plan, sourcePath, body string) string {
 	var secs []string
-	secs = append(secs, renderHeader(p, sourcePath))
+	secs = append(secs, renderHeader(prov, p, sourcePath))
 	secs = append(secs, banner("SQL Query Constants (source fidelity-gated via sqlchk)"))
 	for _, c := range p.Consts {
-		secs = append(secs, render(templates.PyBatchConst, constData{Name: c.Name, SQL: c.SQL}))
+		secs = append(secs, render(prov, templates.PyBatchConst, constData{Name: c.Name, SQL: c.SQL}))
 	}
-	secs = append(secs, repoSection(p, sourcePath, body))
+	secs = append(secs, repoSection(prov, p, sourcePath, body))
 	return strings.Join(secs, "\n\n") + "\n"
 }
 
@@ -202,9 +214,13 @@ func fidelityOf(p *pyplan.Plan, content string) []sqlchk.Result {
 	return pychk.Fidelity(targets, content)
 }
 
-// render executes one template id against data.
-func render(id templates.ID, data any) string {
-	out, err := templates.NewEmbeddedProvider().Render(id, data)
+// render executes one template id against data through the run's provider
+// (nil provider = embedded).
+func render(prov templates.Provider, id templates.ID, data any) string {
+	if prov == nil {
+		prov = templates.NewEmbeddedProvider()
+	}
+	out, err := prov.Render(id, data)
 	if err != nil {
 		return "# tuxgo: template error (" + string(id) + "): " + err.Error()
 	}

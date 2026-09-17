@@ -115,6 +115,29 @@ batchpy:
 	}
 }
 
+func TestTemplatesDirKey(t *testing.T) {
+	yamlSrc := `
+templates:
+  dir: my_templates
+`
+	path := filepath.Join(t.TempDir(), ".tuxgo.yaml")
+	if err := os.WriteFile(path, []byte(yamlSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Templates.Dir != "my_templates" {
+		t.Errorf("templates.dir = %q, want my_templates", cfg.Templates.Dir)
+	}
+	// Absent section keeps the embedded-set default (empty dir).
+	cfg = Default()
+	if cfg.Templates.Dir != "" {
+		t.Errorf("default templates.dir = %q, want empty", cfg.Templates.Dir)
+	}
+}
+
 func TestLoadOverlayAndUnknownKeys(t *testing.T) {
 	yamlSrc := `
 run:

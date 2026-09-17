@@ -33,6 +33,9 @@ type Options struct {
 	// WithGorm renders the store with the legacy *gorm.DB handle alongside
 	// sqlx (db.withGorm); default is the plain sqlx-only store.
 	WithGorm bool
+	// Templates is the template provider (user overlay over the embedded
+	// set); nil = the embedded defaults.
+	Templates templates.Provider
 }
 
 // Service bundles the derived naming context shared by all generators.
@@ -49,6 +52,7 @@ type Service struct {
 	flowTree    *flow.Tree                // lazily built when a ref endpoint appears
 	scenMemo    map[string]*flow.Scenario // endpoint name → resolved scenario slice
 	prof        profile.Profile           // target conventions (nil = gonav default)
+	tpl         templates.Provider        // template set (nil-safe: always set in NewService)
 }
 
 // Profile returns the service's target profile; the gonav default when
@@ -74,6 +78,10 @@ func NewService(o Options) (*Service, error) {
 		return nil, fmt.Errorf("gen: plan and main IR are required")
 	}
 	s := &Service{Mapping: o.Plan.Mapping, Main: o.Main, WithGorm: o.WithGorm, source: o.Source}
+	s.tpl = o.Templates
+	if s.tpl == nil {
+		s.tpl = templates.NewEmbeddedProvider()
+	}
 	s.ModelsPkg = s.Mapping.ImportPath("models")
 	s.Module = strings.SplitN(s.Mapping.Module, "/", 2)[0]
 	s.If = common.Export(s.Mapping.Service)
@@ -364,7 +372,7 @@ func (s *Service) ModelFile(p *plan.Plan) (string, error) {
 			}
 		}
 	}
-	return render(templates.ModelFile, data)
+	return s.render(templates.ModelFile, data)
 }
 
 // rowShapeSig fingerprints a row struct's fields (name/type/db tag) so
@@ -580,7 +588,7 @@ func (s *Service) DBMethod(u plan.Unit) (body, signature string, needsSQL bool, 
 	if tmpl == "" {
 		tmpl = templates.DBMethodSelectMulti
 	}
-	body, err = render(tmpl, d)
+	body, err = s.render(tmpl, d)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -630,12 +638,12 @@ func hasTimeParam(params []templates.ParamSpec) bool {
 	return false
 }
 
-// render executes one embedded template. Go artifacts (anything starting
-// with a package clause) are normalized through the shared goast.Emit gate
-// so generated files pass the Tier-A gofmt check byte-for-byte; the router
-// snippet (not Go) passes through untouched.
-func render(id templates.ID, data any) (string, error) {
-	out, err := templates.NewEmbeddedProvider().Render(id, data)
+// render executes one template from the service's template set. Go artifacts
+// (anything starting with a package clause) are normalized through the shared
+// goast.Emit gate so generated files pass the Tier-A gofmt check
+// byte-for-byte; the router snippet (not Go) passes through untouched.
+func (s *Service) render(id templates.ID, data any) (string, error) {
+	out, err := s.tpl.Render(id, data)
 	if err != nil {
 		return "", err
 	}

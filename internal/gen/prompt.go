@@ -489,7 +489,7 @@ func responseShaping(s *Service, c *ir.Condition, p *plan.Plan, endpoint string,
 // method template — the template owns the shape, the LLM owns only the
 // template-shaped gap.
 func (s *Service) RenderControllerMethod(endpoint, body string) (string, error) {
-	return render(templates.ControllerMethod, templates.ControllerMethodData{
+	return s.render(templates.ControllerMethod, templates.ControllerMethodData{
 		StructName:   common.LowerFirst(s.Mapping.Service) + "Controller",
 		Name:         endpoint,
 		CtxName:      "c",

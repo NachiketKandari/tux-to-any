@@ -151,7 +151,7 @@ func (s *Service) DBInterface(p *plan.Plan) (string, error) {
 	if len(data.Methods) == 0 {
 		return "", fmt.Errorf("gen: plan has no db units")
 	}
-	return render(templates.DBInterfaceFile, data)
+	return s.render(templates.DBInterfaceFile, data)
 }
 
 // AccumulateDBInterface appends one method signature to db/interface.go —
@@ -176,7 +176,7 @@ func (s *Service) AccumulateDBInterface(path, signature string) error {
 }
 
 func (s *Service) DBInterfaceSkeleton() (string, error) {
-	return render(templates.DBInterfaceFile, templates.DBInterfaceData{
+	return s.render(templates.DBInterfaceFile, templates.DBInterfaceData{
 		Package:   "db",
 		StoreType: "store",
 		IfaceName: s.If + "Store",
@@ -203,7 +203,7 @@ func (s *Service) ControllerInterface(p *plan.Plan) (string, error) {
 			fmt.Sprintf("%s(ctx context.Context, request *models.%s) (data []*models.%s, err error)",
 				e.Name, s.requestType(e.Name), s.responseType(e.Name)))
 	}
-	return render(templates.ControllerInterfaceFile, data)
+	return s.render(templates.ControllerInterfaceFile, data)
 }
 
 // FnStubFile renders controller/fnstubs.go — the panicking package-level
@@ -226,7 +226,7 @@ func (s *Service) FnStubFileWithSynth(p *plan.Plan, synth map[string]string) (st
 			Body:     synth[st.Fn],
 		})
 	}
-	return render(templates.FnStubFile, data)
+	return s.render(templates.FnStubFile, data)
 }
 
 // HandlerInterface renders handler/interface.go: handler struct + interface
@@ -249,7 +249,7 @@ func (s *Service) HandlerInterface(p *plan.Plan) (string, error) {
 	for _, e := range s.Mapping.Endpoints {
 		data.Methods = append(data.Methods, e.Name)
 	}
-	return render(templates.HandlerInterfaceFile, data)
+	return s.render(templates.HandlerInterfaceFile, data)
 }
 
 // HandlerMethodsFile assembles handler/<service>.go: the deterministic gin
@@ -263,7 +263,7 @@ func (s *Service) HandlerMethodsFile() (string, error) {
 	sb.WriteString("\t\"github.com/gin-gonic/gin\"\n")
 	sb.WriteString(")\n")
 	for _, e := range s.Mapping.Endpoints {
-		body, err := render(templates.HandlerMethod, templates.HandlerMethodData{
+		body, err := s.render(templates.HandlerMethod, templates.HandlerMethodData{
 			StructName:  common.LowerFirst(s.Mapping.Service) + "Handler",
 			Name:        e.Name,
 			RequestType: "models." + s.requestType(e.Name),
@@ -283,5 +283,5 @@ func (s *Service) Router() (string, error) {
 	for _, e := range s.Mapping.Endpoints {
 		data.Routes = append(data.Routes, templates.RouteSpec{Path: e.Route, Handler: e.Name})
 	}
-	return render(templates.RouterSnippet, data)
+	return s.render(templates.RouterSnippet, data)
 }

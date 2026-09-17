@@ -60,6 +60,7 @@ func main() {
 		"analyze":        runAnalyze,
 		"gentest":        runGentest,
 		"retrystats":     runRetryStats,
+		"templates":      runTemplates,
 	}
 	run, ok := commands[rest[0]]
 	switch {
@@ -206,6 +207,9 @@ Available Commands:
   retrystats   Compare the retry behaviour of one or two audit runs (attempts,
                outcomes, tokens per unit) — the retry methodology A/B read-out:
                retrystats conversion_logs/audit/<runA> [<runB>]
+  templates    User template overlay: list (effective set + origins), dump
+               (export the embedded set to a directory), verify (check an
+               override dir for unknown ids / parse errors before a run)
   version      Print version information
 
 `)

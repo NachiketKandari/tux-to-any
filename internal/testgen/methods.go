@@ -131,7 +131,7 @@ func renderDBMethod(u *unit) (string, error) {
 			row = []string{"0"}
 		}
 	}
-	prov := templates.NewEmbeddedProvider()
+	prov := u.sc.provider()
 	return prov.Render(templates.TestDBMethod, templates.TestDBMethodData{
 		SuiteName:  u.suite,
 		StoreVar:   strings.ToLower(sc.name) + "Store",
@@ -247,7 +247,7 @@ func renderCtrlMethod(u *unit) (string, error) {
 		reqFields = append(reqFields, templates.ReqField{Name: fv[0], Value: fv[1]})
 		caseRefs = append(caseRefs, fv[0]+": testCase."+fv[0])
 	}
-	prov := templates.NewEmbeddedProvider()
+	prov := u.sc.provider()
 	return prov.Render(templates.TestControllerMethod, templates.TestControllerMethodData{
 		SuiteName:  u.suite,
 		StoreVar:   strings.ToLower(sc.name) + "Store",
@@ -275,7 +275,7 @@ func renderHandlerMethod(u *unit) (string, error) {
 		reqFields = append(reqFields, templates.ReqField{Name: fv[0], Value: fv[1]})
 		caseRefs = append(caseRefs, fv[0]+": testCase."+fv[0])
 	}
-	prov := templates.NewEmbeddedProvider()
+	prov := u.sc.provider()
 	return prov.Render(templates.TestHandlerMethod, templates.TestHandlerMethodData{
 		SuiteName:    u.suite,
 		CtrlMockVar:  strings.ToLower(sc.name) + "Controller",

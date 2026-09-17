@@ -38,7 +38,7 @@ func fillArmBody(ctx context.Context, opts Options, p *csplan.Plan, ep EpData, s
 			return normalizeBody(llm.ExtractFenced(content, "csharp"), bodyIndent)
 		},
 		Gate: func(body string) []string {
-			return armGates(p, ep, svc, epIdx, body)
+			return armGates(opts.provider(), p, ep, svc, epIdx, body)
 		},
 	})
 }
@@ -243,14 +243,14 @@ func prologueOf(ep EpData, svc fileData) string {
 // file so the model's block is judged in the exact bytes the tree would
 // write: fixed signature and return statement, every required repo call
 // present, no raw SQL / EXEC SQL, brace balance.
-func armGates(p *csplan.Plan, ep EpData, svc fileData, epIdx int, body string) []string {
+func armGates(prov templates.Provider, p *csplan.Plan, ep EpData, svc fileData, epIdx int, body string) []string {
 	if strings.TrimSpace(body) == "" {
 		return []string{"the residual block is empty"}
 	}
 	trial := svc
 	trial.Endpoints = append([]EpData(nil), svc.Endpoints...)
 	trial.Endpoints[epIdx] = filledEp(ep, body)
-	content, err := renderServiceFile(trial)
+	content, err := renderServiceFile(prov, trial)
 	if err != nil {
 		return []string{"service render failed: " + err.Error()}
 	}

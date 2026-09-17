@@ -144,6 +144,17 @@ type Config struct {
 	Paths       Paths       `yaml:"paths"`
 	Batchpy     Batchpy     `yaml:"batchpy"`
 	Convertcs   Convertcs   `yaml:"convertcs"`
+	Templates   Templates   `yaml:"templates"`
+}
+
+// Templates carries the user template overlay (the user-tunable template
+// seam): Dir points at a directory of <template_id>.tmpl files that override
+// matching embedded templates; IDs without a file keep the embedded default,
+// so a partial override always works. Empty (default) = embedded set alone.
+// A missing dir, an unknown id, or an unparseable override fails at wire-up;
+// `tuxconv templates list|dump|verify` inspect, export, and check a set.
+type Templates struct {
+	Dir string `yaml:"dir"`
 }
 
 // Convertcs carries the convertcs (.NET Core) run defaults: the output

@@ -8,7 +8,8 @@ import (
 )
 
 // Provider is the template seam (pipeline-three-parts Part 3): the pipeline
-// consumes this interface; the embedded set is the MVP default.
+// consumes this interface. EmbeddedProvider is the stock set; FileProvider
+// (file.go) overlays a user directory on it — the user-tunable seam.
 type Provider interface {
 	// Render executes the template id against data and returns the result.
 	Render(id ID, data any) (string, error)

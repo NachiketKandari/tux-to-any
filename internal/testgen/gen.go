@@ -41,6 +41,17 @@ type Options struct {
 	// LLM wiring for the gap-fill seam; zero values degrade to llm-required.
 	Client llm.Client
 	Budget budget.Budget
+	// Templates is the template provider (user overlay over the embedded
+	// set); nil = the embedded defaults.
+	Templates templates.Provider
+}
+
+// provider resolves the run's template set (nil-safe embedded default).
+func (o Options) provider() templates.Provider {
+	if o.Templates == nil {
+		return templates.NewEmbeddedProvider()
+	}
+	return o.Templates
 }
 
 // Per-function outcome statuses (exported for the command summary).
@@ -104,6 +115,15 @@ type serviceCtx struct {
 	dbFacts      *layerFacts
 	ctrlFacts    *layerFacts
 	handlerFacts *layerFacts
+	tpl          templates.Provider
+}
+
+// provider resolves the service's template set (nil-safe embedded default).
+func (sc *serviceCtx) provider() templates.Provider {
+	if sc.tpl == nil {
+		return templates.NewEmbeddedProvider()
+	}
+	return sc.tpl
 }
 
 // Generate runs the per-function pipeline over the scanned target: build
@@ -116,7 +136,7 @@ func Generate(ctx context.Context, tgt *testscan.Target, rep *testscan.Report, o
 	}
 	res := &Result{}
 
-	svcs := buildServiceCtxs(rep)
+	svcs := buildServiceCtxs(rep, opts.provider())
 	if len(svcs) == 0 {
 		return res, nil
 	}
@@ -429,7 +449,7 @@ func outPathFor(baseDir string, sc *serviceCtx, dir, outFile string) (string, er
 // composeFile renders the full test file: scaffold + suite + method blocks,
 // parse-gated and gofmt-canonicalized.
 func composeFile(sc *serviceCtx, layer testscan.Layer, outFile, suite string, methods []string) (string, error) {
-	prov := templates.NewEmbeddedProvider()
+	prov := sc.provider()
 	mockCmd, covCmd := headerCmds(sc, layer)
 	var out string
 	var err error
@@ -501,7 +521,7 @@ func composeFile(sc *serviceCtx, layer testscan.Layer, outFile, suite string, me
 }
 
 // buildServiceCtxs builds per-service extraction contexts from the scan.
-func buildServiceCtxs(rep *testscan.Report) []*serviceCtx {
+func buildServiceCtxs(rep *testscan.Report, prov templates.Provider) []*serviceCtx {
 	seen := map[string]bool{}
 	var svcs []*serviceCtx
 	for _, sr := range rep.Services {
@@ -509,7 +529,7 @@ func buildServiceCtxs(rep *testscan.Report) []*serviceCtx {
 			continue
 		}
 		seen[sr.Dir] = true
-		sc := &serviceCtx{name: sr.Name, dir: sr.Dir, moduleRoot: moduleRootOf(sr.Dir)}
+		sc := &serviceCtx{name: sr.Name, dir: sr.Dir, moduleRoot: moduleRootOf(sr.Dir), tpl: prov}
 		sc.module = moduleName(sc.moduleRoot, sr.Dir)
 		sc.models = extractModels(sr.Dir)
 		sc.ctrlIface = extractCtrlIface(sr.Dir)

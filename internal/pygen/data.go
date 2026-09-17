@@ -59,8 +59,8 @@ type serviceShellData struct {
 	RepoBlocks, Body                 string
 }
 
-func renderHeader(p *pyplan.Plan, sourcePath string) string {
-	return render(templates.PyBatchHeader, headerData{
+func renderHeader(prov templates.Provider, p *pyplan.Plan, sourcePath string) string {
+	return render(prov, templates.PyBatchHeader, headerData{
 		Module: p.Module, SourcePath: sourcePath, ServiceName: p.ServiceName, Entry: p.Flow.Entry,
 		Shape: p.Shape, DMLLoop: p.DMLLoop,
 		RouterClass: p.Wrapper.RouterClass, WrapperImport: p.Wrapper.Import, LoggerName: p.LoggerName,
@@ -69,7 +69,7 @@ func renderHeader(p *pyplan.Plan, sourcePath string) string {
 }
 
 // renderRepoMethod renders one repository method by its kind.
-func renderRepoMethod(p *pyplan.Plan, m pyplan.RepoMethod) string {
+func renderRepoMethod(prov templates.Provider, p *pyplan.Plan, m pyplan.RepoMethod) string {
 	d := repoData{
 		Name: m.Name, Doc: repoDoc(m),
 		ReadMode: p.Wrapper.ReadMode, WriteMode: p.Wrapper.WriteMode,
@@ -83,13 +83,13 @@ func renderRepoMethod(p *pyplan.Plan, m pyplan.RepoMethod) string {
 	}
 	switch {
 	case m.Kind == "rebuild":
-		return render(templates.PyBatchRepoRebuild, d)
+		return render(prov, templates.PyBatchRepoRebuild, d)
 	case m.QueryKind == "SELECT_MULTI":
-		return render(templates.PyBatchRepoFetchIt, d)
+		return render(prov, templates.PyBatchRepoFetchIt, d)
 	case m.QueryKind == "SELECT_SINGLE":
-		return render(templates.PyBatchRepoFetchOne, d)
+		return render(prov, templates.PyBatchRepoFetchOne, d)
 	default:
-		return render(templates.PyBatchRepoDML, d)
+		return render(prov, templates.PyBatchRepoDML, d)
 	}
 }
 

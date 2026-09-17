@@ -7,6 +7,7 @@ import (
 	"tux-to-any/internal/budget"
 	"tux-to-any/internal/config"
 	"tux-to-any/internal/telemetry"
+	"tux-to-any/internal/templates"
 )
 
 // runWiring is the run-wide collaborator bundle (A5.2): one budget and one
@@ -60,4 +61,30 @@ func auditRecorder(ctx context.Context) *audit.Recorder {
 		return nil
 	}
 	return rec
+}
+
+// templateProvider resolves the run's template set (flag > config > embedded):
+// a non-empty dir activates the file overlay, where <id>.tmpl files override
+// the embedded templates and missing IDs keep the embedded defaults. The
+// routing decision is logged once per run so staged output stays auditable.
+func templateProvider(ctx context.Context, cfg *config.Config, flagDir string) (templates.Provider, error) {
+	dir := flagDir
+	if dir == "" {
+		dir = cfg.Templates.Dir
+	}
+	prov, err := templates.Resolve(dir)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := prov.(*templates.FileProvider); ok {
+		overridden := 0
+		for _, info := range templates.List(prov) {
+			if info.Overridden {
+				overridden++
+			}
+		}
+		telemetry.Log(ctx).Info("templates: override dir active",
+			"dir", dir, "overridden", overridden, "known", len(templates.AllIDs))
+	}
+	return prov, nil
 }

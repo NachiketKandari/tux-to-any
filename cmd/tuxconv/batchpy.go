@@ -37,6 +37,7 @@ func runBatchpy(ctx context.Context, args []string) error {
 	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: skip the service-body LLM seam (overrides run.llm)")
 	shape := fs.String("shape", "", "auto|repo — shape rubric override (default: batchpy.shape from config)")
 	dmlLoop := fs.String("dml-loop", "", "batch|rowbyrow — cursor-DML semantics, simple shape only (repo shape renders row-by-row; default: batchpy.dmlLoop from config)")
+	templatesDir := fs.String("templates", "", "Directory of <template_id>.tmpl overrides (flag > templates.dir config; missing ids keep the embedded set)")
 
 	flagArgs, positional := reorderArgs(args)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -48,6 +49,11 @@ func runBatchpy(ctx context.Context, args []string) error {
 		return err
 	}
 	logConfigRouting(ctx, cfg, cfgSource)
+
+	tpl, err := templateProvider(ctx, cfg, *templatesDir)
+	if err != nil {
+		return err
+	}
 
 	target, err := resolveBatchInput(positional, cfg)
 	if err != nil {
@@ -128,7 +134,7 @@ func runBatchpy(ctx context.Context, args []string) error {
 		telemetry.Log(ctx).Info("batch file started", "source", path)
 		res, plan, name, err := convertBatchFile(ctx, path, b, irOptions(cfg, false), pygen.Options{
 			NoLLM: !llmEnabled || client == nil, Client: client, Budget: bg, MaxRetries: cfg.ValidateCfg.MaxRetries,
-			Audit: rec,
+			Audit: rec, Templates: tpl,
 		})
 		var wp *wrongPipelineError
 		if errors.As(err, &wp) {

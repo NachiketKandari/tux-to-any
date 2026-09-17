@@ -15,11 +15,12 @@ var commandFlags = map[string][]string{
 	// value flags only (bool flags omitted — they never consume next arg)
 	"extract":        {"out", "config"},
 	"plan":           {"mapping", "config", "ledger"},
-	"convertgo":      {"mapping", "config", "base"},
+	"convertgo":      {"mapping", "config", "base", "templates"},
 	"discover":       {"out", "config", "target"},
-	"convertbatchpy": {"out", "config", "shape", "dml-loop"},
-	"convertcs":      {"out", "mapping", "config"},
+	"convertbatchpy": {"out", "config", "shape", "dml-loop", "templates"},
+	"convertcs":      {"out", "mapping", "config", "templates"},
 	"analyze":        {"csv", "weights", "pattern"},
-	"gentest":        {"layers", "base", "config"},
+	"gentest":        {"layers", "base", "config", "templates"},
 	"ainames":        {"mapping", "config"},
+	"templates":      {"out", "config", "dir"},
 }

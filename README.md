@@ -127,6 +127,7 @@ go run ./cmd/tuxconv convertbatchpy <file|dir> [-no-llm] [-shape auto|repo] [-dm
 go run ./cmd/tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir] [-config path]
 go run ./cmd/tuxconv analyze <file|dir> [-csv out.csv] [-weights csv] [-pattern mf_]
 go run ./cmd/tuxconv gentest <converted tree> [-check-only] [-no-llm] [-layers db,controller,handler] [-base dir]
+go run ./cmd/tuxconv templates list|dump|verify [-dir <override dir>] [-out <export dir>]
 ```
 
 Verified output: `tuxconv convertgo testdata/fixtures/stripped -mapping
@@ -183,6 +184,45 @@ The `run.*` budget engine (`internal/budget`, `internal/llm/seam.go`):
 - **Inert/reserved** — `run.maxContextTokens` is validated (≥
   `maxPromptTokens`) but never read; `retrieval`, `elision.mode`, and
   `paths.target` are reserved.
+
+## User template overrides (templates.dir / -templates)
+
+The embedded template set is the default, not the ceiling. Point
+`templates.dir` (or `-templates <dir>` on `convertgo`, `convertbatchpy`,
+`convertcs`, and `gentest`) at a directory of `<template_id>.tmpl` files:
+each file replaces that ID's embedded template, and **every ID without a
+file keeps the embedded default** — a partial override is the normal case.
+Precedence is the usual flag > config > embedded, the routing decision is
+logged (`templates: override dir active dir=… overridden=N`), and the whole
+set is versioned (`templates.Version`, currently `v1`).
+
+The workflow:
+
+```
+go run ./cmd/tuxconv templates dump -out templates   # export the embedded set (never clobbers)
+# edit templates/handler_method.tmpl, templates/model_file.tmpl, ...
+go run ./cmd/tuxconv templates verify -dir templates # unknown ids / empty files / parse errors
+go run ./cmd/tuxconv convertgo <src.pc> -templates templates -no-llm
+```
+
+`templates list` shows every ID with its origin (override file vs embedded)
+and size — the definitive answer to "what will this run render from?".
+
+Fail-loud rules: a missing override dir, a `*.tmpl` file whose stem is not a
+known ID, or an unparseable template fails at wire-up, before anything is
+generated. Templates are still typed data contracts — a template that
+references a field the emitter doesn't pass fails at render time with an
+error naming the template and file, and every output still passes the same
+gates it always did (gofmt/goast for Go, the SQL-fidelity checks, the CS
+structural gates, the seam body gates). Overrides change *shape and
+boilerplate*, never the pipeline's facts: the LLM still fills only its
+one template-shaped gap, and the ledger/audit/resume behavior is unchanged.
+
+Resume caveat: like a mapping rename, a template edit applies to units as
+they (re)generate — deterministic units already marked appended in the
+ledger are not rewritten. For a clean tree after editing templates, clear
+the staged dir and the service ledger and re-run (the same from-scratch
+recipe the mapping-rename note gives).
 
 ## The .NET Core target (convertcs)
 
