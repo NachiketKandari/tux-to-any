@@ -28,8 +28,8 @@ import (
 // shape: several content arms, one shared tail return).
 type ReturnOutcome struct {
 	ReturnLine   int      `json:"return_line"`
-	Kind        string   `json:"kind,omitempty"` // "return" (default) or "forward"
-	ForwardTo   string   `json:"forward_to,omitempty"`
+	Kind         string   `json:"kind,omitempty"` // "return" (default) or "forward"
+	ForwardTo    string   `json:"forward_to,omitempty"`
 	Buffer       string   `json:"buffer,omitempty"`
 	InsideBranch bool     `json:"inside_branch"`
 	GuardChain   []string `json:"guard_chain,omitempty"`

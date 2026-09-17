@@ -258,7 +258,78 @@ func TestDiscoverIgnoresFailOnlyArm(t *testing.T) {
 	}
 }
 
-// tpforward ends the service by delegation: an outcome of kind forward
+// Convergent promotion: content arms with preamble-only reads drain into
+// a shared tail. None owns a terminal and none carries in-arm Gets, so
+// every pre-existing rubric leg misses them — the tail-feeder pass must
+// promote exactly the two business arms (the trap and DEBUG arms stay
+// out), each marked FeedsTail with a loadable key.
+const convergentPromoteSrc = `void SVC_PROMOTE(TPSVCINFO *rqst) {
+	char c_flag;
+	Fget32(ptr_fml_Ibuffer, FML_FLAG, 0, (char *)&c_flag, 0);
+	if (c_flag == 'H') {
+		Fadd32(ptr_fml_Obuffer, FML_A, (char *)&a, 0);
+	} else if (c_flag == 'F') {
+		Fadd32(ptr_fml_Obuffer, FML_B, (char *)&b, 0);
+	} else {
+		Fadd32(ptr_fml_Ibuffer, FML_ERR_MSG, c_errmsg, 0);
+		tpreturn(TPFAIL, 0L, (char *)ptr_fml_Ibuffer, 0L, 0);
+	}
+	if (DEBUG_MSG_LVL_3) {
+		Fadd32(ptr_fml_Obuffer, FML_DBG, (char *)&d, 0);
+	}
+	tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+
+func TestDiscoverConvergentTailFeeders(t *testing.T) {
+	facts, err := scanner.ScanBytes([]byte(convergentPromoteSrc), "promote.pc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := Build([]byte(convergentPromoteSrc), facts, "SVC_PROMOTE", nil)
+	conds := condsFromRoots(tree)
+	if len(conds) != 3 {
+		t.Fatalf("inventory = %d, want 3 (H/F/trap; DEBUG excluded)", len(conds))
+	}
+	sites := SuccessReturnSites(facts, "SVC_PROMOTE")
+	if len(sites) != 1 {
+		t.Fatalf("success sites = %+v, want the single tail", sites)
+	}
+	tail := sites[0].Line
+	got := Discover(tree, conds)
+	if len(got) != 2 {
+		t.Fatalf("candidates = %+v, want exactly the two business arms", got)
+	}
+	for _, c := range got {
+		if c.FeedsTail != tail {
+			t.Errorf("%s: FeedsTail = %d, want tail %d", c.Key, c.FeedsTail, tail)
+		}
+		if len(c.Gets) != 0 {
+			t.Errorf("%s: gets = %v, want empty (preamble reads)", c.Key, c.Gets)
+		}
+		if c.TerminalLine != 0 {
+			t.Errorf("%s: TerminalLine set without an owned terminal", c.Key)
+		}
+		rc, err := ConditionFor(tree, conds, c.Key)
+		if err != nil {
+			t.Errorf("ConditionFor(%s): %v", c.Key, err)
+			continue
+		}
+		if rc.StartLine != c.StartLine || rc.EndLine != c.EndLine {
+			t.Errorf("%s: round-trip span %d-%d, want %d-%d",
+				c.Key, rc.StartLine, rc.EndLine, c.StartLine, c.EndLine)
+		}
+	}
+	if got[0].Key != "c1" || got[1].Key != "c2" {
+		t.Errorf("keys = %s,%s, want c1,c2", got[0].Key, got[1].Key)
+	}
+	if len(got[0].Adds) != 1 || got[0].Adds[0] != "FML_A" {
+		t.Errorf("c1 adds = %v, want [FML_A]", got[0].Adds)
+	}
+	if len(got[1].Adds) != 1 || got[1].Adds[0] != "FML_B" {
+		t.Errorf("c2 adds = %v, want [FML_B]", got[1].Adds)
+	}
+}
 // carrying the target, qualifying its arm when it shapes a reply.
 const forwardSrc = `void SVC_FWD(TPSVCINFO *rqst) {
 	char c_flag;

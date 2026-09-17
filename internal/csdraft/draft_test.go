@@ -90,10 +90,12 @@ func TestDraftRoundTrip(t *testing.T) {
 }
 
 // TestComponentOf pins the deterministic class-stem derivation.
-// TestDraftGuardOnlySuggestions pins the guard-only draft: no census-
-// qualifying candidate (the lone arm's FML reads sit in the preamble), no
-// dispatch axis — the draft still suggests the lone condition, commented,
-// so the file is never silently unmappable.
+// TestDraftGuardOnlySuggestions pins the lone-arm draft: the arm's FML
+// reads sit in the preamble (none in-arm), so the old reads+writes rubric
+// passed nothing and the draft could only suggest the lone condition,
+// commented. Return-anchored promotion (writes + shared tail terminal)
+// now emits it as a real emit-only endpoint — the draft maps the file
+// directly, and the mapping loads and plans.
 func TestDraftGuardOnlySuggestions(t *testing.T) {
 	src := `#include <atmi.h>
 
@@ -125,12 +127,34 @@ void SVC_ONE_ARM(TPSVCINFO *rqst)
 
 	draft := Render(irf, tree, []byte(src), Options{})
 	for _, want := range []string{
-		"# no API candidates found (1 condition(s) inspected, no dispatch axis)",
-		"# - condition: 1              # lone arm, lines 6-10",
+		"- condition: 1",
+		"writes: FML_FORM_NO",
+		"name: \"OneArmAction1\"",
 	} {
 		if !strings.Contains(draft, want) {
 			t.Errorf("draft missing %q:\n%s", want, draft)
 		}
+	}
+	if strings.Contains(draft, "no API candidates found") {
+		t.Errorf("lone arm must promote to a real endpoint, not the commented suggestion:\n%s", draft)
+	}
+
+	// The promoted endpoint loads and plans — the draft is convertible.
+	dir2 := t.TempDir()
+	draftPath := filepath.Join(dir2, "SVC_ONE_ARM.cs.mapping.yaml")
+	if err := os.WriteFile(draftPath, []byte(draft), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := csplan.LoadMapping(draftPath)
+	if err != nil {
+		t.Fatalf("draft does not load: %v", err)
+	}
+	plan, err := csplan.Build(csplan.Options{Main: irf, Source: src, Mapping: mapping})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Endpoints) != 1 {
+		t.Fatalf("plan endpoints = %v, want the promoted lone arm", plan.Endpoints)
 	}
 }
 

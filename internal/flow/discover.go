@@ -34,6 +34,14 @@ type Candidate struct {
 	// terminal is what marks them convertible (return-anchored II).
 	TerminalLine int    `json:"terminal_line,omitempty"`
 	ForwardTo    string `json:"forward_to,omitempty"`
+	// FeedsTail marks a tail-feeder: a business arm with response shape
+	// that drains into a shared success tail (a tpreturn(TPSUCCESS) /
+	// tpforward outside every branch) instead of owning a terminal.
+	// The value is the tail's line. Tail-feeders are convergent-split
+	// outcomes: one candidate per arm, each sliced with its own span
+	// plus the shared entry preamble (gen unions consumed preamble
+	// reads into the request).
+	FeedsTail int `json:"feeds_tail,omitempty"`
 }
 
 // Discover walks the tree and returns the API candidates sorted by line:
@@ -75,6 +83,7 @@ func Discover(tree *Tree, conditions []ir.Condition) []Candidate {
 		return true, line, fwd
 	}
 	var out []Candidate
+	emitted := map[int]bool{}
 	// walkChildren examines branch children under a qualifying parent key.
 	// The qualifier counter k is shared across the parent's whole subtree
 	// walk — non-branch children and census-failing branches recurse inside
@@ -160,7 +169,54 @@ func Discover(tree *Tree, conditions []ir.Condition) []Candidate {
 			TerminalLine:    termLine,
 			ForwardTo:       fwd,
 		})
+		emitted[idx] = true
 		walkChildren(root, "c"+strconv.Itoa(idx), idx, root)
+	}
+	// Tail-feeder promotion (convergent split): a shared success tail —
+	// a terminal outside every branch — multiplexes the business arms
+	// that drain into it. Each such arm becomes a c<n> candidate marked
+	// FeedsTail, so the fallback draft covers convergent files too.
+	// v1 scope: top-level inventory-mapped arms only; arms owning their
+	// own terminal are already candidates above and never re-emitted.
+	for _, tail := range convergentTails(tree, facts, fn) {
+		for _, root := range tree.Root {
+			if root.Kind != KindBranch || root.EndLine >= tail {
+				continue
+			}
+			idx := conditionIndexOf(root, conditions)
+			if idx == 0 || emitted[idx] {
+				continue
+			}
+			if IsNoiseCond(root.Cond) {
+				continue
+			}
+			if termLine, _ := successTerminal(root, facts, fn); termLine != 0 {
+				continue
+			}
+			// An arm ending in its own failure exit (the unconditional
+			// trap `Fadd(err); tpreturn(TPFAIL)`) never reaches the tail.
+			if endsInExit(root, facts, fn) {
+				continue
+			}
+			census := fmlCensus(root)
+			if len(census.adds) == 0 && len(root.QueryIDs) == 0 {
+				continue
+			}
+			out = append(out, Candidate{
+				Key:             "c" + strconv.Itoa(idx),
+				ParentCondition: idx,
+				Cond:            root.Cond,
+				StartLine:       root.Line,
+				EndLine:         root.EndLine,
+				Gets:            census.gets,
+				Adds:            census.adds,
+				ErrorAdds:       census.errorAdds,
+				Codes:           fmlCodes(root),
+				QueryIDs:        root.QueryIDs,
+				FeedsTail:       tail,
+			})
+			emitted[idx] = true
+		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].StartLine < out[j].StartLine })
 	return out
@@ -411,16 +467,39 @@ func kthQualifyingChild(tree *Tree, n *Node, k int) *Node {
 	return walk(n)
 }
 
-// successTerminal finds the success terminal the branch itself owns: a
-// tpreturn(TPSUCCESS,...) or tpforward(...) line inside the node's span
-// but outside every descendant branch's span (a nested terminal belongs
-// to the nested arm, never the parent). Returns the line and, for
-// tpforward, the target service ("" for tpreturn outcomes). Zero line =
-// none owned. TPFAIL legs are error exits, never outcomes.
-func successTerminal(n *Node, facts *scanner.SourceFacts, fn string) (line int, forwardTo string) {
-	if n == nil || facts == nil {
-		return 0, ""
+// convergentTails lists success-terminal lines outside every branch body
+// (function-tail tpreturn(TPSUCCESS)/tpforward sites): shared tails that
+// multiplex the arms draining into them. Sorted ascending.
+func convergentTails(tree *Tree, facts *scanner.SourceFacts, fn string) []int {
+	if tree == nil || facts == nil {
+		return nil
 	}
+	var tails []int
+	for i := range facts.Calls {
+		c := &facts.Calls[i]
+		if c.Func != fn {
+			continue
+		}
+		var isTail bool
+		switch {
+		case c.Name == "tpreturn" && strings.Contains(c.Args, "TPSUCCESS"):
+			isTail = true
+		case c.Name == "tpforward":
+			isTail = true
+		}
+		if !isTail {
+			continue
+		}
+		if len(branchPath(tree, c.Line)) == 0 {
+			tails = append(tails, c.Line)
+		}
+	}
+	sort.Ints(tails)
+	return tails
+}
+
+// descendantSpans lists every branch span strictly below n.
+func descendantSpans(n *Node) [][2]int {
 	var spans [][2]int
 	var collect func(x *Node)
 	collect = func(x *Node) {
@@ -432,20 +511,101 @@ func successTerminal(n *Node, facts *scanner.SourceFacts, fn string) (line int, 
 		}
 	}
 	collect(n)
-	owned := func(l int) bool {
-		if l < n.Line || l > n.EndLine {
-			return false
+	return spans
+}
+
+// insideSpans reports whether line sits in any of the spans.
+func insideSpans(spans [][2]int, line int) bool {
+	for _, s := range spans {
+		if line >= s[0] && line <= s[1] {
+			return true
 		}
-		for _, s := range spans {
-			if l >= s[0] && l <= s[1] {
-				return false
-			}
-		}
-		return true
 	}
+	return false
+}
+
+// ownedBy reports whether line is n's own code: inside n's span but
+// outside every descendant branch's span (nested code belongs to the
+// nested arm, never the parent).
+func ownedBy(n *Node, spans [][2]int, line int) bool {
+	return line >= n.Line && line <= n.EndLine && !insideSpans(spans, line)
+}
+
+// endsInExit reports whether the arm never falls through: it owns a
+// failure exit (tpreturn(TPFAIL) or a bare C return) with no owned code
+// after it — e.g. the unconditional-trap idiom `Fadd(err); tpreturn(TPFAIL)`
+// as the arm body. Conditional exits nested in sub-branches don't count:
+// the arm still feeds whatever follows on the pass-through path.
+func endsInExit(n *Node, facts *scanner.SourceFacts, fn string) bool {
+	if n == nil || facts == nil {
+		return false
+	}
+	spans := descendantSpans(n)
+	var exits []int
 	for i := range facts.Calls {
 		c := &facts.Calls[i]
-		if c.Func != fn || !owned(c.Line) {
+		if c.Func != fn || !ownedBy(n, spans, c.Line) {
+			continue
+		}
+		if c.Name == "tpreturn" && strings.Contains(c.Args, "TPFAIL") {
+			exits = append(exits, c.Line)
+		}
+	}
+	for i := range facts.Returns {
+		r := &facts.Returns[i]
+		if r.Func != fn || !ownedBy(n, spans, r.Line) {
+			continue
+		}
+		exits = append(exits, r.Line)
+	}
+	for _, e := range exits {
+		followed := false
+		for i := range facts.Calls {
+			c := &facts.Calls[i]
+			if c.Func == fn && c.Line > e && ownedBy(n, spans, c.Line) {
+				followed = true
+				break
+			}
+		}
+		if !followed {
+			for i := range facts.Returns {
+				r := &facts.Returns[i]
+				if r.Func == fn && r.Line > e && ownedBy(n, spans, r.Line) {
+					followed = true
+					break
+				}
+			}
+		}
+		if !followed {
+			for i := range facts.AllSQL {
+				s := &facts.AllSQL[i]
+				if s.Func == fn && s.StartLine > e && ownedBy(n, spans, s.StartLine) {
+					followed = true
+					break
+				}
+			}
+		}
+		if !followed {
+			return true
+		}
+	}
+	return false
+}
+
+// successTerminal finds the success terminal the branch itself owns: a
+// tpreturn(TPSUCCESS,...) or tpforward(...) line of the node's own code
+// (a nested terminal belongs to the nested arm, never the parent).
+// Returns the line and, for tpforward, the target service ("" for tpreturn
+// outcomes). Zero line = none owned. TPFAIL legs are error exits, never
+// outcomes.
+func successTerminal(n *Node, facts *scanner.SourceFacts, fn string) (line int, forwardTo string) {
+	if n == nil || facts == nil {
+		return 0, ""
+	}
+	spans := descendantSpans(n)
+	for i := range facts.Calls {
+		c := &facts.Calls[i]
+		if c.Func != fn || !ownedBy(n, spans, c.Line) {
 			continue
 		}
 		switch {

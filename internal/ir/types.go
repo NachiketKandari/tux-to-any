@@ -164,7 +164,7 @@ type TPCall struct {
 	// tpcall carries service+send+recv buffers; tpacall carries
 	// service+send only and the reply arrives via a later tpgetrply,
 	// so RecvBuffer/RecvFML stay empty by construction — never flags.
-	Async    bool   `json:"async,omitempty"`
+	Async     bool   `json:"async,omitempty"`
 	Function  string `json:"function,omitempty"`
 	Ambiguous bool   `json:"ambiguous,omitempty"`
 }
