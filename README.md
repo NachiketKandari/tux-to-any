@@ -53,7 +53,8 @@ production monolith from the local corpus parses with **zero** error nodes
 1. **Every `EXEC SQL` spelling** — keyword matching runs on word boundaries,
    so any whitespace variant between `EXEC` and `SQL` is captured.
 2. **AST-resolved definitions** — a locally defined function is never
-   misclassified as external, so no stub is generated for a local symbol.
+   misclassified as external, so no stub is generated for a local symbol
+   (a called same-file `fn_*` converts as a helper instead).
 3. **Real calls only** — `int fn_x(...);` declaration lines are never
    recorded as call sites; `call_expression` nodes are actual calls only.
 4. **Comment-debris self-healing** — `fn_*/chk_*` inside a banner terminates
@@ -326,6 +327,24 @@ receiver/name, required store calls, no raw SQL); `-no-llm` leaves them
 `skipped` in the ledger for an LLM-enabled resume. The output subtree
 roots at the file stem (`foo.pc` → `foo/`).
 
+Same-file helpers: a `fn_*` function the **service file itself** defines
+and its own code calls is a helper too — never "session plumbing, drop the
+call". The plan creates one `fn_helper` unit per such function
+(`controller/fns.go`; the fn-lib struct scaffold is skipped because a
+service run's controller struct lives in `controller/interface.go`), its
+queries become db units instead of unmapped-query skips, and every call
+site is rewritten to `s.<GoName>(...)` with the middleware-owned args
+(service name, session id, error buffers) dropped. Both sides are given
+the same signature: a service helper's parameter list is derived
+deterministically from the legacy declaration (`char*`/`varchar`→`string`,
+`long`→`int64`, `double*`→`*float64`; session params dropped) and
+prescribed verbatim to the helper seam and its callers, so the two
+independent generations agree; fn-library helpers keep model-chosen naming
+(no in-tree callers). The helper call is part of the REQUIRED-CALLS
+contract, and helper bodies run the same view passes (legacy seams, FML
+probes, store-call capture, nested helper calls) and gates as controller
+bodies.
+
 Stub synthesis: unresolved external fns (`plan.Stubs`) render into
 `controller/fnstubs.go` as panicking placeholders by default
 (stub-and-carry-on). In LLM mode each stub first gets **one** best-effort
@@ -338,6 +357,15 @@ rejected keeps the panicking stub, never a guessed body. The run summary
 marks each stub `(synthesized)` or `(stubbed: <reason>)`, and synthesis is
 first-run-only — a resume whose `fnstubs.go` already landed makes no stub
 calls. `-no-llm` keeps every stub panicking with a bare summary entry.
+
+Rejected output is never lost: when a controller or helper seam exhausts
+its attempts, the last gated payload is kept commented inside a panicking
+placeholder method (header `// tuxgo:REJECTED — <Name>`, wrapped in
+`tuxgo:REJECTED-BEGIN/END <Name>` markers) — the run summary notes it, the
+ledger stays `failed`, and a resume retries. A later accepted body
+replaces the placeholder in place (markers included), so the staged tree
+never carries duplicate declarations; the resume guard counts only real
+(uncommented) method declarations.
 
 Mapping renames across runs: ledger unit IDs are positional, so renaming an
 endpoint/method reuses its ID for a different unit. The ledger detects the
