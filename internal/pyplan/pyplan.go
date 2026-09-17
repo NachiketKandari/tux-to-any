@@ -253,52 +253,28 @@ func firstTable(q *ir.Query) string {
 // emitSQL renders the IR's canonical SQL as executable oracledb text (the
 // documented BP-3 rubric transforms, tolerance-matched in sqlchk's
 // normalizer): Pro*C host-variable INTO lists are stripped from SELECTs and
-// `: name` collapses to `:name`.
+// `: name` collapses to `:name`. It delegates to sqltext.CanonicalSQL
+// (uniform-ir plan §3.2: one canonicalizer for every backend);
+// CanonicalSQL additionally trims one trailing semicolon, which oracledb
+// forbids in executable text.
 func emitSQL(q *ir.Query) string {
-	sql := q.SQL
-	switch q.Type {
-	case ir.QuerySelectSingle, ir.QuerySelectMulti:
-		sql = sqltext.StripInto(sql)
-	}
-	return sqltext.CollapseBinds(sql)
+	return sqltext.CanonicalSQL(q.SQL)
 }
 
 // bindsOf returns the bind names of the EXECUTABLE SQL (emitSQL: the INTO
 // host-target list is stripped from SELECTs) — the exact names a caller
 // must supply for oracledb's named binds. Binds derived from the raw
 // source SQL would count INTO targets as binds and mismatch the const at
-// runtime (ORA-01008 class).
-func bindsOf(q *ir.Query) []string { return bindOrder(emitSQL(q)) }
+// runtime (ORA-01008 class). It delegates to sqltext.ExecutableBinds
+// (uniform-ir plan §3.2).
+func bindsOf(q *ir.Query) []string { return sqltext.ExecutableBinds(emitSQL(q)) }
 
 // bindOrder returns the unique bind names in textual order of appearance
 // (`: name` with whitespace counts — Pro*C tolerates the space).
+// It delegates to sqltext.ExecutableBinds; kept as a named wrapper while
+// callers migrate (uniform-ir plan §3.2).
 func bindOrder(sql string) []string {
-	var out []string
-	seen := map[string]bool{}
-	for i := 0; i < len(sql); i++ {
-		if sql[i] != ':' {
-			continue
-		}
-		j := i + 1
-		for j < len(sql) && (sql[j] == ' ' || sql[j] == '\t') {
-			j++
-		}
-		nameStart := j
-		for j < len(sql) && isIdent(sql[j]) {
-			j++
-		}
-		if j == nameStart {
-			continue // positional :1/:2 binds keep no name
-		}
-		name := sql[nameStart:j]
-		key := strings.ToLower(name)
-		if !seen[key] {
-			seen[key] = true
-			out = append(out, name)
-		}
-		i = j - 1
-	}
-	return out
+	return sqltext.ExecutableBinds(sql)
 }
 
 func isIdent(b byte) bool {

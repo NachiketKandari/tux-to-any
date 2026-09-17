@@ -1,8 +1,10 @@
-// Package sqltext carries the Pro*C SQL text transforms shared by the Go
-// and Python emitters: the SELECT host-variable INTO list is stripped (the
-// IR's RowShape carries the targets; the emitted query must be executable
-// SQL) and `: name` bind spellings collapse to `:name` (Pro*C tolerates the
-// space, oracledb named binds do not).
+// Package sqltext carries the Pro*C SQL text transforms shared by every
+// emitter (Go, Python, C#): the SELECT host-variable INTO list is stripped
+// (the IR's RowShape carries the targets; the emitted query must be
+// executable SQL) and `: name` bind spellings collapse to `:name` (Pro*C
+// tolerates the space, oracledb named binds do not). CanonicalSQL is the one
+// home for the executable-SQL derivation — backends must call it instead of
+// reimplementing INTO-stripping locally.
 package sqltext
 
 import "strings"
@@ -73,6 +75,62 @@ func CollapseBinds(sql string) string {
 		b.WriteByte(c)
 	}
 	return b.String()
+}
+
+// CanonicalSQL renders executable SQL for code generation: SELECT
+// host-variable INTO lists are stripped, `: name` collapses to `:name`,
+// surrounding whitespace is trimmed and one trailing statement semicolon is
+// removed (the host language syntax carries its own terminator). It is
+// idempotent and safe for every statement kind: non-SELECT INTO clauses
+// (INSERT INTO t) are untouched by StripInto, so DML passes through except
+// for bind collapsing and semicolon trimming.
+func CanonicalSQL(sql string) string {
+	s := CollapseBinds(StripInto(sql))
+	s = strings.TrimSpace(s)
+	s = strings.TrimSuffix(s, ";")
+	return strings.TrimSpace(s)
+}
+
+// ExecutableBinds returns the unique bind names of executable SQL in textual
+// order of appearance (`: name` with whitespace counts — Pro*C tolerates the
+// space). Positional `:1`/`:2` binds keep no name. String literals are
+// ignored. It must be called on CanonicalSQL output (or it applies the same
+// derivation internally by scanning the given text literally).
+func ExecutableBinds(sql string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for i := 0; i < len(sql); i++ {
+		if sql[i] != ':' {
+			if sql[i] == '\'' {
+				i = skipLit(sql, i)
+			}
+			continue
+		}
+		j := i + 1
+		for j < len(sql) && (sql[j] == ' ' || sql[j] == '\t') {
+			j++
+		}
+		nameStart := j
+		for j < len(sql) && isIdentByte(sql[j]) {
+			j++
+		}
+		if j == nameStart {
+			continue // positional :1/:2 binds keep no name
+		}
+		name := sql[nameStart:j]
+		// Positional :1/:2 binds keep no name (leading digit = positional).
+		if name[0] >= '0' && name[0] <= '9' {
+			i = j - 1
+			continue
+		}
+		key := strings.ToLower(name)
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, name)
+		}
+		i = j - 1
+	}
+	return out
 }
 
 func wordBoundary(sql string, i, n int) bool {

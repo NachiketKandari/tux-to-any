@@ -24,8 +24,12 @@ const (
 	QueryMerge        QueryType = "MERGE"
 )
 
-// Template identifiers mirrored as plain strings (the template registry is a
-// consumer concern; the IR only carries the id).
+// Template identifiers mirrored as plain strings.
+//
+// Deprecated: the template registry is a consumer concern. New code must use
+// gen.TemplateFor (Go) or the per-language namer instead of reading these
+// from the IR. The constants and QueryType.TemplateID stay only as a
+// compatibility shim until Phase 5 removes them (uniform-ir plan §3.2).
 const (
 	TemplateSelectSingle = "db_method_select_single"
 	TemplateSelectMulti  = "db_method_select_multi"
@@ -36,6 +40,9 @@ const (
 )
 
 // TemplateID maps the query type to its generation template id.
+//
+// Deprecated: use gen.TemplateFor instead. Kept for compatibility while
+// backends migrate to contract + namer (uniform-ir plan §3.2).
 func (q QueryType) TemplateID() string {
 	switch q {
 	case QuerySelectSingle:
@@ -161,7 +168,10 @@ type TPCall struct {
 }
 
 // HostVar is a host variable referenced by queries or FML traffic, typed
-// from the file's own declarations when possible.
+// from the file's own declarations when possible. CType is the canonical
+// source fact (see CanonicalCType); GoHint is a deprecated Go-side
+// projection kept for compatibility — new code must use gen.GoTypeFor or
+// namer.GoNamer instead (uniform-ir plan §3.2).
 type HostVar struct {
 	Name             string `json:"name"`
 	CType            string `json:"c_type,omitempty"`

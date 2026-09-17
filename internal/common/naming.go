@@ -93,3 +93,66 @@ func PyIdent(s string) string {
 	}
 	return b.String()
 }
+
+// Pascal renders a delimited identifier as PascalCase, stripping the corpus
+// Hungarian/type prefixes (sql_, vc_, v_, c_, l_, d_, i_, f_) first
+// (uniform-ir plan §3.3: promoted from csplan.pascalOf so every backend
+// shares one rule). "sql_cst_pan_no" → "CstPanNo".
+func Pascal(s string) string {
+	name := StripHungarianPrefix(strings.TrimPrefix(s, ":"))
+	parts := strings.Split(name, "_")
+	var sb strings.Builder
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		sb.WriteString(strings.ToUpper(part[:1]))
+		sb.WriteString(part[1:])
+	}
+	out := sb.String()
+	if out == "" {
+		return "Param"
+	}
+	return out
+}
+
+// UpperSnake renders a row-shape host var as an upper-snake DTO/column token
+// (uniform-ir plan §3.3: promoted from csplan.propNameOf).
+// "sql_mar_form_no" → "MAR_FORM_NO". Leading digits take the underscore
+// escape ("sql_17dim_val" → "_17DIM_VAL").
+func UpperSnake(s string) string {
+	name := StripHungarianPrefix(strings.TrimPrefix(s, ":"))
+	name = strings.ReplaceAll(name, ".", "_")
+	name = strings.ToUpper(name)
+	if name != "" && name[0] >= '0' && name[0] <= '9' {
+		name = "_" + name
+	}
+	return name
+}
+
+// Snake renders an identifier as lower_snake, sanitizing non-identifier
+// bytes to '_' first ("FML_MF-NAV" → "fml_mf_nav").
+func Snake(s string) string {
+	return strings.ToLower(PyIdent(s))
+}
+
+// StripHungarianPrefix strips the Pro*C type/hungarian prefixes the corpus
+// carries (sql_, vc_, v_, c_, l_, d_, i_, f_) before naming. It loops so
+// stacked prefixes ("sql_vc_x") collapse fully.
+func StripHungarianPrefix(s string) string {
+	for {
+		lower := strings.ToLower(s)
+		stripped := false
+		for _, p := range []string{"sql_", "vc_", "v_", "c_", "l_", "d_", "i_", "f_"} {
+			if strings.HasPrefix(lower, p) {
+				s = s[len(p):]
+				lower = strings.ToLower(s)
+				stripped = true
+				break
+			}
+		}
+		if !stripped {
+			return s
+		}
+	}
+}

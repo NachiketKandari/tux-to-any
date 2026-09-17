@@ -9,6 +9,7 @@ import (
 	"tux-to-any/internal/flow"
 	"tux-to-any/internal/ir"
 	"tux-to-any/internal/plan"
+	"tux-to-any/internal/sqltext"
 )
 
 // Param is one named Oracle parameter of a repo method: the Oracle param
@@ -420,16 +421,13 @@ func buildQueryPlan(q *ir.Query, m *Mapping, hostVars map[string]bool) (QueryPla
 // (the const's C# syntax carries its own terminator). Binds in the
 // surviving predicate text stay verbatim: the OracleParameter names must
 // match them exactly.
+//
+// It delegates to sqltext.CanonicalSQL (uniform-ir plan §3.2: one SQL
+// canonicalizer for every backend). CanonicalSQL additionally collapses
+// `: name` to `:name`; that matches the OracleParameter derivation which
+// already strips whitespace around bind names.
 func cleanSQL(sql string) string {
-	s := strings.TrimSpace(sql)
-	s = strings.TrimSuffix(s, ";")
-	upper := strings.ToUpper(s)
-	if i := strings.Index(upper, " INTO "); i >= 0 {
-		if j := strings.Index(upper[i:], " FROM "); j > 0 {
-			s = strings.TrimSpace(s[:i] + " " + strings.TrimLeft(s[i+j:], " "))
-		}
-	}
-	return s
+	return sqltext.CanonicalSQL(sql)
 }
 
 // prefixRe strips the Pro*C type/hungarian prefixes the corpus carries
