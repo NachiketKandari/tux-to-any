@@ -647,6 +647,21 @@ func controllerBodyChunked(cx chunkCtx) (string, error) {
 	fullErrs = append(fullErrs, reqErrs...)
 	fullErrs = append(fullErrs, txErrs...)
 	if len(fullErrs) > 0 {
+		// Combined-body repair: the fragments passed their own gates but the
+		// stitch still breaks the full contract (an undefined name across
+		// fragment scopes, a dropped required call, a stray else). One
+		// repair seam over the stitched body is the difference between a
+		// converted endpoint and a lost one — re-gated by the same combined
+		// contract, never bypassed.
+		if fixed, ok := repairCombinedBody(cx, contract, fullSigs, combined, fullErrs); ok {
+			telemetry.Log(cx.ctx).Info("combined fragment body repaired",
+				"unit", cx.unit.Name, "errors", len(fullErrs))
+			combined = fixed
+			fullErrs = nil
+			repaired = true // the fixed body owns the final shape
+		}
+	}
+	if len(fullErrs) > 0 {
 		return "", fmt.Errorf("combined fragment body failed validation: %s", strings.Join(fullErrs, "; "))
 	}
 	// Composer pass: one stitch call over the fragment outputs + the
@@ -731,6 +746,58 @@ func composeFragments(cx chunkCtx, contract, fullSigs string, bodies []string) (
 	}
 	telemetry.Log(cx.ctx).Info("composer stitched fragments", "unit", cx.unit.Name, "fragments", len(bodies))
 	return composed, true
+}
+
+// repairCombinedBody runs one repair seam over a stitched body that failed
+// the combined gates: the prompt carries the full contract, the gate errors,
+// and the body, and the result must pass the same combined contract. The
+// prompt is budget-checked first; any rejection keeps the loud failure.
+func repairCombinedBody(cx chunkCtx, contract, fullSigs, body string, errs []string) (string, bool) {
+	opts := cx.opts
+	if opts.Client == nil || cx.ctx.Err() != nil {
+		return "", false
+	}
+	receiver := receiverOf(opts)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Endpoint: %s\n\n", cx.unit.Name)
+	sb.WriteString("The Go controller body below failed validation. Fix exactly the listed problems and emit the corrected full body (code only, no fences, no prose).\n\n")
+	sb.WriteString("Validation errors:\n  - " + strings.Join(errs, "\n  - ") + "\n\n")
+	writePromptFacts(&sb, composerWording, cx.scen, false, cx.view.Source, receiver, fullSigs, contract, nil, nil, nil, nil)
+	sb.WriteString("\nBody to fix:\n" + body + "\n")
+	prompt := sb.String()
+	if opts.Budget.MaxPromptTokens > 0 {
+		if berr := opts.Budget.CheckInput(prompt); berr != nil {
+			telemetry.Log(cx.ctx).Warn("combined repair skipped — prompt over ceiling",
+				"unit", cx.unit.Name, "error", berr.Error())
+			return "", false
+		}
+	}
+	fixed, chatCalls, _, err := llm.RunSeam(cx.ctx, llm.SeamInput{
+		Unit: cx.unit.ID, Kind: string(cx.unit.Kind), Name: cx.unit.Name + "#repair",
+		Template: cx.unit.TemplateID, LLM: cx.unit.LLM, Repair: true,
+		Audit: opts.Audit, Client: opts.Client, Budget: opts.Budget, MaxRetries: 1,
+		Temperature: 0.1,
+		Prompt: func(prev string, attemptNotes []string) (string, []llm.Message) {
+			return prompt, seamMessages(systemPrompt, prompt, prev, fixHintMethodBody, attemptNotes, true)
+		},
+		Extract: func(content string) string {
+			return repairControllerBody(cx.ctx, cx.unit.Name, cx.axisVar, content)
+		},
+		Gate: func(b string) []string {
+			verr := validateBody(opts, b)
+			verr = append(verr, requiredCallErrs(cx.view.Source, b, receiver)...)
+			verr = append(verr, controllerTuxedoErrs(b)...)
+			return append(verr, txGateErrs(b, cx.calls)...)
+		},
+	})
+	opts.Ledger.Get(cx.unit.ID, string(cx.unit.Kind), cx.unit.Name).Attempts += chatCalls
+	cx.res.LLMCalls += chatCalls
+	if err != nil {
+		telemetry.Log(cx.ctx).Warn("combined repair rejected",
+			"unit", cx.unit.Name, "error", err.Error())
+		return "", false
+	}
+	return fixed, true
 }
 
 // txLocalDeclRe spots a var-declared tx handle the repair's closure
