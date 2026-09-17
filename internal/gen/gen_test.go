@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -503,5 +504,41 @@ func TestTPCallStubNamesTargetFile(t *testing.T) {
 	sigs := s.PlaceholderSignatures(c, &plan.Plan{Units: []plan.Unit{u}})
 	if len(sigs) != 1 || !strings.Contains(sigs[0], "target corpus file: /corpus/SVC_TARGET.pc") {
 		t.Errorf("signature = %v, want the target file suffix", sigs)
+	}
+}
+
+// TestRunMocksSkipsMissingSources pins the best-effort contract: targets
+// whose interface file does not exist are skipped silently — no file
+// created, no failure — without invoking any mock backend.
+func TestRunMocksSkipsMissingSources(t *testing.T) {
+	dir := t.TempDir()
+	RunMocks(context.Background(), []MockTarget{
+		{Source: filepath.Join(dir, "db", "interface.go"), Dest: filepath.Join(dir, "db", "mock_store.go"), Name: "NavStore"},
+	})
+	if _, err := os.Stat(filepath.Join(dir, "db", "mock_store.go")); !os.IsNotExist(err) {
+		t.Errorf("mock written for a missing source")
+	}
+}
+
+// TestMockgenCmd pins the one-command contract: the local binary and the
+// pinned go-run fallback carry identical generation flags.
+func TestMockgenCmd(t *testing.T) {
+	tgt := MockTarget{Source: "db/interface.go", Dest: "db/mock_store.go", Name: "NavStore"}
+	bin := mockgenCmd("/usr/local/bin/mockgen", false, tgt)
+	if bin.Path != "/usr/local/bin/mockgen" {
+		t.Errorf("binary path = %q", bin.Path)
+	}
+	fallback := mockgenCmd("", true, tgt)
+	if fallback.Path != "go" && !strings.HasSuffix(fallback.Path, "/go") {
+		t.Errorf("fallback runs %q, want the go toolchain", fallback.Path)
+	}
+	want := []string{"run", "go.uber.org/mock/mockgen@" + mockgenVersion,
+		"-source", "db/interface.go", "-destination", "db/mock_store.go", "-package", "db", "NavStore"}
+	got := fallback.Args[1:]
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("fallback args = %v, want %v", got, want)
+	}
+	if strings.Join(bin.Args[1:], "\x00") != strings.Join(want[2:], "\x00") {
+		t.Errorf("binary args = %v, want %v", bin.Args[1:], want[2:])
 	}
 }

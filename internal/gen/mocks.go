@@ -36,26 +36,51 @@ func MockTargetsFor(serviceDir, service string) []MockTarget {
 	}
 }
 
-// RunMocks regenerates the uber-go/mock doubles for targets when the
-// mockgen binary is available; otherwise it is a WARN + skip — never a
-// run failure (plan-conversion §4.7). Shared by `convert` and `gentest`
-// (PRD-2026-09-09 GT-D7); missing sources are skipped silently.
+// mockgenVersion pins the uber-go/mock release the go-run fallback uses
+// when no mockgen binary is on PATH (verified against v0.6.0). Pinned,
+// never floating: the generated mocks must match the gomock runtime the
+// target module vendors, and a floating tag would move under us.
+const mockgenVersion = "v0.6.0"
+
+// RunMocks regenerates the uber-go/mock doubles for targets. The mockgen
+// binary wins when present (fast, offline); otherwise the run falls back to
+// `go run go.uber.org/mock/mockgen@<pinned>` so generation never depends on
+// machine setup — it is one command either way. Missing sources are skipped
+// silently; any other failure is best-effort (WARN, never fatal). Shared by
+// `convert` and `gentest` (PRD-2026-09-09 GT-D7).
 func RunMocks(ctx context.Context, targets []MockTarget) {
 	log := telemetry.Log(ctx)
-	mockgen, err := exec.LookPath("mockgen")
-	if err != nil {
-		log.Warn("mockgen not found — mocks skipped (uber-go/mock requires docs/dependencies.md onboarding before wiring)")
-		return
-	}
+	var live []MockTarget
 	for _, t := range targets {
 		if _, err := os.Stat(t.Source); err != nil {
 			continue
 		}
-		cmd := exec.Command(mockgen, "-source", t.Source, "-destination", t.Dest, "-package", filepath.Base(filepath.Dir(t.Dest)), t.Name)
-		if out, err := cmd.CombinedOutput(); err != nil {
+		live = append(live, t)
+	}
+	if len(live) == 0 {
+		return
+	}
+	binary, err := exec.LookPath("mockgen")
+	useGoRun := err != nil
+	if useGoRun {
+		log.Info("mockgen not on PATH — generating via go run", "module", "go.uber.org/mock/mockgen@"+mockgenVersion)
+	}
+	for _, t := range live {
+		if out, err := mockgenCmd(binary, useGoRun, t).CombinedOutput(); err != nil {
 			log.Warn("mockgen failed (best-effort)", "interface", t.Name, "output", string(out))
 		} else {
 			log.Info("mocks generated", "interface", t.Name, "path", t.Dest)
 		}
 	}
+}
+
+// mockgenCmd builds the mock regeneration command for one target: the local
+// binary when available, else the pinned go-run fallback with identical
+// generation flags.
+func mockgenCmd(binary string, useGoRun bool, t MockTarget) *exec.Cmd {
+	args := []string{"-source", t.Source, "-destination", t.Dest, "-package", filepath.Base(filepath.Dir(t.Dest)), t.Name}
+	if useGoRun {
+		return exec.Command("go", append([]string{"run", "go.uber.org/mock/mockgen@" + mockgenVersion}, args...)...)
+	}
+	return exec.Command(binary, args...)
 }
