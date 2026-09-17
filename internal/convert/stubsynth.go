@@ -221,7 +221,7 @@ func stubSynthGate(body, goName string) []string {
 }
 
 var (
-	sqlTuxedoRef = regexp.MustCompile(`(?i)\b(SELECT|INSERT|UPDATE|DELETE|MERGE|CURSOR|EXEC\s+SQL|tpcall|Fadd32|Fget32|FNOTPRES|tpalloc|tpfree|tpreturn|userlog|errlog|sqlca)\b`)
+	sqlTuxedoRef  = regexp.MustCompile(`(?i)\b(SELECT|INSERT|UPDATE|DELETE|MERGE|CURSOR|EXEC\s+SQL|tpcall|Fadd32|Fget32|FNOTPRES|tpalloc|tpfree|tpreturn|userlog|errlog|sqlca)\b`)
 	stubIntReturn = regexp.MustCompile(`\)\s*int\s*\{`)
 )
 
@@ -404,7 +404,7 @@ func isStubIdentByte(b byte) bool {
 }
 
 // extractCallArgs pulls the top-level comma-separated arguments of fn's call
-// on one source line (""- and ''-aware, paren/bracket-depth-aware). It
+// on one source line (""- and ”-aware, paren/bracket-depth-aware). It
 // returns nil when the line carries no balanced call — the prompt then shows
 // the raw line alone.
 func extractCallArgs(line, fn string) []string {

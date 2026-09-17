@@ -29,3 +29,4 @@ examples/
 # locally regenerated scenario goldens (derived from the corpus when present)
 testdata/scen/
 .tuxgo.yaml
+.tuxgo.yaml.*
