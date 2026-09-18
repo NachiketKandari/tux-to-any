@@ -32,11 +32,11 @@ func TestLoadExampleYAMLStrict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("example config failed to load: %v", err)
 	}
-	if cfg.Run.Profile != "onprem-vllm" || cfg.Run.MaxPromptTokens != 12000 {
+	if cfg.Run.Profile != "onprem-vllm" || cfg.Run.MaxPromptTokens != 10000 {
 		t.Errorf("run section = %+v", cfg.Run)
 	}
-	if cfg.Run.CharsPerToken != 4 {
-		t.Errorf("run.charsPerToken = %d, want default 4", cfg.Run.CharsPerToken)
+	if cfg.Run.CharsPerToken != 3 {
+		t.Errorf("run.charsPerToken = %d, want 3", cfg.Run.CharsPerToken)
 	}
 	if len(cfg.Models) != 2 {
 		t.Fatalf("expected 2 profiles, got %d", len(cfg.Models))
@@ -45,8 +45,8 @@ func TestLoadExampleYAMLStrict(t *testing.T) {
 		t.Errorf("openrouter profile = %+v", cfg.Models[1])
 	}
 	// Timeout parses through the Duration type.
-	if d := time.Duration(cfg.Models[0].Options.Timeout); d != 120*time.Second {
-		t.Errorf("isec timeout = %v, want 120s", d)
+	if d := time.Duration(cfg.Models[0].Options.Timeout); d != 300*time.Second {
+		t.Errorf("isec timeout = %v, want 300s", d)
 	}
 	// Absent sections keep defaults.
 	if cfg.Concurrency.Workers != 1 || cfg.ValidateCfg.MaxRetries != 3 {

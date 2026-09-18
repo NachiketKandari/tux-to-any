@@ -6,28 +6,28 @@
 # convention, any path works via -config. Unknown keys are load errors, and
 # relative paths resolve against the working directory (not this file).
 # API keys are environment-variable NAMES only — never literals (R6); a
-# literal apiKey is allowed in THIS gitignored file as the local-dev fallback.
-# Absent fields/sections keep the defaults shown here.
+# literal apiKey is allowed in the gitignored working copy as the local-dev
+# fallback. Absent fields/sections keep the defaults shown here.
 
 run:
   profile: onprem-vllm        # which models[] entry generation uses (R1)
   temperature: 0.1            # pinned for deterministic runs (Q1)
   maxContextTokens: 16000     # VALIDATED ONLY (must be >= maxPromptTokens); no engine
                               # reads it — dynamic mode sizes against modelContextTokens
-  maxPromptTokens: 12000      # hard per-call prompt ceiling; a prompt or projected body
+  maxPromptTokens: 10000      # hard per-call prompt ceiling; a prompt or projected body
                               # over the ceilings routes the endpoint to fragments
-  maxOutputTokens: 4000       # static output ceiling; dynamic mode still caps fragment
+  maxOutputTokens: 4096       # static output ceiling; dynamic mode still caps fragment
                               # slices at ¾ of its char equivalent
-  charsPerToken: 4            # token estimator ratio: tokens ≈ chars/ratio. Dense Pro*C
+  charsPerToken: 3            # token estimator ratio: tokens ≈ chars/ratio. Dense Pro*C
                               # measured ~2.8 chars/token at the provider — lower for C
-  tokenPolicy: static         # static | dynamic. dynamic derives each call's output room:
+  tokenPolicy: dynamic        # static | dynamic. dynamic derives each call's output room:
                               #   min(modelContextTokens − estInput − outputReserveTokens,
                               #       modelMaxOutputTokens)
                               # used as max_tokens when the seam sets no override;
                               # under 256 tokens of room fails loudly
-  modelContextTokens: 0       # dynamic only: the served model's real context length
-  modelMaxOutputTokens: 0     # dynamic only: the provider's per-request completion cap
-  outputReserveTokens: 768    # dynamic only: estimator-skew headroom
+  modelContextTokens: 16000   # dynamic only: the served model's real context length
+  modelMaxOutputTokens: 4096  # dynamic only: the provider's per-request completion cap
+  outputReserveTokens: 1024   # dynamic only: estimator-skew headroom
   llm: true                   # THE one AI knob: false (or -no-llm on any command)
                               # = deterministic-only run — controllers render
                               # best-effort bodies (marked for LLM upgrade),
@@ -35,24 +35,26 @@ run:
 
 models:                       # OpenAI-compatible profiles (provider must be
   - name: onprem-vllm         # "openai-compatible"); names must be unique
-    model: <served-model-id>  # the exact served id
+    model: <served-model-id>  # the exact served id, e.g. qwen3-vl-30b-a3b
     provider: openai-compatible
     apiBase: http://vllm.internal:8002/v1
     apiKeyEnv: VLLM_API_KEY   # env var wins; unresolved key degrades to -no-llm
     requestOptions:
       temperature: 0.1        # absent → run.temperature
-      maxTokens: 4000         # absent/0 → run.maxOutputTokens. In static mode keep it
+      maxTokens: 4096         # align with run.modelMaxOutputTokens. In static mode keep it
                               # <= run.maxOutputTokens (output checks use run.*)
       stream: true            # accepted; the seam's Chat call is non-streaming
-      timeout: 120s           # absent → the stock 120s
+      timeout: 300s           # long 16k prompts + long bodies (stock: 120s)
       retries: 3              # transport/5xx retries with backoff
   - name: local-dev-openrouter # local development profile, same schema
     provider: openai-compatible
     model: <openrouter-model-id>   # e.g. qwen/qwen3-30b-a3b
     apiBase: https://openrouter.ai/api/v1
     apiKeyEnv: OPENROUTER_API_KEY
-    # apiKey: <literal>        # local-only alternative to apiKeyEnv: keep it in THIS
-    #                          # gitignored file, never commit it (R6). Resolution:
+    requestOptions:
+      timeout: 300s
+    # apiKey: <literal>        # local-only alternative to apiKeyEnv: keep it in the
+    #                          # gitignored working copy, never commit it (R6). Resolution:
     #                          # env var first, literal fallback.
 
 retrieval:

@@ -1,9 +1,10 @@
 # tux-to-any — tree-sitter scanner + IR for Pro*C/Tuxedo
 
 A Pro*C/Tuxedo (`.pc`) parse stack and conversion pipeline built on a real C
-grammar through **tree-sitter-c**. A `.pc` file is C with embedded `EXEC SQL`
+grammar through tree-sitter-c. A `.pc` file is C with embedded `EXEC SQL`
 statements: the C side goes to the grammar, the SQL side to an auditable
-byte-level pre-scan, and the two join into one `SourceFacts` record.
+byte-level pre-scan, and the two join into one `SourceFacts` record per
+file.
 
 ## How parsing works
 
@@ -41,12 +42,21 @@ production monolith from the local corpus parses with **zero** error nodes
   shapes/order-by, factual dedup), FML classifier (`FmlOpOf`) with FNOTPRES
   guards and legacy error-code harvest, tpcall correlation, buffer roles,
   host vars, scoped defines (`DefineAt`), external fns, `LiveFacts`.
+- `internal/flow` — scenario slicing (dispatch-arm axis, per-arm census),
+  mapping drafts (`discover`), flow-draft rendering.
+- `internal/contract`, `internal/sqltext`, `internal/namer` — the shared
+  per-language contract model, SQL canonicalizer/formatter, and
+  language namers.
 - `cmd/xtux` — inspection CLI: `xtux scan <file>`, `xtux ir <file|dir>`
   (`-fragment` forces the fragment rubric).
 - `cmd/tuxconv` — the conversion pipeline CLI (below).
-- `testdata/fixtures` — the synthetic demo fixtures.
-- `testdata/goldens` — pinned IR JSON for those fixtures, exercised
-  byte-for-byte by the test suite.
+- `testdata/fixtures` — the synthetic demo fixtures (nav, merge, pf,
+  stripped, cs, adversarial),
+  [`testdata/goldens`](testdata/goldens) — pinned IR JSON exercised
+  byte-for-byte by the test suite. `testdata/nav`, `testdata/stripped`,
+  `testdata/pf`, `testdata/merge`, `testdata/adversarial`, `testdata/batch`,
+  and `testdata/gentest` are the same fixtures in the paths the conversion
+  and generation tests consume.
 
 ## Fidelity guarantees
 
@@ -112,53 +122,78 @@ The tux→Go conversion pipeline runs **on this stack**: parse → IR → plan �
 gen → convert, with the supporting packages (`common config telemetry audit
 ledger profile goast validate templates budget llm sqlchk flow batchflow
 pyplan pygen pychk analyzer testscan testgen csplan csgen cschk csdraft
-corpusguard`) under `internal/`. Every
-downstream stage consumes the tree-sitter facts.
+corpusguard`) under `internal/`. Every downstream stage consumes the
+tree-sitter facts.
 
 Commands (`cmd/tuxconv`):
 
 ```
 go run ./cmd/tuxconv extract <file|dir>     # IR JSON; archived per run
 go run ./cmd/tuxconv plan <file> -mapping <yaml>
-go run ./cmd/tuxconv discover <file|dir> [-stdout] [-target go|cs]
+go run ./cmd/tuxconv discover <file|dir> [-stdout] [-target go|cs] [-no-llm]
 go run ./cmd/tuxconv ainames <file> -mapping <yaml> [-all]   # AI-name only the surviving endpoints, in place
-go run ./cmd/tuxconv convertgo <file|dir> [-mapping <yaml|dir>] [-no-llm] [-base dir]
-go run ./cmd/tuxconv convertbatchpy <file|dir> [-no-llm] [-shape auto|repo] [-dml-loop batch|rowbyrow] [-out dir]
-go run ./cmd/tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir] [-config path]
+go run ./cmd/tuxconv convertgo <file|dir> [-mapping <yaml|dir>] [-no-llm] [-base dir] [-fragment] [-retry-repair] [-config path] [-templates dir]
+go run ./cmd/tuxconv convertbatchpy <file|dir> [-no-llm] [-shape auto|repo] [-dml-loop batch|rowbyrow] [-out dir] [-config path] [-templates dir]
+go run ./cmd/tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir] [-config path] [-templates dir]
 go run ./cmd/tuxconv analyze <file|dir> [-csv out.csv] [-weights csv] [-pattern mf_]
-go run ./cmd/tuxconv gentest <converted tree> [-check-only] [-no-llm] [-layers db,controller,handler] [-base dir]
-go run ./cmd/tuxconv templates list|dump|verify [-dir <override dir>] [-out <export dir>]
+go run ./cmd/tuxconv gentest <converted tree> [-check-only] [-no-llm] [-layers db,controller,handler] [-base dir] [-config path] [-templates dir]
+go run ./cmd/tuxconv templates list|dump|verify [-dir <override dir>] [-out <export dir>] [-config path] [-force]
+go run ./cmd/tuxconv retrystats <audit-run-dir> [<audit-run-dir-B>]   # retry methodology A/B read-out
+go run ./cmd/tuxconv version
 ```
 
 Verified output: `tuxconv convertgo testdata/fixtures/stripped -mapping
 testdata/fixtures/stripped/mappings -no-llm` converts 4/4 services with
 **0 sql deviations** (`diff -r` clean across all four services, with
 controller bodies rendered as deterministic best-effort drafts in
-deterministic-only mode). The nav
-fixture end-to-end (`tuxconv convertgo testdata/fixtures/nav -mapping
-configs/nav.mapping.yaml -no-llm`) converts cleanly, and the batch→Python
+deterministic-only mode). The nav fixture end-to-end (`tuxconv convertgo
+testdata/fixtures/nav -mapping configs/nav.mapping.yaml -no-llm`) converts
+cleanly, and the batch→Python
 pipeline (`batchflow` + `pyplan` + `pygen` + `pychk`) writes deterministic
-modules for both corpus shapes (`bat_min_simple` simple, `bat_min_repo`
-repo) with 0 sql deviations.
+modules for both corpus shapes (`BAT_DEMO_REJECT` simple, `BAT_DEMO_RETURNS`
+repo — pinned in `testdata/batch/expected`) with 0 sql deviations.
 
 Also included: `analyze` (`internal/analyzer` — triage rubric + CSV, with
 the `# tuxgo marks:` marker kept verbatim so CSVs stay interchangeable) and
 `gentest` (`internal/testscan` + `internal/testgen` — post-conversion test
-generation, verified end-to-end over the nav fixture: db stores render
-sqlmock suites whose `ExpectQuery` regexes are case-insensitive,
-whitespace-tolerant and WHERE-optional (so lowercase `select … from dual`
-queries match) with typed scalar placeholders; handler bodies render gin
-suite tests against a gomock'd controller, the controller's response type
-resolved from the controller *interface declaration* when controller bodies
-are the LLM seam; passthrough controllers render directly, field-mapping
-controllers ride the LLM seam; `New*` and wiring constructors skip by
-design). The flow machinery drives convert/discover and the scenario
-artifacts.
+generation, below). The flow machinery drives convert/discover and the
+scenario artifacts.
+
+### gentest (post-conversion tests)
+
+Targets are a `.go` file, a layer dir (`db`/`controller`/`handler`), a
+service dir (`pkg/services/<svc>`), or a services root; `models` is never a
+test target.
+
+- **Scan** inventories every function in the target layers and marks one
+  tested only on evidence — an exact `Test<Fn>` name or a call site inside
+  a `Test*` body. `-check-only` prints the gap report and writes nothing;
+  the machine twin `gentest_gap_report.json` lands in the run audit.
+- **Generate** is one function per table-driven suite method and is
+  staged-first: `-base` wins, else `paths.staged` — the target tree is
+  never written. A layer that already has test files gets a
+  `<stem>_gentest_test.go` twin with `…Gen` suite names, so existing suites
+  are never touched; `New*` and wiring constructors skip by design.
+- Deterministic templates cover db stores (sqlmock `ExpectQuery` regexes
+  are case-insensitive, whitespace-tolerant and WHERE-optional, so
+  lowercase `select … from dual` queries match, with typed scalar
+  placeholders), handlers (gin suite tests against a gomock'd controller,
+  the response type resolved from the controller *interface declaration*
+  when controller bodies are the LLM seam), and passthrough controllers.
+  Field-mapping controller tests ride the LLM seam (parse + shape gated,
+  budget-bounded — see the modes table above); `-no-llm` marks them
+  `llm-required` and writes nothing for them.
+- When outputs land inside a Go module, every written package gets a
+  best-effort `go vet` + compile-only `go test -run '^$'` gate line; a
+  missing module or dependency tree degrades visibly, never fails the run.
+- Byte-pinned goldens live in `testdata/gentest`, including the gap report
+  (`testdata/gentest/expected/gap_report.txt`); regenerate with
+  `GT_UPDATE_GOLDENS=1 go test ./internal/testgen`.
 
 ## Run configuration (.tuxgo.yaml)
 
 Every command resolves the run config the same way
-(`cmd/tuxconv/extract.go:100-115`): `-config <path>` wins; else `./.tuxgo.yaml`
+(`cmd/tuxconv/extract.go:100`): `-config <path>` wins; else `./.tuxgo.yaml`
 when present in the working directory; else the stock defaults
 (`internal/config.Default()`). The filename is only that default-lookup
 convention — any path works via `-config`. Unknown keys fail at load (strict
@@ -168,8 +203,8 @@ from [`configs/.tuxgo.example.yaml`](configs/.tuxgo.example.yaml).
 The `run.*` budget engine (`internal/budget`, `internal/llm/seam.go`):
 
 - **Estimator** — tokens ≈ chars / `charsPerToken`. Dense Pro*C measured
-  ~2.8 chars/token at the provider; the default 4 undercounts, which the
-  chunking margins absorb.
+  ~2.8 chars/token at the provider; the code default 4 undercounts (the
+  shipped example uses 3), which the chunking margins absorb.
 - **Prompt ceiling** — `maxPromptTokens` is a hard per-call check; an endpoint
   whose assembled prompt exceeds it (or whose projected body reaches 80% of
   the output ceiling) splits into statement fragments. Slices are sized at 70%
@@ -200,7 +235,7 @@ set is versioned (`templates.Version`, currently `v1`).
 The workflow:
 
 ```
-go run ./cmd/tuxconv templates dump -out templates   # export the embedded set (never clobbers)
+go run ./cmd/tuxconv templates dump -out templates   # export the embedded set (never clobbers; -force to overwrite)
 # edit templates/handler_method.tmpl, templates/model_file.tmpl, ...
 go run ./cmd/tuxconv templates verify -dir templates # unknown ids / empty files / parse errors
 go run ./cmd/tuxconv convertgo <src.pc> -templates templates -no-llm
@@ -436,7 +471,9 @@ zero external egress run `-no-llm` or keep the on-prem `onprem-vllm` profile.
 Every LLM exchange is archived with its assembled prompt and raw response in
 `conversion_logs/audit/<run-id>/` (`<seam>-<name>-attempt<n>.json`), plus
 the deterministic trails: `sql-aliases.json` (computed-column item → alias
-per db method) and `condition-census-<Unit>.json` (the flow-draft condition
+per db method), `sql-fidelity.json` and `sql-free.json` (the per-method
+SQL-fidelity results and the raw-SQL leak check), and
+`condition-census-<Unit>.json` (the flow-draft condition
 census per controller endpoint plus any gap notes; written only when the
 draft seam is on).
 
