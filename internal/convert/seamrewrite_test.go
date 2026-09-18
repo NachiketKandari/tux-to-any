@@ -182,7 +182,7 @@ func TestRewriteLegacySeamsErrCode(t *testing.T) {
 // callees keep every arg, and the strcpy(c_ServiceName, ...) prologue line
 // drops while a generic strcpy assignment survives.
 func TestStripSessionArgs(t *testing.T) {
-	fns := map[string]bool{"fn_is_d2u_active": true, "fn_long_to_int": true}
+	fns := map[string]bool{"fn_check_active": true, "fn_long_to_int": true}
 	for _, tc := range []struct {
 		name string
 		in   string
@@ -191,8 +191,8 @@ func TestStripSessionArgs(t *testing.T) {
 	}{
 		{
 			"condition call keeps only the out-param",
-			"if (fn_is_d2u_active(c_ServiceName, ls_match_acc.arr, &c_d2u_active_flg, c_errmsg) == -1) {",
-			"if (fn_is_d2u_active(ls_match_acc.arr, &c_d2u_active_flg) == -1) {",
+			"if (fn_check_active(c_ServiceName, ls_match_acc.arr, &c_d2u_active_flg, c_errmsg) == -1) {",
+			"if (fn_check_active(ls_match_acc.arr, &c_d2u_active_flg) == -1) {",
 			2,
 		},
 		{
@@ -203,14 +203,14 @@ func TestStripSessionArgs(t *testing.T) {
 		},
 		{
 			"all-session call scrubs to empty args",
-			"i_error := fn_is_d2u_active(c_ServiceName, l_sssn_id, c_user_id, c_err_msg);",
-			"i_error := fn_is_d2u_active();",
+			"i_error := fn_check_active(c_ServiceName, l_sssn_id, c_user_id, c_err_msg);",
+			"i_error := fn_check_active();",
 			4,
 		},
 		{
 			"call without session args untouched",
-			"fn_is_d2u_active(ls_match_acc.arr, &c_d2u_active_flg);",
-			"fn_is_d2u_active(ls_match_acc.arr, &c_d2u_active_flg);",
+			"fn_check_active(ls_match_acc.arr, &c_d2u_active_flg);",
+			"fn_check_active(ls_match_acc.arr, &c_d2u_active_flg);",
 			0,
 		},
 		{
@@ -243,7 +243,7 @@ func TestStripSessionArgs(t *testing.T) {
 		})
 	}
 	// No stubs means no scrubbing at all.
-	view := "fn_is_d2u_active(c_ServiceName, c_errmsg);\nstrcpy(c_ServiceName, rqst->name);\n"
+	view := "fn_check_active(c_ServiceName, c_errmsg);\nstrcpy(c_ServiceName, rqst->name);\n"
 	if got, n := stripSessionArgs(view, nil); n != 0 || got != view {
 		t.Errorf("nil fn set altered the view: n=%d\n%s", n, got)
 	}

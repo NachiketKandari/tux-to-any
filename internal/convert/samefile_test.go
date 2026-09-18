@@ -28,7 +28,7 @@ int fn_helper(char *c_ServiceName,
     EXEC SQL
       SELECT UAC_USR_ID
       INTO   :sql_usr_id
-      FROM   UAC_USR_ACCNTS
+      FROM   DEMO_ACCNTS
       WHERE  UAC_CLM_MTCH_ACCNT = :c_match_accnt;
 
     if(SQLCODE != 0)

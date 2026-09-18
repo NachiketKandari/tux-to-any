@@ -59,8 +59,8 @@ func TestIsComputedItem(t *testing.T) {
 }
 
 func TestAliasForSanitizeAndCap(t *testing.T) {
-	got := AliasFor("maintux", "q3", 4)
-	if got != "TUXC_MAINTUX_Q3_4" {
+	got := AliasFor("demosvc", "q3", 4)
+	if got != "TUXC_DEMOSVC_Q3_4" {
 		t.Errorf("AliasFor = %q", got)
 	}
 	fn := AliasFor("svc", "fn_gene_otp:q2", 1)

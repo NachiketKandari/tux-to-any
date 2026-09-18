@@ -1,8 +1,9 @@
 // Package corpusguard carries one regression test: the local-only .pc
 // corpus (gitignored) stays out of tracked content — file names, example
 // directories, and distinctive tokens never appear in a tracked file. The
-// .gitignore entries (the enforcement itself) and this file (the token
-// list) are the only permitted mentions.
+// .gitignore entries (the enforcement itself), this file (the token list),
+// and docs/ (historical planning records whose measurements and audit ids
+// are bound to the real corpus) are the only permitted mentions.
 package corpusguard
 
 import (
@@ -31,11 +32,15 @@ var banned = []string{
 }
 
 // exempt lists tracked files allowed to carry banned substrings: the
-// gitignore (which must name the ignored dirs) and this guard itself.
+// gitignore (which must name the ignored dirs), this guard itself, and the
+// docs/ planning records (run evidence naming the corpus it was measured on).
 var exempt = map[string]bool{
 	".gitignore": true,
 	filepath.Join("internal", "corpusguard", "guard_test.go"): true,
 }
+
+// exemptDocs is the directory-prefix exemption for the planning records.
+const exemptDocs = "docs/"
 
 func TestNoCorpusReferencesInTrackedFiles(t *testing.T) {
 	root := strings.TrimSpace(run(t, "git", "rev-parse", "--show-toplevel"))
@@ -43,7 +48,7 @@ func TestNoCorpusReferencesInTrackedFiles(t *testing.T) {
 	var hits []string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		path := strings.TrimSpace(line)
-		if path == "" || exempt[path] {
+		if path == "" || exempt[path] || strings.HasPrefix(path, exemptDocs) {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(root, path))
