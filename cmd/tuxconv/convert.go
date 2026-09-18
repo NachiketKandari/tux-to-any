@@ -38,7 +38,7 @@ func runConvert(ctx context.Context, args []string) error {
 	mappingFlag := fs.String("mapping", "", "User mapping YAML, or a directory of per-service yamls (each with source: <entry file>) when the target dir holds multiple services (default: convert.mapping from config, else the mappings/ convention)")
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
 	baseDir := fs.String("base", "", "Output base directory override (default: target module root when paths.mainGo resolves, else paths.staged; dir fan-out appends each service name)")
-	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: skip controller bodies (overrides run.llm)")
+	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: controllers render deterministic best-effort bodies (overrides run.llm)")
 	fragment := fs.Bool("fragment", false, "Force fragment mode on a single-file input (PF-3.1)")
 	retryRepair := fs.Bool("retry-repair", false, "Retry methodology A/B: rejected LLM attempts are sent back as an assistant turn for patching instead of regenerated (default off)")
 	templatesDir := fs.String("templates", "", "Directory of <template_id>.tmpl overrides (flag > templates.dir config; missing ids keep the embedded set)")

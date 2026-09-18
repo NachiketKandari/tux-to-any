@@ -29,8 +29,9 @@ run:
   modelMaxOutputTokens: 0     # dynamic only: the provider's per-request completion cap
   outputReserveTokens: 768    # dynamic only: estimator-skew headroom
   llm: true                   # THE one AI knob: false (or -no-llm on any command)
-                              # = deterministic-only run — controllers/bodies skip
-                              # or degrade, everything deterministic still generates
+                              # = deterministic-only run — controllers render
+                              # best-effort bodies (marked for LLM upgrade),
+                              # everything deterministic still generates
 
 models:                       # OpenAI-compatible profiles (provider must be
   - name: onprem-vllm         # "openai-compatible"); names must be unique

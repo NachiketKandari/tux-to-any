@@ -178,8 +178,8 @@ func extractLayer(dir string, layer string) *layerFacts {
 
 // extractCtrlIface parses the controller layer's interface declarations into
 // per-method signatures. Handler tests need the controller's response type;
-// interface-only trees (no-llm runs leave controller bodies as the LLM seam)
-// still carry it in the interface declaration, so the handler gate can stay
+// the interface declaration is the authoritative fallback (it carries the
+// type even when bodies are still the LLM seam), so the handler gate can stay
 // deterministic instead of degrading to unsupported.
 func extractCtrlIface(serviceDir string) map[string]ctrlIfaceSig {
 	out := map[string]ctrlIfaceSig{}

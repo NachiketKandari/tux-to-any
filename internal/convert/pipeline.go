@@ -63,9 +63,10 @@ type Options struct {
 	MaxRetries int
 	Audit      *audit.Recorder // per-run audit folder (§4.7); nil = skip
 	Workers    int             // DB-unit render pool size (concurrency.workers); <1 → 1
-	// SkipLLM is the deterministic-only mode (run.llm: false): pending
-	// controller units are marked skipped (never failed) so a later
-	// LLM-enabled run resumes them.
+	// SkipLLM is the deterministic-only mode (run.llm: false): controller
+	// and fn-helper units render deterministic best-effort bodies (zero LLM
+	// calls) and are marked skipped so a later LLM-enabled run upgrades
+	// exactly those marker-carrying methods.
 	SkipLLM bool
 	// WithGorm renders the store with the legacy *gorm.DB handle alongside
 	// sqlx (db.withGorm); default is the plain sqlx-only store.
@@ -362,17 +363,37 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	for _, u := range unitsOf(opts.Plan, plan.KindControllerMethod) {
 		entry := opts.Ledger.Get(u.ID, string(u.Kind), u.Name) // register before any transition
 		if entry.Status == ledger.StatusAppended {
-			if methodLanded(ctrlFilePath, u.Name) {
-				continue // resume: method already on disk
+			if landed, det := detControllerState(ctrlFilePath, u.Name); landed && !det {
+				continue // resume: accepted LLM body already on disk
+			} else if landed {
+				telemetry.Log(ctx).Info("deterministic controller body queued for LLM upgrade",
+					"unit", u.Name, "path", ctrlFilePath)
+			} else {
+				telemetry.Log(ctx).Info("controller method missing despite appended ledger — regenerating",
+					"unit", u.Name, "path", ctrlFilePath)
 			}
-			telemetry.Log(ctx).Info("controller method missing despite appended ledger — regenerating",
-				"unit", u.Name, "path", ctrlFilePath)
 		}
 		if opts.SkipLLM {
-			// Deterministic-only mode: leave controller bodies for a later
-			// LLM-enabled resume — visible, never a failure.
-			opts.Ledger.Set(u.ID, ledger.StatusSkipped, "llm disabled (run.llm: false)")
+			// Deterministic-only mode: render the best-effort body (zero
+			// LLM calls). An accepted LLM body on disk always wins — never
+			// downgrade it — and a synthesis gap keeps the legacy skip.
+			if entry.Status == ledger.StatusAppended && !detControllerLanded(ctrlFilePath, u.Name) && methodLanded(ctrlFilePath, u.Name) {
+				continue
+			}
+			body, derr := deterministicController(ctx, opts, svc, u.Name)
+			if derr != nil {
+				opts.Ledger.Set(u.ID, ledger.StatusSkipped, "llm disabled (run.llm: false)")
+				res.Skipped = append(res.Skipped, u.Name)
+				continue
+			}
+			if err := appendControllerMethod(ctx, opts, res, svc, u, ctrlFilePath, body); err != nil {
+				opts.Ledger.Set(u.ID, ledger.StatusFailed, err.Error())
+				res.Failed = append(res.Failed, u.Name)
+				continue
+			}
+			opts.Ledger.Set(u.ID, ledger.StatusSkipped, "deterministic no-llm body (LLM resume upgrades)")
 			res.Skipped = append(res.Skipped, u.Name)
+			addMap(opts, res, u, []string{relPath(opts.BaseDir, ctrlFilePath)})
 			continue
 		}
 		if opts.Client == nil {
@@ -407,7 +428,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	// each legacy helper translates into a Go method on the controller
 	// struct, store calls for its SQL, the legacy status-return contract
 	// otherwise. The file assembles method by method, resume-safe like
-	// the controllers; -no-llm leaves them skipped for a later resume.
+	// the controllers; -no-llm renders deterministic best-effort helpers
+	// marked skipped for a later resume to upgrade.
 	if fnUnits := unitsOf(opts.Plan, plan.KindFnHelper); len(fnUnits) > 0 {
 		fnFilePath, ferr := opts.absPath(opts.BaseDir, svc.Mapping.ImportPath("controller")+"/fns.go")
 		if ferr != nil {
@@ -416,15 +438,36 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		for _, u := range fnUnits {
 			entry := opts.Ledger.Get(u.ID, string(u.Kind), u.Name) // register before any transition
 			if entry.Status == ledger.StatusAppended {
-				if methodLanded(fnFilePath, u.Name) {
-					continue // resume: helper already on disk
+				if landed, det := detFnHelperState(fnFilePath, u.Name); landed && !det {
+					continue // resume: accepted LLM helper already on disk
+				} else if landed {
+					telemetry.Log(ctx).Info("deterministic fn helper queued for LLM upgrade",
+						"unit", u.Name, "path", fnFilePath)
+				} else {
+					telemetry.Log(ctx).Info("fn helper missing despite appended ledger — regenerating",
+						"unit", u.Name, "path", fnFilePath)
 				}
-				telemetry.Log(ctx).Info("fn helper missing despite appended ledger — regenerating",
-					"unit", u.Name, "path", fnFilePath)
 			}
 			if opts.SkipLLM {
-				opts.Ledger.Set(u.ID, ledger.StatusSkipped, "llm disabled (run.llm: false)")
+				// Deterministic-only mode: same posture as the controllers —
+				// an accepted LLM helper wins, a synthesis gap keeps the skip.
+				if entry.Status == ledger.StatusAppended && !detFnHelperLanded(fnFilePath, u.Name) && methodLanded(fnFilePath, u.Name) {
+					continue
+				}
+				body, derr := deterministicFnHelper(ctx, opts, svc, u.Name)
+				if derr != nil {
+					opts.Ledger.Set(u.ID, ledger.StatusSkipped, "llm disabled (run.llm: false)")
+					res.Skipped = append(res.Skipped, u.Name)
+					continue
+				}
+				if err := appendFnHelper(ctx, opts, res, svc, fnFilePath, u.Name, body); err != nil {
+					opts.Ledger.Set(u.ID, ledger.StatusFailed, err.Error())
+					res.Failed = append(res.Failed, u.Name)
+					continue
+				}
+				opts.Ledger.Set(u.ID, ledger.StatusSkipped, "deterministic no-llm helper (LLM resume upgrades)")
 				res.Skipped = append(res.Skipped, u.Name)
+				addMap(opts, res, u, []string{relPath(opts.BaseDir, fnFilePath)})
 				continue
 			}
 			if opts.Client == nil {
@@ -986,6 +1029,13 @@ func writeFnArtifact(ctx context.Context, opts Options, res *Result, svc *gen.Se
 		if stripped, ok := stripRejectedBlock(src, name); ok {
 			src = stripped
 		}
+		if gen.IsDeterministicFnHelper(src, name) {
+			// LLM upgrade: same replace-instead-of-stack contract as the
+			// controller path.
+			if stripped, ok := stripMethodByName(src, name); ok {
+				src = stripped
+			}
+		}
 		if hasLiveMethod(src, name) {
 			return false, nil
 		}
@@ -1010,6 +1060,13 @@ func writeFnArtifact(ctx context.Context, opts Options, res *Result, svc *gen.Se
 		return false, err
 	}
 	if imports := deriveFnImports(formatted, dbImport, svc.ModelsPkg); len(imports) > 0 {
+		for i, imp := range imports {
+			// deriveFnImports flags the tx wrapper without the module
+			// path (text-only view) — qualify it to this service's utils.
+			if imp == "utils:ExecTransaction" {
+				imports[i] = svc.Module + "/pkg/utils"
+			}
+		}
 		if err := goast.AddImports(path, imports...); err != nil {
 			return false, err
 		}
@@ -1057,7 +1114,9 @@ func appendRejectedFnHelper(ctx context.Context, opts Options, res *Result, svc 
 // deriveFnImports lists the import paths the fn file's text references:
 // the db package (only when the struct's store field is declared or a body
 // names a db type — a service run's fns.go has neither, so the import stays
-// out), context, models, fmt, errors.
+// out), context, models, fmt, errors, and the tx/time trio deterministic
+// no-llm helpers may reference (utils/sqlx for the ExecTransaction wrapper,
+// time for time.Time zeroes).
 func deriveFnImports(text, dbPkg, modelsPkg string) []string {
 	var out []string
 	dbQual := dbPkg[strings.LastIndexByte(dbPkg, '/')+1:]
@@ -1075,6 +1134,17 @@ func deriveFnImports(text, dbPkg, modelsPkg string) []string {
 	}
 	if strings.Contains(text, "errors.") {
 		out = append(out, "errors")
+	}
+	if strings.Contains(text, "time.") {
+		out = append(out, "time")
+	}
+	if strings.Contains(text, "ExecTransaction(") {
+		// The module-qualified utils path rides the caller: deriveFnImports
+		// sees only text, so flag it and let writeFnArtifact qualify.
+		out = append(out, "utils:ExecTransaction")
+	}
+	if strings.Contains(text, "sqlx.") {
+		out = append(out, "github.com/jmoiron/sqlx")
 	}
 	return out
 }
@@ -1838,6 +1908,13 @@ func writeControllerArtifact(ctx context.Context, opts Options, res *Result, svc
 		if stripped, ok := stripRejectedBlock(src, name); ok {
 			src = stripped
 		}
+		if gen.IsDeterministicControllerMethod(src, name) {
+			// LLM upgrade: the deterministic placeholder yields to the
+			// accepted body instead of stacking a duplicate.
+			if stripped, ok := stripMethodByName(src, name); ok {
+				src = stripped
+			}
+		}
 		if hasLiveMethod(src, name) {
 			return false, nil
 		}
@@ -1871,6 +1948,9 @@ func writeControllerArtifact(ctx context.Context, opts Options, res *Result, svc
 	}
 	if strings.Contains(merged, "fmt.") {
 		wantImports = append(wantImports, "fmt")
+	}
+	if strings.Contains(merged, "time.") {
+		wantImports = append(wantImports, "time")
 	}
 	if strings.Contains(merged, "ExecTransaction(") {
 		wantImports = append(wantImports, svc.Module+"/pkg/utils")

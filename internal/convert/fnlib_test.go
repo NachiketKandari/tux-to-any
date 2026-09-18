@@ -160,23 +160,62 @@ func TestFnLibConvertEndToEnd(t *testing.T) {
 	}
 }
 
-// TestFnLibConvertSkipLLM pins the deterministic-only degrade: db methods
-// land, helper bodies stay skipped (visible for an LLM-enabled resume), no
-// fns.go is created.
+// TestFnLibConvertSkipLLM pins the deterministic-only mode: db methods
+// land, the helper body renders as a deterministic best-effort method in
+// controller/fns.go (marked skipped for an LLM-enabled resume to upgrade),
+// and zero LLM calls are made.
 func TestFnLibConvertSkipLLM(t *testing.T) {
 	opts, _, base := fnLibRunFixture(t, true)
 	res, err := Run(context.Background(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if res.LLMCalls != 0 {
+		t.Errorf("skip-llm run made %d llm calls, want 0", res.LLMCalls)
+	}
 	if len(res.Skipped) != 1 || res.Skipped[0] != "FnIsDemoActive" {
 		t.Errorf("skipped = %v, want [FnIsDemoActive]", res.Skipped)
 	}
-	if _, err := os.Stat(filepath.Join(base, "controller", "fns.go")); !os.IsNotExist(err) {
-		t.Error("fns.go must not exist in deterministic-only mode")
+	fnsData, err := os.ReadFile(filepath.Join(base, "controller", "fns.go"))
+	if err != nil {
+		t.Fatalf("deterministic fns.go missing: %v", err)
+	}
+	fns := string(fnsData)
+	for _, want := range []string{
+		"func (s *fn_demo_libController) FnIsDemoActive(c context.Context,",
+		"s.store.GetDemoClientMap(c, c_mtch_accnt)",
+		"tuxgo:deterministic-fnhelper FnIsDemoActive",
+		"return 1",
+	} {
+		if !strings.Contains(fns, want) {
+			t.Errorf("deterministic fns.go missing %q\n---\n%s", want, fns)
+		}
 	}
 	dbPath := filepath.Join(base, "db", "fn_demo_lib.go")
 	if _, err := os.Stat(dbPath); err != nil {
 		t.Errorf("db methods must land without the LLM: %v", err)
+	}
+
+	// Resume with the LLM enabled upgrades the deterministic helper in
+	// place: one seam call, no leftover marker, exactly one definition.
+	opts2, _, _ := fnLibRunFixture(t, false)
+	opts2.Ledger = opts.Ledger
+	opts2.BaseDir = base
+	res2, err := Run(context.Background(), opts2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.LLMCalls != 1 {
+		t.Errorf("resume llm calls = %d, want 1 (only the deterministic helper)", res2.LLMCalls)
+	}
+	upgraded, err := os.ReadFile(filepath.Join(base, "controller", "fns.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(upgraded), "tuxgo:deterministic-fnhelper") {
+		t.Errorf("resume left the deterministic marker behind:\n%s", string(upgraded))
+	}
+	if n := strings.Count(string(upgraded), "func (s *fn_demo_libController) FnIsDemoActive("); n != 1 {
+		t.Errorf("upgraded fns.go has %d FnIsDemoActive definitions, want 1", n)
 	}
 }

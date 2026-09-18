@@ -133,7 +133,8 @@ go run ./cmd/tuxconv templates list|dump|verify [-dir <override dir>] [-out <exp
 Verified output: `tuxconv convertgo testdata/fixtures/stripped -mapping
 testdata/fixtures/stripped/mappings -no-llm` converts 4/4 services with
 **0 sql deviations** (`diff -r` clean across all four services, with
-controller bodies correctly skipped in deterministic-only mode). The nav
+controller bodies rendered as deterministic best-effort drafts in
+deterministic-only mode). The nav
 fixture end-to-end (`tuxconv convertgo testdata/fixtures/nav -mapping
 configs/nav.mapping.yaml -no-llm`) converts cleanly, and the batch→Python
 pipeline (`batchflow` + `pyplan` + `pygen` + `pychk`) writes deterministic
@@ -346,7 +347,7 @@ exactly one template-shaped gap per unit — and only in LLM mode:
 
 | Command | The LLM seam | `-no-llm` degradation |
 |---|---|---|
-| `convert` | controller body per endpoint (from the query-replaced branch view + flow draft — never raw SQL; the draft doubles as a condition census the gates enforce — every legacy branch condition and its assigned effects must appear, empty `if {}` rejects unconditionally, misses retry with a line-targeted note and fail the unit loudly on exhaustion) | body marked `skipped` in the ledger; an LLM-enabled re-run resumes exactly those |
+| `convert` | controller body per endpoint (from the query-replaced branch view + flow draft — never raw SQL; the draft doubles as a condition census the gates enforce — every legacy branch condition and its assigned effects must appear, empty `if {}` rejects unconditionally, misses retry with a line-targeted note and fail the unit loudly on exhaustion) | deterministic best-effort body (store calls + row→response mapping + `tuxgo:TODO` residue, marked `skipped` in the ledger); an LLM-enabled re-run upgrades exactly those marker-carrying methods |
 | `convert` | one stub-synthesis attempt per unresolved external fn (call-site lines + inferred in/out signature shown; pure helpers land as idiomatic Go, declines keep the panicking stub) | all stubs stay panicking; synthesis runs first-run-only, a resume never re-calls |
 | `batchpy` | stateful-batch service body | `# tuxgo:TODO service body` placeholder (simple shape is 100% deterministic either way) |
 | `convertcs` | residual arm logic per endpoint (from the query-replaced arm view — never raw SQL); ledger resume never re-generates filled bodies | `tuxgo:TODO` residual-block placeholder, kept on seam exhaustion |
@@ -368,8 +369,9 @@ legacy fn becomes a Go method on the controller struct
 (`controller/fns.go`: struct + store constructor + one method per fn),
 with db methods for the library's SQL generated deterministically first.
 Bodies ride the LLM seam with the same gates as controllers (parse, fixed
-receiver/name, required store calls, no raw SQL); `-no-llm` leaves them
-`skipped` in the ledger for an LLM-enabled resume. The output subtree
+receiver/name, required store calls, no raw SQL); `-no-llm` renders
+deterministic best-effort helpers marked `skipped` in the ledger for an
+LLM-enabled resume to upgrade. The output subtree
 roots at the file stem (`foo.pc` → `foo/`).
 
 Same-file helpers: a `fn_*` function the **service file itself** defines

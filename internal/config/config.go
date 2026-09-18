@@ -269,8 +269,9 @@ type Run struct {
 	// (default 768).
 	OutputReserveTokens int `yaml:"outputReserveTokens"`
 	// LLM gates the generation seam (default true). false = deterministic-only
-	// run: models/db/interfaces/handler/router generate, pending controller
-	// bodies are marked skipped (never failed) for a later LLM-enabled resume.
+	// run: models/db/interfaces/handler/router generate, controller bodies
+	// render deterministic best-effort drafts (marked skipped for a later
+	// LLM-enabled resume to upgrade).
 	LLM bool `yaml:"llm"`
 }
 

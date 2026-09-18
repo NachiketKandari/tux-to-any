@@ -399,8 +399,9 @@ func TestConvertConcurrentDBUnitsByteIdentical(t *testing.T) {
 }
 
 // TestConvertSkipLLM: the deterministic-only mode (run.llm: false) generates
-// every deterministic artifact with zero LLM calls, marks pending controller
-// units skipped — never failed — and a later LLM-enabled resume converts
+// every deterministic artifact with zero LLM calls, renders best-effort
+// deterministic controller bodies (marked skipped — never failed — for an
+// LLM-enabled resume to upgrade), and a later LLM-enabled resume converts
 // exactly those.
 func TestConvertSkipLLM(t *testing.T) {
 	opts, _ := convertFixture(t)
@@ -436,6 +437,50 @@ func TestConvertSkipLLM(t *testing.T) {
 		t.Errorf("ledger = appended %d, failed %d, skipped %d", appended, failed, skipped)
 	}
 
+	// The deterministic controller file lands with all four methods,
+	// each carrying its upgrade marker.
+	ctrl, err := os.ReadFile(filepath.Join(opts.BaseDir, "pkg/services/nav/controller/nav.go"))
+	if err != nil {
+		t.Fatalf("deterministic controller file missing: %v", err)
+	}
+	for _, ep := range []string{"NavHistory", "SipFreedem", "SipInsurance", "NavList"} {
+		if !strings.Contains(string(ctrl), "func (s *navController) "+ep+"(") {
+			t.Errorf("deterministic controller missing method %s", ep)
+		}
+		if !strings.Contains(string(ctrl), "tuxgo:deterministic-controller "+ep) {
+			t.Errorf("deterministic controller missing upgrade marker for %s", ep)
+		}
+	}
+	// Spot-check the synthesis contract on the primary endpoint: legacy
+	// store calls in order, row→response shaping, TODO residue.
+	for _, want := range []string{
+		"s.store.GetDateDetails(c)",
+		"s.store.GetNavHistory(c,",
+		"for _, row := range",
+		"models.NavHistoryResponse{",
+		"tuxgo:TODO",
+	} {
+		if !strings.Contains(string(ctrl), want) {
+			t.Errorf("deterministic NavHistory body missing %q", want)
+		}
+	}
+
+	// Determinism: a second --no-llm run renders byte-identical output
+	// (the fixture module is fixed, so no normalization is needed).
+	optsD, _ := convertFixture(t)
+	optsD.SkipLLM = true
+	optsD.Client = nil
+	if _, err := Run(context.Background(), optsD); err != nil {
+		t.Fatal(err)
+	}
+	ctrl2, err := os.ReadFile(filepath.Join(optsD.BaseDir, "pkg/services/nav/controller/nav.go"))
+	if err != nil {
+		t.Fatalf("second deterministic run missing controller: %v", err)
+	}
+	if string(ctrl2) != string(ctrl) {
+		t.Errorf("deterministic runs differ:\n--- run1 ---\n%s\n--- run2 ---\n%s", string(ctrl), string(ctrl2))
+	}
+
 	// Resume with the LLM enabled: the skipped units convert, nothing re-runs.
 	opts2, _ := convertFixture(t)
 	// Share the first run's ledger by pointing opts2 at the same one.
@@ -450,6 +495,20 @@ func TestConvertSkipLLM(t *testing.T) {
 	}
 	if len(res2.Skipped) != 0 || len(res2.Failed) != 0 {
 		t.Errorf("resume skipped %v, failed %v, want none", res2.Skipped, res2.Failed)
+	}
+	// The upgrade replaces every deterministic marker with accepted output —
+	// no stacking, no leftover placeholders.
+	upgraded, err := os.ReadFile(filepath.Join(opts.BaseDir, "pkg/services/nav/controller/nav.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(upgraded), "tuxgo:deterministic-controller") {
+		t.Errorf("resume left deterministic markers behind:\n%s", string(upgraded))
+	}
+	for _, ep := range []string{"NavHistory", "SipFreedem", "SipInsurance", "NavList"} {
+		if n := strings.Count(string(upgraded), "func (s *navController) "+ep+"("); n != 1 {
+			t.Errorf("upgraded controller has %d definitions of %s, want 1", n, ep)
+		}
 	}
 }
 

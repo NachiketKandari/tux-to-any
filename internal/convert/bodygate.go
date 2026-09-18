@@ -306,13 +306,13 @@ func undeclaredIdentErrs(body string, allow map[string]bool) []string {
 
 // identAllowed is the identifier allowlist for the body wrap: predeclared
 // names plus the packages the controller file assembly can import (context,
-// models, logger, errors, fmt, sqlx, utils) and the receiver.
+// models, logger, errors, fmt, time, sqlx, utils) and the receiver.
 func identAllowed(name string, allow map[string]bool) bool {
 	if types.Universe.Lookup(name) != nil || allow[name] {
 		return true
 	}
 	switch name {
-	case "s", "context", "models", "logger", "errors", "fmt", "sqlx", "utils":
+	case "s", "context", "models", "logger", "errors", "fmt", "time", "sqlx", "utils":
 		return true
 	}
 	return false
