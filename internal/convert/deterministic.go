@@ -259,19 +259,39 @@ func detMethodSource(src, name string) string {
 	return strings.Join(lines[start:end+1], "\n")
 }
 
+// detSkeletonBody reduces a landed deterministic method to the bare
+// statements the seam OUTPUT rule demands: the fixed signature line and
+// the closing brace go (the signature is already declared — re-emitting
+// the wrapper teaches the model the wrong output shape and the gates
+// reject it). The marker + TODO comments stay as the edit map.
+func detSkeletonBody(method string) string {
+	lines := strings.Split(strings.TrimRight(method, "\n"), "\n")
+	if len(lines) >= 2 && strings.HasPrefix(lines[0], "func (") {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) > 0 && lines[len(lines)-1] == "}" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // detSkeletonSection renders the deterministic-baseline prompt section for
-// one upgrade unit: the landed deterministic method plus the edit contract
+// one upgrade unit: the landed deterministic body plus the edit contract
 // (improve, don't rebuild; the blank-identifier TODO idiom is the legal
 // residue for unmappable results). Empty input renders nothing — the prompt
 // stays exactly as before.
 func detSkeletonSection(method string) string {
-	if strings.TrimSpace(method) == "" {
+	body := detSkeletonBody(method)
+	if strings.TrimSpace(body) == "" {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("\nDeterministic baseline (compiles; satisfies every REQUIRED CALL) — improve it, do not rebuild it:\n```go\n")
-	sb.WriteString(strings.TrimRight(method, "\n"))
-	sb.WriteString("\n```\nReplace each // tuxgo:TODO residue with the real legacy mapping or branch logic. Keep every store call with exact params/order and every capture name; keep the signature. A store result whose branch role you cannot map stays kept as `_ = name // tuxgo:TODO <role>` — never dropped, never left unused.\n")
+	sb.WriteString("\nDeterministic baseline (compiles; satisfies every REQUIRED CALL) — improve these bare statements, do not rebuild them:\n```go\n")
+	sb.WriteString(body)
+	sb.WriteString("\n```\nThe method signature is fixed and already declared — emit bare statements only, no func wrapper. Replace each // tuxgo:TODO residue with the real legacy mapping or branch logic. Keep every store call with exact params/order and every capture name. A store result whose branch role you cannot map stays kept as _ = name // tuxgo:TODO <role> — never dropped, never left unused.\n")
 	return sb.String()
 }
 

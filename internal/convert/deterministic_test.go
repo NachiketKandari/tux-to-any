@@ -53,8 +53,9 @@ func TestDetMethodSource(t *testing.T) {
 }
 
 // TestDetSkeletonSection pins the prompt section: empty input renders
-// nothing; a method renders the fenced baseline plus the edit contract,
-// including the legal TODO-residue idiom.
+// nothing; a method renders its bare statements fenced (no func wrapper —
+// the seam OUTPUT rule demands bare statements and the gates reject the
+// wrapped shape) plus the edit contract with the legal TODO-residue idiom.
 func TestDetSkeletonSection(t *testing.T) {
 	if got := detSkeletonSection("  \n"); got != "" {
 		t.Errorf("empty method must render no section, got %q", got)
@@ -64,13 +65,17 @@ func TestDetSkeletonSection(t *testing.T) {
 	for _, want := range []string{
 		"Deterministic baseline",
 		"```go",
-		"func (s *navController) NavHistory(c context.Context) {",
-		"`_ = name // tuxgo:TODO <role>`",
+		"s.store.GetCount(c)",
+		"no func wrapper",
+		"_ = name // tuxgo:TODO <role>",
 		"never dropped, never left unused",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("section missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "func (s *navController)") {
+		t.Errorf("section must not carry the func wrapper:\n%s", got)
 	}
 }
 
