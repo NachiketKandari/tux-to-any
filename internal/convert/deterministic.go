@@ -225,3 +225,79 @@ func detSynthView(calls map[string]budget.DBCall) string {
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
 }
+
+// detMethodSource extracts the live method named name from a gofmt-emitted
+// Go source file ("" when absent). Line-anchored like hasLiveMethod —
+// commented rejected placeholders never match — and it degrades to "" on
+// hand-edited (non-gofmt) files rather than guessing boundaries.
+func detMethodSource(src, name string) string {
+	lines := strings.Split(src, "\n")
+	start := -1
+	for i, ln := range lines {
+		if !strings.HasPrefix(ln, "func (") {
+			continue
+		}
+		if !strings.Contains(ln, ") "+name+"(") {
+			continue
+		}
+		start = i
+		break
+	}
+	if start < 0 {
+		return ""
+	}
+	end := -1
+	for i := start + 1; i < len(lines); i++ {
+		if lines[i] == "}" {
+			end = i
+			break
+		}
+	}
+	if end < 0 {
+		return ""
+	}
+	return strings.Join(lines[start:end+1], "\n")
+}
+
+// detSkeletonSection renders the deterministic-baseline prompt section for
+// one upgrade unit: the landed deterministic method plus the edit contract
+// (improve, don't rebuild; the blank-identifier TODO idiom is the legal
+// residue for unmappable results). Empty input renders nothing — the prompt
+// stays exactly as before.
+func detSkeletonSection(method string) string {
+	if strings.TrimSpace(method) == "" {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\nDeterministic baseline (compiles; satisfies every REQUIRED CALL) — improve it, do not rebuild it:\n```go\n")
+	sb.WriteString(strings.TrimRight(method, "\n"))
+	sb.WriteString("\n```\nReplace each // tuxgo:TODO residue with the real legacy mapping or branch logic. Keep every store call with exact params/order and every capture name; keep the signature. A store result whose branch role you cannot map stays kept as `_ = name // tuxgo:TODO <role>` — never dropped, never left unused.\n")
+	return sb.String()
+}
+
+// detSkeletonFor attaches the landed deterministic method for name (when
+// any) to the upgrade prompt — budget-gated: the section rides only when
+// prompt+section still fits MaxPromptTokens (0 = unbounded), so a huge
+// endpoint degrades to the view-only prompt instead of tripping the
+// oversized-endpoint wiring. isDet is detControllerLanded/detFnHelperLanded.
+func detSkeletonFor(ctx context.Context, opts Options, prompt, path, name string, isDet func(string, string) bool) string {
+	if path == "" || !isDet(path, name) {
+		return prompt
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return prompt
+	}
+	section := detSkeletonSection(detMethodSource(string(raw), name))
+	if section == "" {
+		return prompt
+	}
+	if max := opts.Budget.MaxPromptTokens; max > 0 && opts.Budget.Count(prompt+section) > max {
+		telemetry.Log(ctx).Info("deterministic baseline omitted from upgrade prompt — over budget",
+			"unit", name, "prompt_tokens", opts.Budget.Count(prompt),
+			"section_tokens", opts.Budget.Count(section), "max", max)
+		return prompt
+	}
+	telemetry.Log(ctx).Info("deterministic baseline attached to upgrade prompt", "unit", name)
+	return prompt + section
+}

@@ -399,7 +399,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		if opts.Client == nil {
 			return nil, fmt.Errorf("convert: endpoint %s needs the LLM client but none is configured", u.Name)
 		}
-		body, rejected, _, err := controllerBody(ctx, opts, res, svc, u, dbBodies, sr)
+		body, rejected, _, err := controllerBody(ctx, opts, res, svc, u, dbBodies, sr, ctrlFilePath)
 		if err != nil {
 			// Keep the last rejected output visible (commented, behind a
 			// panicking placeholder) — an empty controller helps nobody.
@@ -473,7 +473,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			if opts.Client == nil {
 				return nil, fmt.Errorf("convert: fn helper %s needs the LLM client but none is configured", u.Name)
 			}
-			body, rejected, _, err := fnHelperBody(ctx, opts, res, svc, u, dbBodies)
+			body, rejected, _, err := fnHelperBody(ctx, opts, res, svc, u, dbBodies, fnFilePath)
 			if err != nil {
 				// Same visible-fallback posture as the controller path: the
 				// rejected helper stays commented behind its panicking
@@ -514,7 +514,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 // per-seam policy (retry through chat errors, the separate validation-
 // feedback message) stays local. Scenario endpoints (sr != nil for a
 // scenario slice) swap the branch view for the flattened slice (G-SCEN6).
-func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Service, u plan.Unit, dbBodies map[string]dbOut, sr *scenRun) (body, rejected, prompt string, err error) {
+func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Service, u plan.Unit, dbBodies map[string]dbOut, sr *scenRun, ctrlFile string) (body, rejected, prompt string, err error) {
 	c := svc.ConditionOf(u.Name)
 	if c == nil {
 		return "", "", "", fmt.Errorf("convert: no condition for endpoint %s", u.Name)
@@ -673,6 +673,11 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		writeConditionCensusAudit(ctx, opts, u, census, nil)
 		return body, "", prompt, nil
 	}
+	// Upgrade resume: a landed deterministic body rides as the repair
+	// baseline (budget-gated) — the model edits a valid solution instead
+	// of rediscovering the constraint puzzle. After the chunk routing
+	// above, so fragment prompts never carry a whole-body skeleton.
+	prompt = detSkeletonFor(ctx, opts, prompt, ctrlFile, u.Name, detControllerLanded)
 	rej := ""
 	accepted, chatCalls, notes, err := llm.RunSeam(ctx, llm.SeamInput{
 		Unit: u.ID, Kind: string(u.Kind), Name: u.Name,
@@ -723,7 +728,7 @@ OUTPUT: bare Go statements only — no package/imports/func wrapper/helpers/type
 SIGNATURE (fixed, verbatim): c context.Context, request *models.X, named returns data and err. Never req/resp/Response. Never shadow data/err with :=.
 HEADER: a leading else-if header is the method's own condition — never emit it or a leading }. Start at the first statement under it.
 INPUTS: request.<Field> exactly as defined — the only input source.
-STORE: every s.store.* call appears exactly once, exact params/order, results captured to locals; s.<Name>(...) calls are generated helpers — call as shown. No other s.* calls. Never SQL.
+STORE: every s.store.* call appears exactly once, exact params/order, results captured to locals — or _ = name // tuxgo:TODO when unmappable; s.<Name>(...) calls are generated helpers — call as shown. No other s.* calls. Never SQL.
 FIELDS: verbatim struct/row names (CToDateString is not CToDate + String); sql.NullString via its .String field.
 LITERALS (Go only): "Y" never 'Y'; 0 never '\0'; == never =.
 ERRORS: after every err-returning call: if err != nil { return nil, err }. Every path ends return data, err / return nil, err. A variable error message uses errors.New(msg) — fmt.Errorf takes a constant format string, never a variable.
@@ -746,14 +751,14 @@ Rules:
 - On a store error, follow the legacy failure path: set out-params to zero values when the legacy did, then return the legacy failure status (-1).
 - When the legacy logged an error code (S followed by digits) before failing, set the error-message out-param (when present) to a string containing that code; otherwise keep the code in a comment.
 - Legacy tpcall sites have no outbound Go convention here — leave a // tuxgo:TODO tpcall comment at the site and return the legacy failure status.
-- String comparisons use double-quoted literals: flag == "Y", never 'Y'. No logging statements. Every declared local is used. The method already ends with the legacy return — never fall off the end.`
+- String comparisons use double-quoted literals: flag == "Y", never 'Y'. No logging statements. Every declared local is used. A store result you cannot otherwise use stays kept as _ = name with a // tuxgo:TODO comment noting its role — never dropped, never left unused. The method already ends with the legacy return — never fall off the end.`
 
 // fnHelperBody assembles one fn-library helper's prompt (fn-lib mode): the
 // fn's source slice with its SQL regions replaced by store calls — the
 // same no-raw-SQL contract the branch path enforces — plus the DB
 // signatures, the legacy error codes, and the stub list; then runs the LLM
 // seam with the parse/name/required-call gates.
-func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Service, u plan.Unit, dbBodies map[string]dbOut) (body, rejected, prompt string, err error) {
+func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Service, u plan.Unit, dbBodies map[string]dbOut, fnFile string) (body, rejected, prompt string, err error) {
 	h, ok := fnHelperOf(opts.Plan, u.Name)
 	if !ok {
 		return "", "", "", fmt.Errorf("convert: no fn record for helper %s", u.Name)
@@ -832,6 +837,8 @@ func fnHelperBody(ctx context.Context, opts Options, res *Result, svc *gen.Servi
 	prompt = buildFnPrompt(h, structName, view.Source,
 		dbSignaturesFor(opts.Plan, dbBodies, methods), svc.FnRowContracts(opts.Plan, u.QueryIDs),
 		fnErrorCodes(view.Source), legacyHelpers(opts.Plan, view.Source), opts.Plan.Stubs)
+	// Upgrade resume: same repair baseline as the controller seam.
+	prompt = detSkeletonFor(ctx, opts, prompt, fnFile, u.Name, detFnHelperLanded)
 	rej := ""
 	accepted, chatCalls, notes, err := llm.RunSeam(ctx, llm.SeamInput{
 		Unit: u.ID, Kind: string(u.Kind), Name: u.Name,
