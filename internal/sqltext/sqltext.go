@@ -1,9 +1,10 @@
 // Package sqltext carries the Pro*C SQL text transforms shared by every
 // emitter (Go, Python, C#): the SELECT host-variable INTO list is stripped
 // (the IR's RowShape carries the targets; the emitted query must be
-// executable SQL) and `: name` bind spellings collapse to `:name` (Pro*C
-// tolerates the space, oracledb named binds do not). CanonicalSQL is the one
-// home for the executable-SQL derivation — backends must call it instead of
+// executable SQL), `: name` bind spellings collapse to `:name` (Pro*C
+// tolerates the space, oracledb named binds do not) and the statement is
+// pretty-printed by Format. CanonicalSQL is the one home for the
+// executable-SQL derivation — backends must call it instead of
 // reimplementing INTO-stripping locally.
 package sqltext
 
@@ -80,15 +81,16 @@ func CollapseBinds(sql string) string {
 // CanonicalSQL renders executable SQL for code generation: SELECT
 // host-variable INTO lists are stripped, `: name` collapses to `:name`,
 // surrounding whitespace is trimmed and one trailing statement semicolon is
-// removed (the host language syntax carries its own terminator). It is
-// idempotent and safe for every statement kind: non-SELECT INTO clauses
-// (INSERT INTO t) are untouched by StripInto, so DML passes through except
-// for bind collapsing and semicolon trimming.
+// removed (the host language syntax carries its own terminator). The result
+// is then pretty-printed by Format, the shared indent layout every backend
+// embeds. It is idempotent and safe for every statement kind: non-SELECT
+// INTO clauses (INSERT INTO t) are untouched by StripInto, so DML passes
+// through except for bind collapsing, semicolon trimming and formatting.
 func CanonicalSQL(sql string) string {
 	s := CollapseBinds(StripInto(sql))
 	s = strings.TrimSpace(s)
 	s = strings.TrimSuffix(s, ";")
-	return strings.TrimSpace(s)
+	return Format(strings.TrimSpace(s))
 }
 
 // ExecutableBinds returns the unique bind names of executable SQL in textual

@@ -20,19 +20,42 @@ CHUNK_SIZE = 1000
 # =====================================================================
 
 SELECT_DEMO_TI_REJECT_QUERY = """
-SELECT DEMO_TI_FORM_NO FROM DEMO_TI_ORDERS WHERE DEMO_TI_STATUS='A' AND (trunc(SYSDATE) - trunc(DEMO_TI_ORDER_DATE)) > 60
+SELECT
+    DEMO_TI_FORM_NO
+FROM DEMO_TI_ORDERS
+WHERE DEMO_TI_STATUS='A'
+    AND (trunc(SYSDATE) - trunc(DEMO_TI_ORDER_DATE)) > 60
 """
 
 UPDATE_DEMO_TI_REJECT_QUERY = """
-UPDATE DEMO_TI_ORDERS SET DEMO_TI_STATUS = 'X', DEMO_TI_REJ_REM = 'Demo rejection remark for the synthetic corpus', DEMO_TI_REJ_DATE = sysdate, DEMO_TI_STTS_CHG_DT = sysdate, DEMO_TI_UPDT_CNT = 1 WHERE DEMO_TI_FORM_NO = :sql_demo_ti_form_no AND DEMO_TI_STATUS = 'A'
+UPDATE DEMO_TI_ORDERS
+SET DEMO_TI_STATUS = 'X', DEMO_TI_REJ_REM = 'Demo rejection remark for the synthetic corpus', DEMO_TI_REJ_DATE = sysdate, DEMO_TI_STTS_CHG_DT = sysdate, DEMO_TI_UPDT_CNT = 1
+WHERE DEMO_TI_FORM_NO = :sql_demo_ti_form_no
+    AND DEMO_TI_STATUS = 'A'
 """
 
 SELECT_DEMO_FOLIO_EXP_QUERY = """
-SELECT a.dfc_match_acc, a.dfc_comp_cd, nvl(a.dfc_sch_cd, 'N'), a.DFC_SOURCE_FOLIO, a.DFC_TARGET_FOLIO FROM demo_folio_rqst a WHERE NOT EXISTS (SELECT 'x' FROM demo_folio_rqst_mkcrkr b WHERE a.DFC_MATCH_ACC=b.dfc_match_acc AND a.DFC_COMP_CD=b.dfc_comp_cd AND nvl(a.dfc_sch_cd,'N')=nvl(b.dfc_sch_cd,'N') AND a.DFC_SOURCE_FOLIO=b.DFC_SOURCE_FOLIO AND a.DFC_TARGET_FOLIO= b.DFC_TARGET_FOLIO AND a.DFC_PROCESS_FLAG = 'N' ) AND a.DFC_PROCESS_FLAG = 'N' AND (trunc(SYSDATE) - trunc(a.DFC_INSERT_DATE)) > 90
+SELECT
+    a.dfc_match_acc,
+    a.dfc_comp_cd,
+    nvl(a.dfc_sch_cd, 'N'),
+    a.DFC_SOURCE_FOLIO,
+    a.DFC_TARGET_FOLIO
+FROM demo_folio_rqst a
+WHERE NOT EXISTS (SELECT 'x' FROM demo_folio_rqst_mkcrkr b WHERE a.DFC_MATCH_ACC=b.dfc_match_acc AND a.DFC_COMP_CD=b.dfc_comp_cd AND nvl(a.dfc_sch_cd,'N')=nvl(b.dfc_sch_cd,'N') AND a.DFC_SOURCE_FOLIO=b.DFC_SOURCE_FOLIO AND a.DFC_TARGET_FOLIO= b.DFC_TARGET_FOLIO AND a.DFC_PROCESS_FLAG = 'N')
+    AND a.DFC_PROCESS_FLAG = 'N'
+    AND (trunc(SYSDATE) - trunc(a.DFC_INSERT_DATE)) > 90
 """
 
 UPDATE_DEMO_FOLIO_EXP_QUERY = """
-UPDATE demo_folio_rqst SET DFC_PROCESS_FLAG = 'X', DFC_UPDATE_DT = sysdate WHERE DFC_MATCH_ACC = :sql_dfc_match_acc AND DFC_COMP_CD = :sql_dfc_comp_cd AND NVL(DFC_SCH_CD,'N') = :sql_dfc_sch_cd AND DFC_SOURCE_FOLIO = :sql_dfc_source_folio AND DFC_TARGET_FOLIO = :sql_dfc_target_folio AND DFC_PROCESS_FLAG = 'N'
+UPDATE demo_folio_rqst
+SET DFC_PROCESS_FLAG = 'X', DFC_UPDATE_DT = sysdate
+WHERE DFC_MATCH_ACC = :sql_dfc_match_acc
+    AND DFC_COMP_CD = :sql_dfc_comp_cd
+    AND NVL(DFC_SCH_CD,'N') = :sql_dfc_sch_cd
+    AND DFC_SOURCE_FOLIO = :sql_dfc_source_folio
+    AND DFC_TARGET_FOLIO = :sql_dfc_target_folio
+    AND DFC_PROCESS_FLAG = 'N'
 """
 
 # =====================================================================

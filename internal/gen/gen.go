@@ -554,6 +554,7 @@ func (s *Service) DBMethod(u plan.Unit) (body, signature string, needsSQL bool, 
 			sql = sqltext.InjectAliases(sql, aliases)
 		}
 	}
+	sql = sqltext.Format(sql)
 	d := templates.DBMethodData{
 		Receiver:  "g",
 		StoreType: "store",

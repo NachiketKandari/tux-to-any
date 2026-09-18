@@ -9,11 +9,31 @@ func TestCanonicalSQL(t *testing.T) {
 	cases := []struct {
 		name, in, want string
 	}{
-		{"select into stripped", "select a, b into :h1, :h2 from t where x = :x", "select a, b from t where x = :x"},
-		{"spaced binds collapse", "SELECT A INTO : h FROM T WHERE A = : bind_a;", "SELECT A FROM T WHERE A = :bind_a"},
-		{"insert into kept", "insert into t (a) values (:a);", "insert into t (a) values (:a)"},
-		{"semicolon trimmed", "select a from t;", "select a from t"},
-		{"idempotent", "select a from t where x = :x", "select a from t where x = :x"},
+		{
+			"select into stripped",
+			"select a, b into :h1, :h2 from t where x = :x",
+			"select\n    a,\n    b\nfrom t\nwhere x = :x",
+		},
+		{
+			"spaced binds collapse",
+			"SELECT A INTO : h FROM T WHERE A = : bind_a;",
+			"SELECT\n    A\nFROM T\nWHERE A = :bind_a",
+		},
+		{
+			"insert into kept",
+			"insert into t (a) values (:a);",
+			"insert into t (a)\nvalues (:a)",
+		},
+		{
+			"semicolon trimmed",
+			"select a from t;",
+			"select\n    a\nfrom t",
+		},
+		{
+			"idempotent",
+			"select a from t where x = :x",
+			"select\n    a\nfrom t\nwhere x = :x",
+		},
 	}
 	for _, c := range cases {
 		if got := CanonicalSQL(c.in); got != c.want {

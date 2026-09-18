@@ -26,4 +26,9 @@ func TestDBMethodsSQLDropsInto(t *testing.T) {
 	if !strings.Contains(file, "GetContext(c, &dateInfo, query)") {
 		t.Error("db methods file lost the GetContext scan call")
 	}
+	// The db render site pretty-prints through sqltext.Format: the query is
+	// multi-line with the FROM clause on its own line.
+	if !strings.Contains(file, "\nfrom dual") {
+		t.Error("db methods file lost the formatted multi-line SQL layout")
+	}
 }
