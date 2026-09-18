@@ -218,7 +218,7 @@ func (s *Service) ControllerPromptContext(endpoint string, p *plan.Plan, storeMe
 		if rows[row] {
 			continue
 		}
-		fields, err := s.rowFields(q)
+		fields, err := s.rowFields(u.QueryIDs[0], q)
 		if err != nil {
 			return "", err
 		}
@@ -431,7 +431,7 @@ func responseShaping(s *Service, c *ir.Condition, p *plan.Plan, endpoint string,
 			continue
 		}
 		row := s.RowName(u.QueryIDs[0], u.Name)
-		fields, err := s.rowFields(q)
+		fields, err := s.rowFields(u.QueryIDs[0], q)
 		if err != nil || len(respFields) == 0 {
 			continue
 		}

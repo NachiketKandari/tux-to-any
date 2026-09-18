@@ -199,9 +199,15 @@ func (s *Service) FnRowContracts(p *plan.Plan, queryIDs []string) string {
 			continue
 		}
 		canon := orig
+		canonKey := id
 		if orig.DuplicateOf != "" {
-			canon = s.Query(orig.DuplicateOf)
-			if canon == nil {
+			canonKey = canonicalAliasID(id, orig)
+			if cq := s.Query(canonKey); cq != nil {
+				canon = cq
+			} else if cq := s.Query(orig.DuplicateOf); cq != nil {
+				canon = cq
+				canonKey = orig.DuplicateOf
+			} else {
 				continue
 			}
 		}
@@ -209,7 +215,7 @@ func (s *Service) FnRowContracts(p *plan.Plan, queryIDs []string) string {
 		if (q.Type != ir.QuerySelectSingle && q.Type != ir.QuerySelectMulti) || isCountQuery(q) {
 			continue
 		}
-		fields, err := s.rowFields(q)
+		fields, err := s.rowFields(canonKey, q)
 		if err != nil {
 			continue // the db-method renderer owns the loud failure
 		}
@@ -228,13 +234,17 @@ func (s *Service) FnRowContracts(p *plan.Plan, queryIDs []string) string {
 }
 
 // rowFields derives the row struct's fields from the FETCH-INTO host vars.
-// The db tag is the SELECT alias when the source SQL carries one
-// (`Query.Aliases`, position-aligned); otherwise the Pro*C table-header
-// convention names host vars after their columns (`sql_demo_comp_cd` →
-// DEMO_COMP_CD), which is exactly what Oracle returns for unaliased
-// selects — so the tag is the uppercased, sql_-stripped host var.
+// The db tag is the sanctioned computed-column alias when the select item at
+// the same position is computed (columnAliases — what Oracle returns for the
+// aliased column); otherwise the Pro*C table-header convention names host
+// vars after their columns (`sql_demo_comp_cd` → DEMO_COMP_CD), which is
+// exactly what Oracle returns for unaliased bare-column selects — so the tag
+// is the uppercased, sql_-stripped host var. Go field Names stay
+// host-var-derived in both cases, so staged controllers (row.StrDesc.String)
+// and testgen's field inventory stay byte-stable; only the db tag changes.
 // Field formats are uniformly sql.NullString.
-func (s *Service) rowFields(q *ir.Query) ([]templates.FieldSpec, error) {
+func (s *Service) rowFields(queryKey string, q *ir.Query) ([]templates.FieldSpec, error) {
+	aliases, _ := s.columnAliases(queryKey, q)
 	fields := make([]templates.FieldSpec, 0, len(q.RowShape))
 	for i, hvName := range q.RowShape {
 		// Pro*C host vars arrive qualified and indicator-annotated
@@ -247,10 +257,9 @@ func (s *Service) rowFields(q *ir.Query) ([]templates.FieldSpec, error) {
 			hvName = hvName[:j]
 		}
 		spec := templates.FieldSpec{}
-		if i < len(q.Aliases) {
-			alias := q.Aliases[i]
+		if alias, ok := aliases[i]; ok {
 			spec.DBTag = alias
-			spec.Name = common.Export(common.CamelLowerGo(strings.ToLower(alias)))
+			spec.Name = common.Export(common.CamelLowerGo(strings.TrimPrefix(hvName, "sql_")))
 		} else {
 			spec.DBTag = strings.ToUpper(strings.TrimPrefix(hvName, "sql_"))
 			spec.Name = common.Export(common.CamelLowerGo(strings.TrimPrefix(hvName, "sql_")))
@@ -332,7 +341,7 @@ func (s *Service) ModelFile(p *plan.Plan) (string, error) {
 	rowSig := map[string]string{}
 	rowOwner := map[string]string{}
 	addRow := func(u plan.Unit, q *ir.Query, hard bool) error {
-		fields, err := s.rowFields(q)
+		fields, err := s.rowFields(u.QueryIDs[0], q)
 		if err != nil {
 			if hard {
 				// Host vars declared in Pro*C table headers may leave the
@@ -533,6 +542,18 @@ func (s *Service) DBMethod(u plan.Unit) (body, signature string, needsSQL bool, 
 		sql = sqltext.StripInto(sql)
 	}
 	sql = sqltext.CollapseBinds(sql)
+	// Deterministic computed-column aliases (sanctioned `AS` per computed
+	// select item): Oracle names unaliased computed columns by their
+	// expression text, so the row scan needs the alias — and the row
+	// struct's db tag carries the same name (rowFields). Alignment-guarded
+	// inside columnAliases (positional INTO): a mismatch skips injection
+	// loudly via AliasReport, never silently.
+	if aliases, _ := s.columnAliases(u.QueryIDs[0], q); len(aliases) > 0 {
+		switch q.Type {
+		case ir.QuerySelectSingle, ir.QuerySelectMulti:
+			sql = sqltext.InjectAliases(sql, aliases)
+		}
+	}
 	d := templates.DBMethodData{
 		Receiver:  "g",
 		StoreType: "store",

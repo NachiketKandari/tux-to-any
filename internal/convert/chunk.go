@@ -9,6 +9,7 @@ import (
 
 	"tux-to-any/internal/budget"
 	"tux-to-any/internal/common"
+	"tux-to-any/internal/flow"
 	"tux-to-any/internal/gen"
 	"tux-to-any/internal/goast"
 	"tux-to-any/internal/ir"
@@ -99,6 +100,11 @@ type chunkCtx struct {
 	axisVar string // dispatch axis variable (arm-wrapper repair; "" = no scenario)
 	prompt  string // the full single-call prompt (base-scaffold accounting)
 	calls   map[string]budget.DBCall
+	// census is the Workstream B transparency census for the endpoint's
+	// condition span (nil when the flow draft is off — scenario slices and
+	// draft-off runs). The combined gate requires it; per-fragment gates
+	// stay census-free (fragments are partial by construction).
+	census []flow.CensusCond
 }
 
 // systemPromptFragment is the fragment-framed system prompt: the same rules
@@ -606,8 +612,12 @@ func controllerBodyChunked(cx chunkCtx) (string, string, error) {
 	parseErrs := validateBody(opts, combined)
 	reqErrs := requiredCallErrs(cx.view.Source, combined, receiver)
 	txErrs := txGateErrs(combined, cx.calls)
+	condErrs := emptyIfErrs(combined)
+	if len(cx.census) > 0 {
+		condErrs = append(condErrs, conditionPresenceErrs(cx.census, combined)...)
+	}
 	repaired := false
-	if len(parseErrs) == 0 && len(reqErrs) == 0 && len(txErrs) > 0 && cx.opts.TxWrap {
+	if len(parseErrs) == 0 && len(reqErrs) == 0 && len(condErrs) == 0 && len(txErrs) > 0 && cx.opts.TxWrap {
 		// Deterministic tx-wrap repair: the systematic stitch gap —
 		// fragments omit the ExecTransaction wrapper the combined gate
 		// demands. Repair-only on would-fail output; re-gated below and
@@ -618,6 +628,10 @@ func controllerBodyChunked(cx chunkCtx) (string, string, error) {
 			rerrs = append(rerrs, requiredCallErrs(cx.view.Source, fixed, receiver)...)
 			rerrs = append(rerrs, controllerTuxedoErrs(fixed)...)
 			rerrs = append(rerrs, txGateErrs(fixed, cx.calls)...)
+			rerrs = append(rerrs, emptyIfErrs(fixed)...)
+			if len(cx.census) > 0 {
+				rerrs = append(rerrs, conditionPresenceErrs(cx.census, fixed)...)
+			}
 			if len(rerrs) == 0 {
 				telemetry.Log(cx.ctx).Info("tx-wrap repair stitched fragments",
 					"unit", cx.unit.Name, "fragments", n)
@@ -631,6 +645,7 @@ func controllerBodyChunked(cx chunkCtx) (string, string, error) {
 	fullErrs = append(fullErrs, parseErrs...)
 	fullErrs = append(fullErrs, reqErrs...)
 	fullErrs = append(fullErrs, txErrs...)
+	fullErrs = append(fullErrs, condErrs...)
 	if len(fullErrs) > 0 {
 		// Combined-body repair: the fragments passed their own gates but the
 		// stitch still breaks the full contract (an undefined name across
@@ -721,7 +736,12 @@ func composeFragments(cx chunkCtx, contract, fullSigs string, bodies []string) (
 			verr := validateBody(opts, body)
 			verr = append(verr, requiredCallErrs(cx.view.Source, body, receiver)...)
 			verr = append(verr, controllerTuxedoErrs(body)...)
-			return append(verr, txGateErrs(body, cx.calls)...)
+			verr = append(verr, txGateErrs(body, cx.calls)...)
+			verr = append(verr, emptyIfErrs(body)...)
+			if len(cx.census) > 0 {
+				verr = append(verr, conditionPresenceErrs(cx.census, body)...)
+			}
+			return verr
 		},
 	})
 	opts.Ledger.Get(cx.unit.ID, string(cx.unit.Kind), cx.unit.Name).Attempts += chatCalls
@@ -775,7 +795,12 @@ func repairCombinedBody(cx chunkCtx, contract, fullSigs, body string, errs []str
 			verr := validateBody(opts, b)
 			verr = append(verr, requiredCallErrs(cx.view.Source, b, receiver)...)
 			verr = append(verr, controllerTuxedoErrs(b)...)
-			return append(verr, txGateErrs(b, cx.calls)...)
+			verr = append(verr, txGateErrs(b, cx.calls)...)
+			verr = append(verr, emptyIfErrs(b)...)
+			if len(cx.census) > 0 {
+				verr = append(verr, conditionPresenceErrs(cx.census, b)...)
+			}
+			return verr
 		},
 		Rejected: func(payload string) { rej = payload },
 	})

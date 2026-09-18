@@ -53,6 +53,10 @@ func TestCompareFidelity(t *testing.T) {
 			"UPDATE T SET A = :y, B = :x WHERE ID = :z", false, DevBinds},
 		{"insert column changed", "INSERT INTO T (A, B) VALUES (:1, :2)",
 			"INSERT INTO T (A, C) VALUES (:1, :2)", false, DevValues},
+		{"sanctioned computed aliases", "SELECT MF_NAV_COMP_CD, NVL(MF_NAV_NAV, 0), TO_CHAR(MF_NAV_DATE, 'dd-mm-yyyy'), DECODE(NVL(MF_SCH_FREED_TYPE,''), 'I', 'X', '-') FROM MF_NAVS",
+			"SELECT MF_NAV_COMP_CD, NVL(MF_NAV_NAV, 0) AS TUXC_M_Q_2, TO_CHAR(MF_NAV_DATE, 'dd-mm-yyyy') AS TUXC_M_Q_3, DECODE(NVL(MF_SCH_FREED_TYPE,''), 'I', 'X', '-') AS TUXC_M_Q_4 FROM MF_NAVS", true, ""},
+		{"dual computed aliases", "select date('01-'||to_char(sysdate-90,'MM')||'-'||to_char(sysdate-90,'YYYY'),'dd-mm-yyyy'),sysdate from dual",
+			"select date('01-'||to_char(sysdate-90,'MM')||'-'||to_char(sysdate-90,'YYYY'),'dd-mm-yyyy') AS TUXC_M_Q_1,sysdate AS TUXC_M_Q_2 from dual", true, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

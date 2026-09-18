@@ -323,8 +323,8 @@ func convertOneService(ctx context.Context, w *convertWiring, main *ir.File, fil
 // single-service and fan-out mode.
 func printServiceSummary(w io.Writer, service string, res *convert.Result, led *ledger.Ledger, base, degrade string) {
 	appended, failed, _, skipped, placeholders, deviated := led.Counts()
-	fmt.Fprintf(w, "%s: %d files written under %s — units: %d appended, %d failed, %d skipped, %d placeholders, %d stubbed fns, %d sql deviations, %d llm calls\n",
-		service, len(res.Files), base, appended, failed, skipped, placeholders, len(res.Stubs), deviated, res.LLMCalls)
+	fmt.Fprintf(w, "%s: %d files written under %s — units: %d appended, %d failed, %d skipped, %d placeholders, %d stubbed fns, %d sql deviations, %d llm calls, %d aliased columns, %d condition gaps\n",
+		service, len(res.Files), base, appended, failed, skipped, placeholders, len(res.Stubs), deviated, res.LLMCalls, res.AliasedColumns, len(res.ConditionGaps))
 	if degrade != "" {
 		fmt.Fprintln(w, "  note:", degrade)
 	}
@@ -347,6 +347,9 @@ func printServiceSummary(w io.Writer, service string, res *convert.Result, led *
 	}
 	for _, d := range res.SQLDeviations {
 		fmt.Fprintln(w, "  sql deviation:", d)
+	}
+	for _, g := range res.ConditionGaps {
+		fmt.Fprintln(w, "  condition gap:", g)
 	}
 	for _, st := range res.Stubs {
 		fmt.Fprintln(w, "  stubbed fn (panics until implemented):", st)

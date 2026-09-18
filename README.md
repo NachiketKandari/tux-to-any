@@ -336,12 +336,17 @@ logged (`key_source=unresolved`), never a hard failure.
 
 What is deterministic (zero LLM calls) in every mode: the entire parse stack
 (scan → IR), query classification, plan decomposition, models, db methods,
-interfaces, handler glue, router, and the SQL-fidelity checks. The LLM fills
+interfaces, handler glue, router, and the SQL-fidelity checks. Computed
+select items (`NVL`, `TO_CHAR`, `DECODE`, …) render with sanctioned
+`AS TUXC_…` aliases in db methods and the same names in the row structs'
+db tags — Oracle names unaliased computed columns by their expression text,
+so the scan needs the alias; the fidelity check strips aliases on both
+sides, so 0 deviations still means fidelity. The LLM fills
 exactly one template-shaped gap per unit — and only in LLM mode:
 
 | Command | The LLM seam | `-no-llm` degradation |
 |---|---|---|
-| `convert` | controller body per endpoint (from the query-replaced branch view + flow draft — never raw SQL) | body marked `skipped` in the ledger; an LLM-enabled re-run resumes exactly those |
+| `convert` | controller body per endpoint (from the query-replaced branch view + flow draft — never raw SQL; the draft doubles as a condition census the gates enforce — every legacy branch condition and its assigned effects must appear, empty `if {}` rejects unconditionally, misses retry with a line-targeted note and fail the unit loudly on exhaustion) | body marked `skipped` in the ledger; an LLM-enabled re-run resumes exactly those |
 | `convert` | one stub-synthesis attempt per unresolved external fn (call-site lines + inferred in/out signature shown; pure helpers land as idiomatic Go, declines keep the panicking stub) | all stubs stay panicking; synthesis runs first-run-only, a resume never re-calls |
 | `batchpy` | stateful-batch service body | `# tuxgo:TODO service body` placeholder (simple shape is 100% deterministic either way) |
 | `convertcs` | residual arm logic per endpoint (from the query-replaced arm view — never raw SQL); ledger resume never re-generates filled bodies | `tuxgo:TODO` residual-block placeholder, kept on seam exhaustion |
@@ -427,7 +432,11 @@ go run ./cmd/tuxconv convertgo <dir>/<entry>.pc -no-llm   # consumes the mapping
 send **derived** content only (query-replaced views, struct contracts); for
 zero external egress run `-no-llm` or keep the on-prem `onprem-vllm` profile.
 Every LLM exchange is archived with its assembled prompt and raw response in
-`conversion_logs/audit/<run-id>/` (`<seam>-<name>-attempt<n>.json`).
+`conversion_logs/audit/<run-id>/` (`<seam>-<name>-attempt<n>.json`), plus
+the deterministic trails: `sql-aliases.json` (computed-column item → alias
+per db method) and `condition-census-<Unit>.json` (the flow-draft condition
+census per controller endpoint plus any gap notes; written only when the
+draft seam is on).
 
 Logging and artifacts (every run):
 

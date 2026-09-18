@@ -108,6 +108,13 @@ type Result struct {
 	// Warnings carries the plan's arm-coverage advisories (advisory, the
 	// run never fails on them).
 	Warnings []string
+	// AliasedColumns counts the sanctioned computed-column `AS` aliases
+	// injected across the run's db methods (Workstream A observability).
+	AliasedColumns int
+	// ConditionGaps lists the Workstream B transparency findings: units
+	// whose accepted-or-failed bodies dropped a legacy condition after the
+	// retry budget. A gap after retries fails its unit loudly.
+	ConditionGaps []string
 }
 
 // fileArtifact is one deterministic whole-file output: the plan unit it
@@ -262,6 +269,17 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			opts.Ledger.Set(u.ID, ledger.StatusAppended, "", relPath(opts.BaseDir, dbFilePath))
 		}
 		checkDBFidelity(ctx, opts, res, svc, dbFilePath, dbUnits)
+		// Deterministic computed-column aliases (Workstream A
+		// observability): the count rides the run summary, alignment
+		// skips ride the warnings, and the item → alias trail rides the
+		// sql-aliases.json audit record (never write-only).
+		if n, warns, trail := svc.AliasReport(opts.Plan); len(trail) > 0 || len(warns) > 0 {
+			res.AliasedColumns += n
+			res.Warnings = append(res.Warnings, warns...)
+			if len(trail) > 0 {
+				writeAuditJSON(ctx, opts, "sql-aliases.json", trail)
+			}
+		}
 
 		ifacePath, err := opts.absPath(opts.BaseDir, svc.Mapping.ImportPath("db")+"/interface.go")
 		if err != nil {
@@ -466,6 +484,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	scen := (*scenPrompt)(nil)
 	axisVar := ""
 	draft := ""
+	var census []flow.CensusCond
 	if sr != nil {
 		if sc := svc.ScenarioOf(u.Name); sc != nil {
 			view, err = scenarioView(opts, svc, sc, sr.tree, calls)
@@ -485,7 +504,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 			return "", "", "", fmt.Errorf("convert: query replacement for %s: %w", u.Name, err)
 		}
 		if opts.FlowDraft {
-			draft = flowDraft(opts, svc, c)
+			draft, census = flowDraft(opts, svc, c)
 		}
 	}
 	// Dead commented-out code never reaches the model: the ver-2.2 D2U
@@ -601,10 +620,14 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		body, chunkRej, cerr := controllerBodyChunked(chunkCtx{
 			ctx: ctx, opts: opts, res: res, svc: svc, unit: u, db: dbBodies,
 			cond: c, view: view, scen: scen, axisVar: axisVar, prompt: prompt, calls: calls,
+			census: census,
 		})
 		if cerr != nil {
+			writeConditionCensusAudit(ctx, opts, u, census, []string{cerr.Error()})
+			recordConditionGaps(res, u, []string{cerr.Error()})
 			return "", chunkRej, prompt, cerr
 		}
+		writeConditionCensusAudit(ctx, opts, u, census, nil)
 		return body, "", prompt, nil
 	}
 	rej := ""
@@ -623,7 +646,15 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 			verr := validateBody(opts, body)
 			verr = append(verr, requiredCallErrs(view.Source, body, receiverOf(opts))...)
 			verr = append(verr, controllerTuxedoErrs(body)...)
-			return append(verr, txGateErrs(body, calls)...)
+			verr = append(verr, txGateErrs(body, calls)...)
+			// Condition transparency (Workstream B): the empty-if reject
+			// is unconditional; the census gate runs only when the flow
+			// draft is non-empty (additive/never-fatal degrade contract).
+			verr = append(verr, emptyIfErrs(body)...)
+			if draft != "" {
+				verr = append(verr, conditionPresenceErrs(census, body)...)
+			}
+			return verr
 		},
 		Rejected: func(payload string) { rej = payload },
 	})
@@ -635,8 +666,11 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 			// ceiling — a wiring problem, not a validation failure.
 			return "", rej, prompt, fmt.Errorf("convert: %w — trim the mapping or raise run.maxPromptTokens", err)
 		}
+		writeConditionCensusAudit(ctx, opts, u, census, notes)
+		recordConditionGaps(res, u, notes)
 		return "", rej, prompt, fmt.Errorf("validation failed after %d attempts: %s", chatCalls, strings.Join(notes, "; "))
 	}
+	writeConditionCensusAudit(ctx, opts, u, census, nil)
 	opts.Ledger.Set(u.ID, ledger.StatusValidated, "")
 	return accepted, "", prompt, nil
 }
@@ -1047,22 +1081,24 @@ func deriveFnImports(text, dbPkg, modelsPkg string) []string {
 
 // flowDraft renders the deterministic transpilation draft for one endpoint's
 // condition slice (PRD-2026-09-10 FLW-D7): the entry function's flow tree
-// span-limited to the condition, with plan-backed store calls. Any failure
-// degrades to an empty draft — the seam is additive, never fatal.
-func flowDraft(opts Options, svc *gen.Service, c *ir.Condition) string {
+// span-limited to the condition, with plan-backed store calls — plus the
+// transparency census collected on the same walk (zero divergence). Any
+// failure degrades to an empty draft with no census — the seam is additive,
+// never fatal.
+func flowDraft(opts Options, svc *gen.Service, c *ir.Condition) (string, []flow.CensusCond) {
 	if opts.Main == nil || opts.Source == "" {
-		return ""
+		return "", nil
 	}
 	tree := flowTreeOf(opts.Source, opts.Main)
 	if len(tree.Root) == 0 {
-		return ""
+		return "", nil
 	}
 	_, calls, err := svc.BranchCalls(c, opts.Plan)
 	if err != nil {
 		calls = nil // placeholder store calls, never a run failure
 	}
 	out := flow.RenderSpan(tree, planResolver{svc: svc, calls: calls}, c.StartLine, c.EndLine, 2)
-	return strings.TrimRight(out.Body, "\n")
+	return strings.TrimRight(out.Body, "\n"), out.Conditions
 }
 
 // flowTreeOf re-derives the entry function's flow tree via the shared

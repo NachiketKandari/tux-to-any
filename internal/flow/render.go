@@ -22,10 +22,14 @@ type Resolver interface {
 // Render is the deterministic transpilation draft: a conservative Go
 // skeleton with explicit TODO residue. Elided counts dropped Tuxedo
 // constructs; TODOs list the gaps the AI-enhance step must fill.
+// Conditions is the transparency census: every legacy if/elseif the draft
+// walk renders (after the same elisions), so the seam gate can require the
+// LLM body to carry each condition and its effects.
 type Render struct {
-	Body   string
-	Elided int
-	TODOs  []string
+	Body       string
+	Elided     int
+	TODOs      []string
+	Conditions []CensusCond
 }
 
 // droppedCallees are Tuxedo/FML buffer-management, Pro*C helper, and
@@ -47,15 +51,17 @@ func RenderSpan(tree *Tree, res Resolver, from, to, indent int) Render {
 	if r.elided > 0 {
 		r.linef("// %d C declarations/buffer-management/logging constructs elided", r.elided)
 	}
-	return Render{Body: r.sb.String(), Elided: r.elided, TODOs: r.todos}
+	return Render{Body: r.sb.String(), Elided: r.elided, TODOs: r.todos, Conditions: r.conds}
 }
 
 type renderer struct {
-	res    Resolver
-	sb     strings.Builder
-	indent int
-	elided int
-	todos  []string
+	res        Resolver
+	sb         strings.Builder
+	indent     int
+	elided     int
+	todos      []string
+	conds      []CensusCond
+	fetchDepth int
 }
 
 func (r *renderer) linef(format string, args ...any) {
@@ -110,6 +116,21 @@ func (r *renderer) branch(n *Node, from, to int, chainNext bool) {
 	if isDebugIf(n) {
 		r.elided++
 		return
+	}
+	// Transparency census: collected on the same walk that emits the
+	// headers, after the same elisions — zero divergence risk with the
+	// draft. Plumbing predicates filter here (Go error handling owns
+	// them); non-transpilable call conditions still census (the TODO
+	// carries them, the LLM must implement the branch).
+	if n.Sub != "else" && !censusSkipped(n, r.fetchDepth) {
+		r.conds = append(r.conds, CensusCond{
+			Line:     n.Line,
+			Cond:     n.Cond,
+			Skeleton: Skeleton(n.Predicate),
+			Idents:   ExprIdents(n.Predicate),
+			Effects:  censusEffects(n.Children),
+			HasElse:  chainNext,
+		})
 	}
 	switch n.Sub {
 	case "else":
@@ -176,12 +197,14 @@ func (r *renderer) loop(n *Node) {
 		r.linef("\treturn nil, err")
 		r.linef("}")
 		r.linef("for _, row := range rows { // []%s", row)
+		r.fetchDepth++
 		for _, c := range n.Children {
 			if c.Kind == KindSQL || (c.Kind == KindBranch && strings.Contains(c.Cond, "SQLCODE")) {
 				continue // consumed by the fetch-then-iterate shape
 			}
 			r.node(c, 0, 1<<30, false)
 		}
+		r.fetchDepth--
 		r.linef("}")
 		return
 	}

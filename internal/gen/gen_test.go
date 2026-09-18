@@ -87,6 +87,11 @@ func TestModelFileRowNameCollision(t *testing.T) {
 	// Identical shapes share one struct declaration.
 	hist, list := s.Query("cur_demo_hist"), s.Query("cur_demo_list")
 	list.RowShape = append([]string(nil), hist.RowShape...)
+	// Computed-column aliases derive from the SELECT text and the canonical
+	// query ID as well as the row shape — copy all three so the shapes are
+	// truly identical under the alias-aware fingerprint.
+	list.SQL = hist.SQL
+	list.DuplicateOf = hist.ID
 	listPin := s.Mapping.DBMethods["cur_demo_list"]
 	listPin.Row = "NavHistoryDetail"
 	s.Mapping.DBMethods["cur_demo_list"] = listPin
@@ -114,9 +119,9 @@ func TestGenModels(t *testing.T) {
 		// gofmt column-aligns struct tags, so name and tag are asserted apart.
 		"DemoCompCd", "DemoSchemeDesc", "db:\"DEMO_COMP_CD\"", "db:\"DEMO_SCHEME_DESC\"",
 		"type NavHistoryDetail struct",
-		"CFromDate", "CToDate", "db:\"C_FROM_DATE\"", "db:\"C_TO_DATE\"",
+		"CFromDate", "CToDate", "db:\"TUXC_NAV_Q1_1\"", "db:\"TUXC_NAV_Q1_2\"",
 		"type DemoActive struct",
-		"CActiveFlag", "db:\"C_ACTIVE_FLAG\"",
+		"CActiveFlag", "db:\"TUXC_",
 		"import \"database/sql\"",
 	} {
 		if !strings.Contains(models, want) {
@@ -151,8 +156,7 @@ func TestModelFileDigitLeadingNames(t *testing.T) {
 	}
 	q := s.Query("cur_demo_hist")
 	q.RowShape[0] = "sql_1qty"
-	q.Aliases = nil
-	fields, err := s.rowFields(q)
+	fields, err := s.rowFields("cur_demo_hist", q)
 	if err != nil {
 		t.Fatal(err)
 	}
