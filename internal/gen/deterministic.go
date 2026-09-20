@@ -65,7 +65,7 @@ type detCall struct {
 	tx        bool
 	shape     string // "error" | "single" | "scalar" | "rows"
 	capture   string
-	rowName   string // models row type (reads only)
+	rowName   string            // models row type (reads only)
 	rowByHost map[string]string // normalized host → row Go field
 	rowFields []templates.FieldSpec
 }
@@ -820,7 +820,7 @@ func detEmitHelper(sb *strings.Builder, h *detHelper) {
 // values).
 func detEmitShaping(sb *strings.Builder, ordered []*detCall, adds []ir.FmlOp, respFields []templates.FieldSpec, respType string) {
 	var rows, singles []*detCall
-	var scalar *detCall
+	var scalars []*detCall
 	for _, dc := range ordered {
 		switch dc.shape {
 		case "rows":
@@ -828,12 +828,10 @@ func detEmitShaping(sb *strings.Builder, ordered []*detCall, adds []ir.FmlOp, re
 		case "single":
 			singles = append(singles, dc)
 		case "scalar":
-			if scalar == nil {
-				scalar = dc
-			}
+			scalars = append(scalars, dc)
 		}
 	}
-	if len(rows) == 0 && len(singles) == 0 && scalar == nil {
+	if len(rows) == 0 && len(singles) == 0 && len(scalars) == 0 {
 		detEmitReadless(sb, ordered, respFields, respType)
 		return
 	}
@@ -863,16 +861,18 @@ func detEmitShaping(sb *strings.Builder, ordered []*detCall, adds []ir.FmlOp, re
 		sb.WriteString("\tdata = append(data, " + detLiteral(respType, pairs, dc.capture) + ")\n")
 		sb.WriteString("}\n")
 	}
-	if scalar == nil {
-		return
+	for i, dc := range scalars {
+		if i == 0 && len(rows) == 0 && len(singles) == 0 && len(respFields) > 0 {
+			sb.WriteString("// tuxgo:TODO scalar " + dc.capture + " mapped to " + respFields[0].Name + " by position — verify\n")
+			sb.WriteString("data = append(data, &models." + respType + "{" + respFields[0].Name + ": fmt.Sprintf(\"%d\", " + dc.capture + ")})\n")
+			continue
+		}
+		// Every capture must be used: a merged/multi-count slice reaches
+		// several scalars, and only the first can ride the by-position
+		// guess — the rest stay kept for their error checks.
+		sb.WriteString("// tuxgo:TODO scalar " + dc.capture + " unused in shaping — LLM maps its branch role\n")
+		sb.WriteString("_ = " + dc.capture + "\n")
 	}
-	if len(rows) == 0 && len(singles) == 0 && len(respFields) > 0 {
-		sb.WriteString("// tuxgo:TODO scalar " + scalar.capture + " mapped to " + respFields[0].Name + " by position — verify\n")
-		sb.WriteString("data = append(data, &models." + respType + "{" + respFields[0].Name + ": fmt.Sprintf(\"%d\", " + scalar.capture + ")})\n")
-		return
-	}
-	sb.WriteString("// tuxgo:TODO scalar " + scalar.capture + " unused in shaping — LLM maps its branch role\n")
-	sb.WriteString("_ = " + scalar.capture + "\n")
 }
 
 // detRowPairs maps one read's row fields onto the endpoint response fields:

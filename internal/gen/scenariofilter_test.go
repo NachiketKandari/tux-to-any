@@ -3,6 +3,7 @@ package gen
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"tux-to-any/internal/budget"
@@ -29,6 +30,60 @@ const genFilterSrc = `void SVC_GF(TPSVCINFO *rqst) {
 	tpreturn(TPSUCCESS, 0L, obuf, 0L, 0);
 }
 `
+
+// genFilterScalarSrc gives each arm its own COUNT read: the F||I re-fold
+// reaches both scalars, and the no-llm synthesizer must keep every capture
+// used (an unused local is a hard gate failure that skips the unit — S6b).
+const genFilterScalarSrc = `void SVC_GS(TPSVCINFO *rqst) {
+	char c_flag;
+	long cnt_f;
+	long cnt_i;
+	if (c_flag == 'F') {
+		EXEC SQL SELECT COUNT(*) INTO :cnt_f FROM T_F WHERE a = :x;
+		Fadd32(obuf, FML_F_OUT, (char *)&cnt_f, 0);
+	} else if (c_flag == 'I') {
+		EXEC SQL SELECT COUNT(*) INTO :cnt_i FROM T_I WHERE b = :y;
+		Fadd32(obuf, FML_I_OUT, (char *)&cnt_i, 0);
+	}
+	tpreturn(TPSUCCESS, 0L, obuf, 0L, 0);
+}
+`
+
+// TestDeterministicControllerMergedFilterKeepsScalars pins S6b: the
+// deterministic no-llm synthesizer's merged F||I body reaches two count
+// scalars; every capture stays used (`_ = capture` for the shaping
+// leftovers), so the unused-local gate cannot skip the unit.
+func TestDeterministicControllerMergedFilterKeepsScalars(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "SVC_GS.pc")
+	if err := os.WriteFile(path, []byte(genFilterScalarSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := ir.ExtractFileOpts(path, ir.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &plan.Mapping{
+		Service: "gs", Module: "app/gs",
+		Endpoints: []plan.Endpoint{{ScenarioFilter: "c_flag == 'F' || c_flag == 'I'", Name: "Both", Route: "/both"}},
+	}
+	p, err := plan.Build(plan.Options{Main: f, Source: genFilterScalarSrc, Mapping: m, Budget: budget.New(12000, 4000, 4)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(Options{Plan: p, Main: f, Source: genFilterScalarSrc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := svc.DeterministicControllerBody("Both", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"fmt.Sprintf(\"%d\", getTF)", "_ = getTI"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("merged filter body leaves a capture unused (missing %q):\n%s", want, body)
+		}
+	}
+}
 
 // TestServiceScenarioFilterPlumbing pins the gen re-derivation seam: a
 // scenarioFilter endpoint resolves to the same re-folded slice the plan
