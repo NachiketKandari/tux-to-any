@@ -130,7 +130,7 @@ Commands (`cmd/tuxconv`):
 ```
 go run ./cmd/tuxconv extract <file|dir>     # IR JSON; archived per run
 go run ./cmd/tuxconv plan <file> -mapping <yaml>
-go run ./cmd/tuxconv discover <file|dir> [-stdout] [-target go|cs] [-no-llm]
+go run ./cmd/tuxconv discover <file|dir> [-stdout] [-target go|cs] [-no-llm] [-list-axes] [-filter "<expr>"]
 go run ./cmd/tuxconv ainames <file> -mapping <yaml> [-all]   # AI-name only the surviving endpoints, in place
 go run ./cmd/tuxconv convertgo <file|dir> [-mapping <yaml|dir>] [-no-llm] [-base dir] [-fragment] [-retry-repair] [-config path] [-templates dir]
 go run ./cmd/tuxconv convertbatchpy <file|dir> [-no-llm] [-shape auto|repo] [-dml-loop batch|rowbyrow] [-out dir] [-config path] [-templates dir]
@@ -397,6 +397,21 @@ own slice (an arm's code never leaks into a sibling slice's reads/writes).
 `convert` re-checks arm coverage and prints an advisory `coverage:` line
 for every dispatch arm the mapping leaves unmapped — omission stays the
 user's choice (`condition:`/`scenarioRef:`), silence about an arm is not.
+
+`scenarioFilter: "<expr>"` is the 4th endpoint key: a boolean over the
+detected dispatch axes (`c_flag == 'F' || c_flag == 'I'`,
+`c_flag == 'H' && new_flag == 'K'`, `c_flag != 'H'`) folds **one** endpoint
+over its matching assignments — arm guards stay live for runtime dispatch,
+contradicted arms drop, and the merged slice names itself (`c_flag in
+{F,I}`, artifact `<entry>.c_flag_F_or_I.pc`). The language is v1: idents,
+literals, `==`/`!=`, `&&`, `||`, `!`, parens; anything else is a positioned
+reject. `discover --list-axes` prints the variables/domains the entry
+actually dispatches on, and `discover --filter "<expr>" --stdout` previews
+the fold (merged key, matched assignments, honest kept blocks, queries)
+without writing a mapping. Drafts carry registry-derived `scenarioFilter`
+examples, commented, next to the per-value `scenarioRef`s, and the axes
+registry lands beside the slices as `scenarios/<entry>.axes.json`
+(+ `.axes.md`).
 
 Fn-library mode: a file (or directory) of helper functions with **no
 Tuxedo entry** converts directly — no mapping draft, nothing to tag. Each

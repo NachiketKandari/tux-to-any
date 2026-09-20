@@ -278,12 +278,69 @@ Other verified facts:
       unused-local gate and skip the unit (loudly). The LLM path uses the
       folded scenario view; the no-llm synthesizer should too (or gate on
       the slice). Not S4 — track as S6b
-- [ ] **S5** `discover`: commented examples from the registry +
-      `--list-axes`/`--filter` preview + honest kept-block comments
-      (replace `BodyExtent` min–max claim) + merged `Key`
-      (`c_flag in {F,I}`) + tests
-- [ ] **S6** convert/audit: prompt carries filter + matched/dropped
-      combos + residuals; docs; full `go test ./...` + corpus smoke
+- [x] **S5** `discover`: commented examples from the registry +
+      `--list-axes`/`--filter` preview + honest kept-block comments +
+      merged `Key` (`c_flag in {F,I}`) + tests —
+      `cmd/tuxconv/discoverpreview.go` + `discoverpreview_test.go`,
+      `flow.KeptBlocks`/`KeptBlockLines`. `--list-axes` prints rank/key/
+      kind/ref/alias/domain(default)/sites/guards; `--filter "<expr>"`
+      previews the merged key, matched/pruned assignments, honest kept
+      blocks, fold counts, census, queries, tx, residue — read-only
+      (no drafts, no artifacts, no LLM), and the pair carries the
+      `commandFlags["discover"]` value entry so `--filter <expr>` splits
+      correctly. Drafts gain 1–2 fold-verified commented examples (primary
+      union + first reachable primary×secondary intersection) with
+      matched-values preview, through the shared `flow.FilterExamples`
+      helper that the CS draft (`discover -target cs`, `csdraft.Render`)
+      uses too. Merged keys/artifact naming came with S3's
+      `filterScenarioIdentity`; the extent claim itself is untouched for
+      scenarioRef entries (acceptance gate: honest blocks replace it only
+      where a filter is mapped — preview + examples), so existing drafts
+      stay byte-identical
+- [x] **S6** convert/audit: prompt carries filter + matched/pruned combos +
+      residuals; docs; full `go test ./...` + corpus smoke. `Scenario`
+      carries `filter`/`filter_matched`/`filter_pruned` (additive JSON);
+      `scenPrompt` + `writePromptFacts` render the filter line and every
+      unfold residue; the CS twin carries the same facts through
+      `csplan.EndpointPlan` → `csgen.EpData` → the seam prompt. The audit
+      exchange archives the assembled prompt, so the evidence rides the
+      audit trail unchanged. README documents the 4th key and the preview
+      loop
+- [x] **S6b** deterministic no-llm synthesizer. Root cause turned out to be
+      narrower than the S4 note guessed: `detEmitShaping` kept only the
+      **first** scalar capture, so any slice reaching two COUNT reads
+      (e.g. merged F||I, each arm with its own count) declared the second
+      capture and never used it — `unusedLocalErrs` then skipped the unit
+      loudly. `detEmitShaping` now handles every scalar (first by-position
+      guess, the rest `_ = capture` + TODO), pinned by a merged-filter
+      synthesis test; the nav F||I `-no-llm` run no longer skips
+      `GetMfNavCombined`
+
+Also fixed while testing S5: the union witness attribution was not
+reach-gated, so `(H && K) || (default && K)` cross-witnessed `K` for the H
+assignment through the default arm's nested chain and folded H as if K
+lived there. `filterFold.walk`/`foldArm` now thread a per-assignment reach
+mask: fold verdicts stay global (union arms keep their guards live, the
+pinned S3 rule), while witness evidence and chain-exclusivity marks are
+limited to assignments that actually reach the guard — matching §6
+refinement 6's "per matching assignment the existing `taken` rule
+applies". Covered by `TestScenarioForFilterUnionWitnessNoCrossTalk`.
+
+Real-corpus verification (`tuxExamples/mainTux.pc`, `F||I`) surfaced two
+CS-side gaps the merged arms expose: two distinct queries whose SQL starts
+from the same table derived one `DefaultQueryName` (duplicate
+`GetMFCOMPANIESQuery` consts), and the OracleParameter gate counted a bind
+name shared by the two methods file-wide. `csplan.QueryNamesInOrder` +
+`assignUniqueQueryNames` now suffix collisions over the *planned* query
+order, so a single-arm mapping keeps its names (bytes-identical on
+mainTux's scenarioRef path) while merged arms get unique ones; the
+discover draft derives the same order from its slices, so emitted
+dbMethods pins and the unpinned fallback agree. `EndpointPlan.QueryIDs`
+dedupes canonical IDs (an F and an I site of one query unit is one const),
+and `cschk.countOracleParams` counts inside each const's own method. The
+full real round-trip (`discover -target cs` → `convertcs`) is clean: 0 sql
+deviations, 0 structural issues; the Go real run lands the combined
+controller body with both arms' store calls.
 
 Acceptance gates: S1 must be byte-neutral for every existing consumer
 (`go test ./internal/flow ./internal/plan ./internal/gen` green with no
