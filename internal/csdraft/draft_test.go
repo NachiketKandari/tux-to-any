@@ -39,6 +39,8 @@ func TestDraftRoundTrip(t *testing.T) {
 		"namespace: CHANGE_ME_ROOT_NAMESPACE",
 		"component: CustGetDtl",
 		"scenarioRef: \"c_arm_flg=C\"",
+		"# - scenarioFilter: \"c_arm_flg == 'C' || c_arm_flg == 'P'\"",
+		"#     merges to c_arm_flg in {C,P} | matched: c_arm_flg=C, c_arm_flg=P",
 		"name: \"CustGetDtlC\"",
 		"route: \"cust_get_dtl_C\"",
 		"requestFields:",
@@ -155,6 +157,56 @@ void SVC_ONE_ARM(TPSVCINFO *rqst)
 	}
 	if len(plan.Endpoints) != 1 {
 		t.Fatalf("plan endpoints = %v, want the promoted lone arm", plan.Endpoints)
+	}
+}
+
+// TestDraftDisambiguatesQueryNames pins the merged-filter pin fix: two
+// arms whose SQL both name MF_COMPANIES derive the same DefaultQueryName,
+// so the draft's dbMethods pins must carry the numeric suffix the plan
+// fallback uses — colliding consts do not compile.
+func TestDraftDisambiguatesQueryNames(t *testing.T) {
+	src := `void SVC_CC(TPSVCINFO *rqst) {
+	char c_flag;
+	long a;
+	long b;
+	if (c_flag == 'H') {
+		EXEC SQL SELECT NVL(MAX(X), 0) INTO :a FROM MF_COMPANIES WHERE A = :sql_x;
+		Fadd32(obuf, FML_H_OUT, (char *)&a, 0);
+	} else if (c_flag == 'F') {
+		EXEC SQL SELECT NVL(MAX(Y), 0) INTO :b FROM MF_COMPANIES WHERE B = :sql_y;
+		Fadd32(obuf, FML_F_OUT, (char *)&b, 0);
+	}
+	tpreturn(TPSUCCESS, 0L, obuf, 0L, 0);
+}
+`
+	path := filepath.Join(t.TempDir(), "SVC_CC.pc")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	irf, err := ir.ExtractFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := flow.ScanForIR(src, irf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := flow.Build([]byte(src), facts, irf.Entry, irf)
+	draft := Render(irf, tree, []byte(src), Options{})
+	for _, want := range []string{
+		"GetMFCOMPANIESQuery}",
+		"GetMFCOMPANIESQuery2}",
+	} {
+		if !strings.Contains(draft, want) {
+			t.Errorf("draft pins missing %q:\n%s", want, draft)
+		}
+	}
+	draftPath := filepath.Join(t.TempDir(), "SVC_CC.cs.mapping.yaml")
+	if err := os.WriteFile(draftPath, []byte(draft), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := csplan.LoadMapping(draftPath); err != nil {
+		t.Fatalf("draft does not load: %v", err)
 	}
 }
 

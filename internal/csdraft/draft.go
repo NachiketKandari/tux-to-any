@@ -60,16 +60,18 @@ func Render(f *ir.File, tree *flow.Tree, src []byte, opts Options) string {
 	sb.WriteString("# requestDTO: object                   # the shared request type the actions take\n")
 	sb.WriteString("# validator:                           # optional validator tag (\"\" skips validation)\n")
 
+	var scens []*flow.Scenario
 	axis := tree.DispatchAxisFor(src)
 	if axis != nil {
+		scens = flow.Scenarios(tree, axis)
 		sb.WriteString("\nendpoints:\n")
-		writeScenarioEndpoints(&sb, tree, axis, component, stem)
+		writeScenarioEndpoints(&sb, tree, axis, component, stem, src, scens)
 	} else {
 		writeCandidateEndpoints(&sb, f, tree, component, stem)
 	}
 
 	writeRequestFields(&sb, f)
-	writeDBMethods(&sb, f)
+	writeDBMethods(&sb, f, scens)
 	return sb.String()
 }
 
@@ -77,8 +79,7 @@ func Render(f *ir.File, tree *flow.Tree, src []byte, opts Options) string {
 // scenario slice (the census rubric — FML traffic on either contract side;
 // a reads-only slice is a message-only API, the handler returns the
 // string); the pure-logic slices stay commented for user control.
-func writeScenarioEndpoints(sb *strings.Builder, tree *flow.Tree, axis *flow.DispatchAxis, component, stem string) {
-	scens := flow.Scenarios(tree, axis)
+func writeScenarioEndpoints(sb *strings.Builder, tree *flow.Tree, axis *flow.DispatchAxis, component, stem string, src []byte, scens []*flow.Scenario) {
 	routeStem := routeStemOf(stem)
 	var logicOnly []*flow.Scenario
 	for _, sc := range scens {
@@ -98,6 +99,14 @@ func writeScenarioEndpoints(sb *strings.Builder, tree *flow.Tree, axis *flow.Dis
 		for _, sc := range logicOnly {
 			fmt.Fprintf(sb, "# - scenarioRef: %-14s # reads: %s | writes: %s\n",
 				strconvQuote(sc.Key), capList(sc.Gets, 8), capList(sc.Adds, 8))
+		}
+	}
+	if exs := flow.FilterExamples(tree, tree.AxesFor(src)); len(exs) > 0 {
+		sb.WriteString("# scenarioFilter examples (registry-derived, verified — uncomment one and set name/route):\n")
+		for _, ex := range exs {
+			fmt.Fprintf(sb, "# - scenarioFilter: %s\n", strconvQuote(ex.Expr))
+			fmt.Fprintf(sb, "#     merges to %s | matched: %s | kept %d lines\n",
+				ex.Key, strings.Join(ex.Matched, ", "), ex.Lines)
 		}
 	}
 }
@@ -176,30 +185,64 @@ func writeRequestFields(sb *strings.Builder, f *ir.File) {
 }
 
 // writeDBMethods pins every unique query's NamedQueries const name (B2):
-// the exact names the plan derives when the mapping leaves them unset —
-// the draft's pins and the plan's fallback cannot drift.
-func writeDBMethods(sb *strings.Builder, f *ir.File) {
-	var queries []*ir.Query
-	for _, q := range f.Queries {
-		if q.DuplicateOf == "" {
-			queries = append(queries, q)
-		}
-	}
-	if len(queries) == 0 {
+// the name the plan derives when the mapping leaves the query unpinned.
+// Names are assigned over the draft's plan order (its endpoint slices
+// first, then any remaining queries), the same order csplan walks, so a
+// merged filter arm's colliding defaults (two shapes named after one
+// table) get the same suffixed pins the plan's fallback would pick.
+func writeDBMethods(sb *strings.Builder, f *ir.File, scens []*flow.Scenario) {
+	ordered := draftQueryOrder(f, scens)
+	if len(ordered) == 0 {
 		return
 	}
+	names := csplan.QueryNamesInOrder(ordered)
 	sb.WriteString("\ndbMethods:                           # query unit → NamedQueries const name — deterministic — edit freely\n")
-	for _, q := range queries {
-		fmt.Fprintf(sb, "  %s: {name: %s}\n", q.ID, csplan.DefaultQueryName(q, isDML(q)))
+	for _, q := range f.Queries {
+		if q.DuplicateOf != "" {
+			continue
+		}
+		fmt.Fprintf(sb, "  %s: {name: %s}\n", q.ID, names[q.ID])
 	}
 }
 
-func isDML(q *ir.Query) bool {
-	switch q.Type {
-	case ir.QueryInsert, ir.QueryUpdate, ir.QueryDelete, ir.QueryMerge:
-		return true
+// draftQueryOrder lists the queries in the order a full-draft plan would
+// plan them: each endpoint slice's canonical queries first (slice order,
+// then in-slice order), then the file's remaining non-duplicate queries.
+func draftQueryOrder(f *ir.File, scens []*flow.Scenario) []*ir.Query {
+	if len(f.Queries) == 0 {
+		return nil
 	}
-	return false
+	byID := make(map[string]*ir.Query, len(f.Queries))
+	for _, q := range f.Queries {
+		byID[q.ID] = q
+	}
+	var out []*ir.Query
+	seen := map[string]bool{}
+	for _, sc := range scens {
+		for _, sq := range sc.Queries {
+			q := byID[sq.ID]
+			if q == nil {
+				continue
+			}
+			if q.DuplicateOf != "" {
+				q = byID[q.DuplicateOf]
+				if q == nil {
+					continue
+				}
+			}
+			if !seen[q.ID] {
+				seen[q.ID] = true
+				out = append(out, q)
+			}
+		}
+	}
+	for _, q := range f.Queries {
+		if q.DuplicateOf == "" && !seen[q.ID] {
+			seen[q.ID] = true
+			out = append(out, q)
+		}
+	}
+	return out
 }
 
 // ComponentOf derives the class stem from the entry name: the SVC_ prefix

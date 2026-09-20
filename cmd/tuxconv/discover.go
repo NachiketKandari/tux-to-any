@@ -36,6 +36,8 @@ func runDiscover(ctx context.Context, args []string) error {
 	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: skip AI naming (overrides run.llm)")
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
 	target := fs.String("target", "", "Draft dialect: go (default) or cs — the .NET Core mapping schema")
+	listAxes := fs.Bool("list-axes", false, "Print each entry's ranked dispatch-axis registry (the scenarioFilter variables) — read-only, no drafts/artifacts")
+	filterExpr := fs.String("filter", "", "Preview a scenarioFilter expression (merged key, matched assignments, kept blocks, queries) — read-only, no drafts/artifacts")
 
 	flagArgs, positional := reorderArgs(args)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -60,6 +62,15 @@ func runDiscover(ctx context.Context, args []string) error {
 	}
 	if path == "" {
 		return fmt.Errorf("must provide a .pc/.pcf file or directory, or set convert.input in .tuxgo.yaml")
+	}
+
+	// Read-only preview modes (scenario-filter plan §5): the axes registry
+	// and the filter fast loop never need a draft, an artifact, or the LLM.
+	if *listAxes || *filterExpr != "" {
+		if *target == "cs" {
+			return fmt.Errorf("-list-axes/-filter preview the Go flow tree — drop -target cs")
+		}
+		return discoverPreview(path, cfg, *listAxes, *filterExpr)
 	}
 
 	if *target == "cs" {
@@ -148,7 +159,7 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *con
 				fmt.Printf("- %s: axis %s — no scenario carries FML traffic (reads or writes); map manually if you know better\n", f.Entry, axis)
 			} else {
 				aiNames := aiNameScenarios(ctx, log, client, bd, f, scens, diff, src, rec)
-				draft = renderScenarioDraft(f, axis, scens, diff, aiNames, dirMode)
+				draft = renderScenarioDraft(f, axis, scens, diff, aiNames, dirMode, tree, axes)
 			}
 			if !stdout {
 				scenDir := filepath.Join(filepath.Dir(out), config.DefaultScenDir)
@@ -385,10 +396,11 @@ func writeDBMethods(sb *strings.Builder, f *ir.File, aiPins map[string]methodPin
 // renderScenarioDraft emits the mapping draft for an axis entry (SCEN-5):
 // one scenarioRef endpoint per qualifying scenario (the census rubric —
 // request reads AND non-error response writes), census comments carrying
-// the tx evidence, pre-filled advisory names, and the non-qualifying
-// scenarios kept (commented) for user control. Module and readDBs stay
-// commented hints — module defaults to the service name at load.
-func renderScenarioDraft(f *ir.File, axis *flow.DispatchAxis, scens []*flow.Scenario, diff *flow.ScenarioDiff, aiNames map[string]aiSuggestion, dirMode bool) string {
+// the tx evidence, pre-filled advisory names, the non-qualifying scenarios
+// kept (commented) for user control, and registry-derived scenarioFilter
+// examples (commented) for merged slices. Module and readDBs stay commented
+// hints — module defaults to the service name at load.
+func renderScenarioDraft(f *ir.File, axis *flow.DispatchAxis, scens []*flow.Scenario, diff *flow.ScenarioDiff, aiNames map[string]aiSuggestion, dirMode bool, tree *flow.Tree, axes []*flow.DispatchAxis) string {
 	entry := filepath.Base(f.Path)
 	svc := strings.ToLower(strings.ReplaceAll(strings.TrimSuffix(entry, filepath.Ext(entry)), "-", "_"))
 	var sb strings.Builder
@@ -442,6 +454,7 @@ func renderScenarioDraft(f *ir.File, axis *flow.DispatchAxis, scens []*flow.Scen
 				scenarioRefValue(sc), fieldsOrDash(sc.Gets), fieldsOrDash(sc.Adds), len(scenarioQueryIDs(sc)))
 		}
 	}
+	writeFilterExamples(&sb, tree, axes)
 	// dbMethods: the same pre-filled block as the candidate draft — AI
 	// proposals override where the AI offered them.
 	pins := map[string]methodPinSuggestion{}
