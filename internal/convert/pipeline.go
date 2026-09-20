@@ -161,7 +161,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	// cross-scenario diff.
 	var sr *scenRun
 	for _, e := range opts.Plan.Mapping.Endpoints {
-		if e.ScenarioRef != "" {
+		if e.ScenarioRef != "" || e.ScenarioFilter != "" {
 			sr = scenRunOf(opts)
 			break
 		}

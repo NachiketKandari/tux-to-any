@@ -28,7 +28,7 @@ func (s *Service) ConditionOf(endpoint string) *ir.Condition {
 // controller prompt consumes (G-SCEN6). Memoized: one fold per endpoint.
 func (s *Service) ScenarioOf(endpoint string) *flow.Scenario {
 	e := s.endpointOf(endpoint)
-	if e == nil || e.ScenarioRef == "" {
+	if e == nil || (e.ScenarioRef == "" && e.ScenarioFilter == "") {
 		return nil
 	}
 	if sc, ok := s.scenMemo[endpoint]; ok {
@@ -51,17 +51,28 @@ func (s *Service) endpointOf(endpoint string) *plan.Endpoint {
 	return nil
 }
 
-// scenarioOf resolves a scenarioRef endpoint's slice from the flow tree
-// (SCEN-D7: re-derivation from source — the stale-artifact-proof pattern).
-// Degrades to nil on any mismatch; the plan already validated the ref, so
-// this is defensive only.
+// scenarioOf resolves a scenarioRef/scenarioFilter endpoint's slice from the
+// flow tree (SCEN-D7: re-derivation from source — the stale-artifact-proof
+// pattern). Degrades to nil on any mismatch; the plan already validated the
+// ref, so this is defensive only.
 func (s *Service) scenarioOf(e plan.Endpoint) *flow.Scenario {
-	key, value, err := plan.ParseScenarioRef(e.ScenarioRef)
-	if err != nil {
-		return nil
-	}
 	t := s.treeFor()
 	if t == nil {
+		return nil
+	}
+	if e.ScenarioFilter != "" {
+		filter, err := flow.ParseScenarioFilter(e.ScenarioFilter)
+		if err != nil {
+			return nil
+		}
+		sc, err := flow.ScenarioForFilter(t, t.AxesFor([]byte(s.source)), filter)
+		if err != nil {
+			return nil
+		}
+		return sc
+	}
+	key, value, err := plan.ParseScenarioRef(e.ScenarioRef)
+	if err != nil {
 		return nil
 	}
 	axis := t.DispatchAxisFor([]byte(s.source))

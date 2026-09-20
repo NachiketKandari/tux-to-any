@@ -203,6 +203,29 @@ func Build(opts Options) (*Plan, error) {
 			if cond == nil {
 				return nil, fmt.Errorf("csplan: endpoint %s: scenario %s has no condition", e.Name, e.ScenarioRef)
 			}
+		case e.ScenarioFilter != "":
+			t, err := treeFor()
+			if err != nil {
+				return nil, err
+			}
+			registry := t.AxesFor([]byte(opts.Source))
+			if len(registry) == 0 {
+				return nil, fmt.Errorf("csplan: endpoint %s references scenarioFilter %q but the entry function has no dispatch axes", e.Name, e.ScenarioFilter)
+			}
+			filter, err := flow.ParseScenarioFilter(e.ScenarioFilter)
+			if err != nil {
+				return nil, fmt.Errorf("csplan: endpoint %s: %w", e.Name, err)
+			}
+			scen, err = flow.ScenarioForFilter(t, registry, filter)
+			if err != nil {
+				return nil, fmt.Errorf("csplan: endpoint %s: %w", e.Name, err)
+			}
+			ep.Scenario = scen.Key
+			ep.Residue = scen.Residue
+			cond = flow.ScenarioCondition(scen, t)
+			if cond == nil {
+				return nil, fmt.Errorf("csplan: endpoint %s: scenarioFilter %s has no condition", e.Name, e.ScenarioFilter)
+			}
 		case e.ConditionRef != "":
 			t, err := treeFor()
 			if err != nil {
@@ -292,33 +315,39 @@ func Build(opts Options) (*Plan, error) {
 			}
 			for _, v := range values {
 				scen := flow.ScenarioFor(flowTree, axis, v)
+				ext := scen.BodyExtent()
+				// The arm header line may share the previous arm's closing
+				// brace (kept by that arm's slice span), so probe the body
+				// line where one exists.
+				check := ext[0]
+				if ext[0] < ext[1] {
+					check = ext[0] + 1
+				}
 				covered := false
 				for _, cov := range covers {
-					if cov.scen != nil && cov.scen.Key == scen.Key {
-						covered = true
-						break
-					}
-				}
-				if !covered {
-					start := scen.BodyExtent()[0]
-					for _, cov := range covers {
-						if cov.scen != nil {
-							// Scenario coverage is key-exact: a slice's kept
-							// span encloses dropped sibling arms (the chain
-							// sits between kept top-level nodes), so the span
-							// fallback must never judge a scenario endpoint.
-							continue
-						}
-						if cov.cond != nil && cov.cond.StartLine <= start && start <= cov.cond.EndLine {
+					if cov.scen != nil {
+						// Kept-lines coverage: a scenarioRef slice keeps
+						// exactly its own arm, and a scenarioFilter slice
+						// keeps every arm its matching assignments reach —
+						// the line check covers both without key-equality
+						// (which a merged filter key can never satisfy).
+						// The span fallback must never judge a scenario
+						// endpoint: a slice's extent encloses dropped
+						// sibling arms.
+						if flow.KeptLines(cov.scen, flowTree)[check] {
 							covered = true
 							break
 						}
+						continue
+					}
+					if cov.cond != nil && cov.cond.StartLine <= check && check <= cov.cond.EndLine {
+						covered = true
+						break
 					}
 				}
 				if covered {
 					continue
 				}
-				ext := scen.BodyExtent()
 				p.Warnings = append(p.Warnings, fmt.Sprintf(
 					"dispatch arm %s=%s (lines %d-%d) has no endpoint — map it (scenarioRef: %s) or it stays logic-only",
 					axis.Key(), v, ext[0], ext[1], scen.Key))

@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"tux-to-any/internal/flow"
 )
 
 // MethodPin is the user's optional pin for one DB method: the method name,
@@ -33,15 +35,19 @@ type MethodPin struct {
 // candidate key from `tuxgo discover` — "c<n>" for a top-level condition,
 // "c<n>.<k>" for a qualifying nested branch. ScenarioRef is the
 // dispatch-axis alternative (PRD-2026-09-12 SCEN-5): "var=value" — the
-// scenario slice the flow fold derives (e.g. "trn_cd=A"). Exactly one of
-// the three must be set; condition/conditionRef stay loadable (additive
-// schema, zero golden churn).
+// scenario slice the flow fold derives (e.g. "trn_cd=A"). ScenarioFilter
+// is the scenario-filter alternative (scenario-filter plan §5): a boolean
+// over the detected dispatch axes (`c_flag == 'F' || c_flag == 'I'`,
+// `c_flag == 'H' && new_flag == 'K'`) re-folded as one endpoint. Exactly
+// one of the four must be set; condition/conditionRef/scenarioRef stay
+// loadable (additive schema, zero golden churn).
 type Endpoint struct {
-	Condition    int    `yaml:"condition"`
-	ConditionRef string `yaml:"conditionRef"`
-	ScenarioRef  string `yaml:"scenarioRef"`
-	Name         string `yaml:"name"`
-	Route        string `yaml:"route"`
+	Condition      int    `yaml:"condition"`
+	ConditionRef   string `yaml:"conditionRef"`
+	ScenarioRef    string `yaml:"scenarioRef"`
+	ScenarioFilter string `yaml:"scenarioFilter"`
+	Name           string `yaml:"name"`
+	Route          string `yaml:"route"`
 }
 
 // RefOrIndex reports the endpoint's condition reference for error messages.
@@ -51,6 +57,8 @@ func (e Endpoint) RefOrIndex() string {
 		return e.ConditionRef
 	case e.ScenarioRef != "":
 		return "scenario " + e.ScenarioRef
+	case e.ScenarioFilter != "":
+		return "scenarioFilter " + e.ScenarioFilter
 	}
 	return fmt.Sprintf("condition %d", e.Condition)
 }
@@ -153,6 +161,7 @@ func (m *Mapping) Validate() error {
 	conds := map[int]bool{}
 	refs := map[string]bool{}
 	scens := map[string]bool{}
+	filters := map[string]bool{}
 	names := map[string]bool{}
 	for i, e := range m.Endpoints {
 		set := 0
@@ -165,8 +174,11 @@ func (m *Mapping) Validate() error {
 		if e.ScenarioRef != "" {
 			set++
 		}
+		if e.ScenarioFilter != "" {
+			set++
+		}
 		if set != 1 {
-			return fmt.Errorf("endpoints[%d] (%s): exactly one of condition (1-based inventory index), conditionRef (discover candidate key) or scenarioRef (dispatch-axis slice) must be set", i, e.Name)
+			return fmt.Errorf("endpoints[%d] (%s): exactly one of condition (1-based inventory index), conditionRef (discover candidate key), scenarioRef (dispatch-axis slice) or scenarioFilter (boolean over dispatch axes) must be set", i, e.Name)
 		}
 		switch {
 		case e.ConditionRef != "":
@@ -182,6 +194,17 @@ func (m *Mapping) Validate() error {
 				return fmt.Errorf("endpoints[%d]: scenario %s mapped twice", i, e.ScenarioRef)
 			}
 			scens[e.ScenarioRef] = true
+		case e.ScenarioFilter != "":
+			// Syntax is validated at load (like scenarioRef); axis/value
+			// existence defers to plan build, against the file that
+			// actually dispatches.
+			if _, err := flow.ParseScenarioFilter(e.ScenarioFilter); err != nil {
+				return fmt.Errorf("endpoints[%d]: %w", i, err)
+			}
+			if filters[e.ScenarioFilter] {
+				return fmt.Errorf("endpoints[%d]: scenarioFilter %s mapped twice", i, e.ScenarioFilter)
+			}
+			filters[e.ScenarioFilter] = true
 		default:
 			if e.Condition < 1 {
 				return fmt.Errorf("endpoints[%d].condition must be a 1-based inventory index", i)

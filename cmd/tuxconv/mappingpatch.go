@@ -17,7 +17,7 @@ import (
 
 // epBlock is one `  - <ref-kind>: <value>` endpoint block's patch coordinates.
 type epBlock struct {
-	refKind   string // scenarioRef | conditionRef | condition
+	refKind   string // scenarioRef | scenarioFilter | conditionRef | condition
 	refValue  string // unquoted scalar before the census comment
 	nameLine  int    // 0-based index, -1 when absent
 	routeLine int
@@ -30,7 +30,7 @@ func (b epBlock) refKey() string {
 }
 
 var (
-	epBlockStartRe = regexp.MustCompile(`^ {2}- (scenarioRef|conditionRef|condition):[ \t]*("[^"]*"|[^ \t#]*)`)
+	epBlockStartRe = regexp.MustCompile(`^ {2}- (scenarioRef|scenarioFilter|conditionRef|condition):[ \t]*("[^"]*"|[^ \t#]*)`)
 	epNameLineRe   = regexp.MustCompile(`^([ \t]+)name:[ \t]*("[^"]*"|[^ \t#]*)[ \t]*(#.*)?$`)
 	epRouteLineRe  = regexp.MustCompile(`^([ \t]+)route:[ \t]*("[^"]*"|[^ \t#]*)[ \t]*(#.*)?$`)
 	dbMethodLineRe = regexp.MustCompile(`^([ \t]+)((?:[A-Za-z0-9_]+)(?::[A-Za-z0-9_]+)?):[ \t]*\{([^}]*)\}([ \t]*#.*)?$`)
@@ -46,6 +46,8 @@ func endpointRefKey(e plan.Endpoint) string {
 	switch {
 	case e.ScenarioRef != "":
 		return "scenarioRef:" + e.ScenarioRef
+	case e.ScenarioFilter != "":
+		return "scenarioFilter:" + e.ScenarioFilter
 	case e.ConditionRef != "":
 		return "conditionRef:" + e.ConditionRef
 	default:

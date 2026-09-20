@@ -474,9 +474,10 @@ func (s *Service) requestFields(e plan.Endpoint, c *ir.Condition) []templates.Fi
 
 func (s *Service) conditionOf(e plan.Endpoint) *ir.Condition {
 	switch {
-	case e.ScenarioRef != "":
-		// Dispatch-axis scenario (PRD-2026-09-12): re-derive the fold from
-		// the flow tree and synthesize the condition (the shared
+	case e.ScenarioRef != "", e.ScenarioFilter != "":
+		// Dispatch-axis scenario (PRD-2026-09-12) or scenario filter
+		// (scenario-filter plan §5): re-derive the fold from the flow tree
+		// and synthesize the condition (the shared
 		// flow.ScenarioCondition derivation). Degrade to nil (the caller
 		// skips the endpoint's structs) on any failure — the plan already
 		// validated the ref, so this is defensive only.

@@ -111,3 +111,32 @@ func TestPatchMappingYAMLNoSuggestionsIsIdentity(t *testing.T) {
 		t.Errorf("patch with no suggestions changed the file:\n%s", out)
 	}
 }
+
+// TestEndpointBlocksScenarioFilter pins the 4th ref kind's block parsing:
+// a quoted filter (spaces and quotes inside) round-trips to the endpoint's
+// join key, so the ainames patch addresses it like any other ref.
+func TestEndpointBlocksScenarioFilter(t *testing.T) {
+	const raw = `service: svcs
+endpoints:
+  - scenarioFilter: "c_flag == 'F' || c_flag == 'I'"   # kept ... | reads: ...
+    name: "GetBoth" # deterministic — edit freely
+    route: "/both"  # deterministic — edit freely
+  - scenarioRef: c_flag=H
+    name: "Hist"
+    route: "/hist"
+`
+	blocks := endpointBlocks(strings.Split(raw, "\n"))
+	if len(blocks) != 2 {
+		t.Fatalf("blocks = %d, want 2", len(blocks))
+	}
+	if blocks[0].refKind != "scenarioFilter" || blocks[0].refValue != "c_flag == 'F' || c_flag == 'I'" {
+		t.Errorf("block 0 ref = %s/%q", blocks[0].refKind, blocks[0].refValue)
+	}
+	m := &plan.Mapping{
+		Service:   "svcs",
+		Endpoints: []plan.Endpoint{{ScenarioFilter: "c_flag == 'F' || c_flag == 'I'", Name: "GetBoth", Route: "/both"}},
+	}
+	if e, ok := endpointForRef(m, blocks[0]); !ok || e.Name != "GetBoth" {
+		t.Errorf("endpointForRef(filter block) = %v, %v", e, ok)
+	}
+}

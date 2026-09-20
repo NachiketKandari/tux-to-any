@@ -240,6 +240,32 @@ func Build(opts Options) (*Plan, error) {
 			r.cond = flow.ScenarioCondition(r.scen, t)
 			text, _ := flow.ScenarioSource(r.scen, t, []byte(opts.Source))
 			r.text = text
+		case e.ScenarioFilter != "":
+			// Scenario filter (scenario-filter plan §4-5): a boolean over
+			// the ranked axes registry re-folds the tree under the
+			// matching assignments. Parse errors were rejected at load;
+			// axis/value existence and reachability are checked here,
+			// against the file that actually dispatches.
+			t, err := treeFor(e.ScenarioFilter)
+			if err != nil {
+				return nil, err
+			}
+			registry := t.AxesFor([]byte(opts.Source))
+			if len(registry) == 0 {
+				return nil, fmt.Errorf("plan: endpoint %s references scenarioFilter %q but the entry function has no dispatch axes", e.Name, e.ScenarioFilter)
+			}
+			filter, err := flow.ParseScenarioFilter(e.ScenarioFilter)
+			if err != nil {
+				return nil, fmt.Errorf("plan: endpoint %s: %w", e.Name, err)
+			}
+			sc, err := flow.ScenarioForFilter(t, registry, filter)
+			if err != nil {
+				return nil, fmt.Errorf("plan: endpoint %s: %w", e.Name, err)
+			}
+			r.scen = sc
+			r.cond = flow.ScenarioCondition(sc, t)
+			text, _ := flow.ScenarioSource(sc, t, []byte(opts.Source))
+			r.text = text
 		case e.ConditionRef != "":
 			t, err := treeFor(e.ConditionRef)
 			if err != nil {

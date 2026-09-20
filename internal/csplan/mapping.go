@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"tux-to-any/internal/flow"
 )
 
 // MethodPin is the user's optional pin for one NamedQueries const name.
@@ -21,16 +23,17 @@ type MethodPin struct {
 	Name string `yaml:"name"`
 }
 
-// Endpoint is one user-mapped arm: the same three reference forms as the
+// Endpoint is one user-mapped arm: the same four reference forms as the
 // Go mapping (condition index, discover candidate key, dispatch-axis
-// slice) promoted to an ASP.NET Core action with a user-chosen method
-// name and the literal [Route(...)] value.
+// slice, scenario filter) promoted to an ASP.NET Core action with a
+// user-chosen method name and the literal [Route(...)] value.
 type Endpoint struct {
-	Condition    int    `yaml:"condition"`
-	ConditionRef string `yaml:"conditionRef"`
-	ScenarioRef  string `yaml:"scenarioRef"`
-	Name         string `yaml:"name"`
-	Route        string `yaml:"route"`
+	Condition      int    `yaml:"condition"`
+	ConditionRef   string `yaml:"conditionRef"`
+	ScenarioRef    string `yaml:"scenarioRef"`
+	ScenarioFilter string `yaml:"scenarioFilter"`
+	Name           string `yaml:"name"`
+	Route          string `yaml:"route"`
 }
 
 // Mapping is the convertcs mapping YAML: the generated tree's namespace
@@ -98,6 +101,7 @@ func (m *Mapping) Validate() error {
 	conds := map[int]bool{}
 	refs := map[string]bool{}
 	scens := map[string]bool{}
+	filters := map[string]bool{}
 	names := map[string]bool{}
 	for i, e := range m.Endpoints {
 		set := 0
@@ -110,8 +114,11 @@ func (m *Mapping) Validate() error {
 		if e.ScenarioRef != "" {
 			set++
 		}
+		if e.ScenarioFilter != "" {
+			set++
+		}
 		if set != 1 {
-			return fmt.Errorf("endpoints[%d] (%s): exactly one of condition, conditionRef or scenarioRef must be set", i, e.Name)
+			return fmt.Errorf("endpoints[%d] (%s): exactly one of condition, conditionRef, scenarioRef or scenarioFilter must be set", i, e.Name)
 		}
 		switch {
 		case e.ConditionRef != "":
@@ -128,6 +135,16 @@ func (m *Mapping) Validate() error {
 				return fmt.Errorf("endpoints[%d]: scenario %s mapped twice", i, e.ScenarioRef)
 			}
 			scens[e.ScenarioRef] = true
+		case e.ScenarioFilter != "":
+			// Same split as scenarioRef: syntax at load, axis/value
+			// existence against the file in Build.
+			if _, err := flow.ParseScenarioFilter(e.ScenarioFilter); err != nil {
+				return fmt.Errorf("endpoints[%d]: %w", i, err)
+			}
+			if filters[e.ScenarioFilter] {
+				return fmt.Errorf("endpoints[%d]: scenarioFilter %s mapped twice", i, e.ScenarioFilter)
+			}
+			filters[e.ScenarioFilter] = true
 		default:
 			if e.Condition < 1 {
 				return fmt.Errorf("endpoints[%d].condition must be a 1-based inventory index", i)

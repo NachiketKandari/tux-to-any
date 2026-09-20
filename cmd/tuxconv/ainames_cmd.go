@@ -196,6 +196,24 @@ func nameEndpoint(
 			return deterministicSuggestion(scenarioQueryIDs(sc), sc.Adds, sc.Gets, "Endpoint"+common.CamelGo(sc.Value)), nil
 		}
 		return sug, nil
+	case e.ScenarioFilter != "":
+		// Scenario filter (scenario-filter plan §5): the filter's re-fold
+		// is the census the naming seam consumes, exactly like a
+		// scenarioRef slice.
+		filter, err := flow.ParseScenarioFilter(e.ScenarioFilter)
+		if err != nil {
+			return aiSuggestion{}, fmt.Errorf("ainames: endpoint %s: %w", e.Name, err)
+		}
+		sc, err := flow.ScenarioForFilter(tree, tree.AxesFor(src), filter)
+		if err != nil {
+			return aiSuggestion{}, fmt.Errorf("ainames: endpoint %s: %w", e.Name, err)
+		}
+		sug, err := aiNameScenarioOne(ctx, log, client, w.budget, f, sc, queriesByID, strings.Split(string(src), "\n"), diff, w.audit)
+		if err != nil {
+			log.Warn("ai scenario naming failed — deterministic names used", "scenario", sc.Key, "error", err)
+			return deterministicSuggestion(scenarioQueryIDs(sc), sc.Adds, sc.Gets, "Endpoint"+common.CamelGo(sc.Value)), nil
+		}
+		return sug, nil
 	default:
 		cond, err := endpointCondition(f, tree, e)
 		if err != nil {
