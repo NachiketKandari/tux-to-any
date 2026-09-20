@@ -455,14 +455,25 @@ type Scenario struct {
 	Value string `json:"value"` // the axis value verbatim
 	// Default marks the dispatch chain's else arm (the `<var>=default`
 	// slice): it runs when the axis value matches no enumerated slice.
-	Default   bool            `json:"default,omitempty"`
-	Preamble  []int           `json:"preamble,omitempty"` // line spans [start,end] pairs, flattened
-	Body      []*SliceNode    `json:"body,omitempty"`
-	Gets      []string        `json:"gets,omitempty"`
-	Adds      []string        `json:"adds,omitempty"`
-	ErrorAdds []string        `json:"error_adds,omitempty"`
-	Codes     []string        `json:"codes,omitempty"`
-	Queries   []ScenarioQuery `json:"queries,omitempty"`
+	Default bool `json:"default,omitempty"`
+	// Filter is the scenarioFilter expression this slice was re-folded
+	// under ("" for a scenarioRef slice) — the audit trail the prompt and
+	// artifacts carry.
+	Filter string `json:"filter,omitempty"`
+	// FilterMatched lists the filter's matching assignments that survived
+	// the reachability prune, canonical and sorted ("c_flag=F" or
+	// "c_flag=H && new_flag=K").
+	FilterMatched []string `json:"filter_matched,omitempty"`
+	// FilterPruned lists the matching assignments the prune dropped, each
+	// with its reason ("c_flag=H && new_flag=K (no reachable new_flag)").
+	FilterPruned []string        `json:"filter_pruned,omitempty"`
+	Preamble     []int           `json:"preamble,omitempty"` // line spans [start,end] pairs, flattened
+	Body         []*SliceNode    `json:"body,omitempty"`
+	Gets         []string        `json:"gets,omitempty"`
+	Adds         []string        `json:"adds,omitempty"`
+	ErrorAdds    []string        `json:"error_adds,omitempty"`
+	Codes        []string        `json:"codes,omitempty"`
+	Queries      []ScenarioQuery `json:"queries,omitempty"`
 	// TxSpans lists the live begin→commit pairs in the slice (SCEN-D8) —
 	// the evidence behind the per-query Tx flags, visible for review.
 	TxSpans []txSpan `json:"tx_spans,omitempty"`
@@ -2214,6 +2225,44 @@ func (sc *Scenario) BodyExtent() [2]int {
 	}
 	walk(sc.Body)
 	return [2]int{lo, hi}
+}
+
+// KeptBlocks returns the scenario's true kept line blocks as maximal
+// consecutive [start,end] runs — preamble plus body, dropped gaps never
+// bridged. BodyExtent's min-max can claim a span whose interior belongs to
+// other arms; the honest form is this block list (§0/§4 of the
+// scenario-filter plan).
+func KeptBlocks(sc *Scenario, tree *Tree) [][2]int {
+	kept := keptLineSet(sc, tree)
+	if len(kept) == 0 {
+		return nil
+	}
+	lines := make([]int, 0, len(kept))
+	for l := range kept {
+		lines = append(lines, l)
+	}
+	sort.Ints(lines)
+	var out [][2]int
+	start, prev := lines[0], lines[0]
+	for _, l := range lines[1:] {
+		if l == prev+1 {
+			prev = l
+			continue
+		}
+		out = append(out, [2]int{start, prev})
+		start, prev = l, l
+	}
+	return append(out, [2]int{start, prev})
+}
+
+// KeptBlockLines counts the lines the blocks cover (preamble plus body) —
+// the honest denominator beside BodyExtent's span.
+func KeptBlockLines(blocks [][2]int) int {
+	total := 0
+	for _, b := range blocks {
+		total += b[1] - b[0] + 1
+	}
+	return total
 }
 
 // ScenarioSource renders the scenario's kept lines as one code slice — the

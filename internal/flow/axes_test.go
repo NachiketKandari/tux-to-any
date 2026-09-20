@@ -212,9 +212,9 @@ func TestAxesForNilFacts(t *testing.T) {
 func TestRenderAxesMDAndReport(t *testing.T) {
 	tree := axesTree(t, nestedAxisSrc, nil)
 	axes := tree.AxesFor([]byte(nestedAxisSrc))
-	md := RenderAxesMD("mainTux.pc", axes)
+	md := RenderAxesMD("demo_axes.pc", axes)
 	for _, want := range []string{
-		"# Dispatch axes — mainTux.pc",
+		"# Dispatch axes — demo_axes.pc",
 		"| 0 | c_flag | c_flag | c_flag | primary | F, H, I | 3 | 4, 6, 14 | yes (default) |",
 		"| 1 | new_flag | new_flag | new_flag | secondary | J, K | 2 | 7, 9 | yes (default) |",
 	} {
@@ -222,7 +222,7 @@ func TestRenderAxesMDAndReport(t *testing.T) {
 			t.Errorf("axes md missing %q:\n%s", want, md)
 		}
 	}
-	data, err := json.Marshal(AxesReport{Entry: "mainTux.pc", Axes: axes})
+	data, err := json.Marshal(AxesReport{Entry: "demo_axes.pc", Axes: axes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,8 +230,8 @@ func TestRenderAxesMDAndReport(t *testing.T) {
 	if err := json.Unmarshal(data, &back); err != nil {
 		t.Fatal(err)
 	}
-	if back.Entry != "mainTux.pc" || len(back.Axes) != 2 {
-		t.Fatalf("report round-trip = entry %q axes %d, want mainTux.pc/2", back.Entry, len(back.Axes))
+	if back.Entry != "demo_axes.pc" || len(back.Axes) != 2 {
+		t.Fatalf("report round-trip = entry %q axes %d, want demo_axes.pc/2", back.Entry, len(back.Axes))
 	}
 	if back.Axes[0].Kind != AxisPrimary || back.Axes[1].Kind != AxisSecondary {
 		t.Errorf("kinds = %q/%q, want primary/secondary", back.Axes[0].Kind, back.Axes[1].Kind)

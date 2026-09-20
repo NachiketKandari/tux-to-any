@@ -141,6 +141,38 @@ func TestScenarioArmPartition(t *testing.T) {
 	}
 }
 
+// TestKeptBlocksNeverBridgeDroppedArms pins the honest-block form: the H
+// slice's blocks stop at every dropped gap (BodyExtent's min-max would
+// claim the whole 1..N span), and the block union is exactly KeptLines.
+func TestKeptBlocksNeverBridgeDroppedArms(t *testing.T) {
+	tree := axesTree(t, nestedAxisSrc, nil)
+	primary := tree.AxesFor([]byte(nestedAxisSrc))[0]
+	sc := ScenarioFor(tree, primary, "H")
+	blocks := KeptBlocks(sc, tree)
+	if len(blocks) < 2 {
+		t.Fatalf("blocks = %v, want at least two (the dropped F/I arms create gaps)", blocks)
+	}
+	kept := KeptLines(sc, tree)
+	covered := 0
+	for _, b := range blocks {
+		for l := b[0]; l <= b[1]; l++ {
+			if !kept[l] {
+				t.Errorf("block %v covers dropped line %d", b, l)
+			}
+			covered++
+		}
+	}
+	if covered != len(kept) {
+		t.Errorf("blocks cover %d lines, KeptLines has %d", covered, len(kept))
+	}
+	if KeptBlockLines(blocks) != len(kept) {
+		t.Errorf("KeptBlockLines = %d, want %d", KeptBlockLines(blocks), len(kept))
+	}
+	if ext := sc.BodyExtent(); ext[1]-ext[0]+1 == covered {
+		t.Errorf("fixture has no gaps — BodyExtent(%v) equals the honest %d lines", ext, covered)
+	}
+}
+
 // unbracedSrc pins the default-arm detection on unbraced chains: the
 // condition inventory never sees unbraced arms, but the tree keeps them —
 // the else arm must still surface as a sliceable default.

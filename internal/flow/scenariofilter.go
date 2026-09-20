@@ -519,8 +519,13 @@ func (ff *filterFold) truths(e *pred.Expr) []envTruth {
 // per assignment: an arm is dropped only when unreachable under every
 // assignment, the default arm is dropped only when every assignment is
 // already taken, and a guard is commented only when provably true under
-// every assignment.
-func (ff *filterFold) walk(nodes []*Node) []*SliceNode {
+// every assignment. reach[k] tracks whether the subtree is actually
+// reachable under assignment k — fold verdicts stay global (that is what
+// keeps every union arm's guard live), but witness evidence and the
+// chain-exclusivity marks are gated by it, so a value compared in an arm
+// another assignment reaches can never witness the arm's own assignment
+// (the cross-talk that let `(H && K) || (default && K)` pass the prune).
+func (ff *filterFold) walk(nodes []*Node, reach []bool) []*SliceNode {
 	var out []*SliceNode
 	for i := 0; i < len(nodes); {
 		end := chainExtent(nodes, i)
@@ -555,31 +560,28 @@ func (ff *filterFold) walk(nodes []*Node) []*SliceNode {
 		}
 		taken := make([]bool, len(ff.envs))
 		for _, m := range nodes[i:end] {
+			armReach := reachedUnder(reach, taken)
 			if dispatch && m.Sub == string(scanner.BranchElse) {
-				reachable := false
-				for k := range taken {
-					if !taken[k] {
-						reachable = true
-						break
-					}
-				}
-				if !reachable {
+				if !anyTrue(armReach) {
 					ff.sc.Counts.Dropped++
 					ff.sc.Counts.DroppedLines = append(ff.sc.Counts.DroppedLines, spanLines(m.Line, m.EndLine)...)
 					continue
 				}
 				for k := range ff.envs {
+					if !armReach[k] {
+						continue
+					}
 					for v := range chainVars[k] {
 						ff.assigns[k].witness[v] = true
 					}
 				}
 				sn := &SliceNode{Kind: m.Kind, Sub: m.Sub, Line: m.Line, EndLine: m.EndLine, Cond: m.Cond, Fold: FoldKept}
-				sn.Children = ff.walk(m.Children)
+				sn.Children = ff.walk(m.Children, armReach)
 				ff.sc.Counts.Kept++
 				out = append(out, sn)
 				continue
 			}
-			sn, trueEnvs := ff.foldArm(m)
+			sn, trueEnvs := ff.foldArm(m, armReach)
 			if sn != nil {
 				out = append(out, sn)
 			}
@@ -594,34 +596,66 @@ func (ff *filterFold) walk(nodes []*Node) []*SliceNode {
 	return out
 }
 
-// foldArm folds one chain member under every assignment. The returned
-// per-assignment flags report a provably-true arm (the chain-exclusivity
-// signal). A dropped arm returns nil.
-func (ff *filterFold) foldArm(n *Node) (*SliceNode, []bool) {
+// reachedUnder returns the arms still reachable per assignment: the outer
+// reach mask minus the assignments whose earlier chain arm already matched.
+func reachedUnder(reach, taken []bool) []bool {
+	out := make([]bool, len(reach))
+	for k := range reach {
+		out[k] = reach[k] && !taken[k]
+	}
+	return out
+}
+
+// reachAll is the entry reach mask: every assignment can reach the root.
+func reachAll(n int) []bool {
+	out := make([]bool, n)
+	for i := range out {
+		out[i] = true
+	}
+	return out
+}
+
+// anyTrue reports whether the mask has at least one set entry.
+func anyTrue(mask []bool) bool {
+	for _, v := range mask {
+		if v {
+			return true
+		}
+	}
+	return false
+}
+
+// foldArm folds one chain member under every assignment. reach[k] marks the
+// assignments whose control flow actually arrives at this member; the fold
+// verdict is global (a guard that is not true under every assignment stays
+// live), while witness evidence and the chain-exclusivity signal are
+// per-assignment and reach-gated. A dropped arm returns nil.
+func (ff *filterFold) foldArm(n *Node, reach []bool) (*SliceNode, []bool) {
 	sn := &SliceNode{Kind: n.Kind, Sub: n.Sub, Line: n.Line, EndLine: n.EndLine, Cond: n.Cond}
 	trueEnvs := make([]bool, len(ff.envs))
 	switch {
 	case n.Kind != KindBranch || n.Predicate == nil:
 		sn.Fold = FoldKept
-		sn.Children = ff.walk(n.Children)
+		sn.Children = ff.walk(n.Children, reach)
 		ff.sc.Counts.Kept++
 		return sn, trueEnvs
 	case !ff.touchesAny(n.Predicate):
 		// Never touches an assumed axis — verbatim, never residue.
 		sn.Fold = FoldKept
-		sn.Children = ff.walk(n.Children)
+		sn.Children = ff.walk(n.Children, reach)
 		ff.sc.Counts.Kept++
 		return sn, trueEnvs
 	}
 	truths := ff.truths(n.Predicate)
 	allTrue, allFalse, anyUnknown := true, true, false
+	bodyReach := make([]bool, len(ff.envs))
 	for k, et := range truths {
 		if !et.ok {
 			anyUnknown = true
 		}
 		if !(et.ok && et.truth == triTrue) {
 			allTrue = false
-		} else {
+		} else if reach[k] {
 			// An arm can be provably true under one assignment only — the
 			// per-assignment chain-exclusivity signal.
 			trueEnvs[k] = true
@@ -629,11 +663,16 @@ func (ff *filterFold) foldArm(n *Node) (*SliceNode, []bool) {
 		if !(et.ok && et.truth == triFalse) {
 			allFalse = false
 		}
+		if reach[k] && !(et.ok && et.truth == triFalse) {
+			bodyReach[k] = true
+		}
 	}
-	// Witness: a non-contradicted verdict under an assignment is structural
-	// evidence that the assignment's values occur in this context.
+	// Witness: a non-contradicted verdict in a reachable context under an
+	// assignment is structural evidence that the assignment's values occur
+	// there. An unreachable context proves nothing — its guards may belong
+	// to another assignment's arm.
 	for k, et := range truths {
-		if et.ok && et.truth == triFalse {
+		if !reach[k] || (et.ok && et.truth == triFalse) {
 			continue
 		}
 		for _, a := range ff.envs[k] {
@@ -645,7 +684,7 @@ func (ff *filterFold) foldArm(n *Node) (*SliceNode, []bool) {
 	switch {
 	case allTrue:
 		sn.Fold = FoldSatisfied
-		sn.Children = ff.walk(n.Children)
+		sn.Children = ff.walk(n.Children, bodyReach)
 		ff.sc.Counts.Kept++
 		return sn, trueEnvs
 	case allFalse:
@@ -656,7 +695,7 @@ func (ff *filterFold) foldArm(n *Node) (*SliceNode, []bool) {
 		sn.Fold = FoldUnrecognized
 		ff.sc.Counts.Unfolded++
 		ff.sc.Residue = append(ff.sc.Residue, fmt.Sprintf("L%d: %s", n.Line, oneLineC(n.Cond)))
-		sn.Children = ff.walk(n.Children)
+		sn.Children = ff.walk(n.Children, bodyReach)
 		ff.sc.Counts.Kept++
 		return sn, trueEnvs
 	default:
@@ -664,7 +703,7 @@ func (ff *filterFold) foldArm(n *Node) (*SliceNode, []bool) {
 		// (axis terms are never stripped — runtime dispatch is preserved).
 		sn.Fold = FoldMixed
 		sn.FoldedCond = n.Cond
-		sn.Children = ff.walk(n.Children)
+		sn.Children = ff.walk(n.Children, bodyReach)
 		ff.sc.Counts.Kept++
 		return sn, trueEnvs
 	}
@@ -690,7 +729,7 @@ func ScenarioForFilter(tree *Tree, registry []*DispatchAxis, filter *ScenarioFil
 	// Pass 1: dry walk collects per-assignment witnesses.
 	dry := newFilterFold(tree, assigns)
 	dry.sc = &Scenario{}
-	_ = dry.walk(tree.Root)
+	_ = dry.walk(tree.Root, reachAll(len(assigns)))
 
 	var live []*filterAssignment
 	var lost []string
@@ -712,12 +751,14 @@ func ScenarioForFilter(tree *Tree, registry []*DispatchAxis, filter *ScenarioFil
 	ff.sc = sc
 	key, varName, value := filterScenarioIdentity(live)
 	sc.Key, sc.Var, sc.Value = key, varName, value
+	sc.Filter = filter.Text
 	for _, a := range live {
+		sc.FilterMatched = append(sc.FilterMatched, a.key)
 		if a.hasDefault {
 			sc.Default = true
-			break
 		}
 	}
+	sc.FilterPruned = lost
 	split := len(tree.Root)
 	for i := 0; i < len(tree.Root) && split == len(tree.Root); {
 		end := chainExtent(tree.Root, i)
@@ -732,7 +773,7 @@ func ScenarioForFilter(tree *Tree, registry []*DispatchAxis, filter *ScenarioFil
 	for _, n := range tree.Root[:split] {
 		sc.Preamble = append(sc.Preamble, n.Line, n.EndLine)
 	}
-	sc.Body = ff.walk(tree.Root[split:])
+	sc.Body = ff.walk(tree.Root[split:], reachAll(len(live)))
 	censusOf(sc, tree)
 	if len(sc.Body) == 0 {
 		return nil, fmt.Errorf("scenarioFilter %q leaves no body in %s — every branch was contradicted", filter.Text, tree.Function)

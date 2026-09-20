@@ -32,10 +32,15 @@ func TestScenarioForFilterSingleValueEqualsScenarioFor(t *testing.T) {
 			t.Fatalf("%s: %v", text, err)
 		}
 		want := ScenarioFor(tree, primary, value)
-		if !reflect.DeepEqual(got, want) {
-			gotJSON, _ := jsonOf(got)
+		gotEvidence := *got
+		gotEvidence.Filter, gotEvidence.FilterMatched, gotEvidence.FilterPruned = "", nil, nil
+		if !reflect.DeepEqual(&gotEvidence, want) {
+			gotJSON, _ := jsonOf(&gotEvidence)
 			wantJSON, _ := jsonOf(want)
 			t.Errorf("%s: filter scenario != ScenarioFor:\n%s\nvs\n%s", text, gotJSON, wantJSON)
+		}
+		if got.Filter != text {
+			t.Errorf("%s: scenario filter evidence = %q, want the expression verbatim", text, got.Filter)
 		}
 	}
 }
@@ -73,6 +78,12 @@ func TestScenarioForFilterUnionKeepsGuards(t *testing.T) {
 	if sc.Var != "c_flag" || sc.Value != "F_or_I" {
 		t.Errorf("var/value = %q/%q, want c_flag/F_or_I", sc.Var, sc.Value)
 	}
+	if got := strings.Join(sc.FilterMatched, "; "); got != "c_flag=F; c_flag=I" {
+		t.Errorf("filter matched = %q, want the two union assignments in key order", got)
+	}
+	if len(sc.FilterPruned) != 0 {
+		t.Errorf("filter pruned = %v, want none (both arms are witnessed)", sc.FilterPruned)
+	}
 }
 
 // TestScenarioForFilterIntersection pins && across a secondary axis: the H
@@ -86,6 +97,9 @@ func TestScenarioForFilterIntersection(t *testing.T) {
 	}
 	if sc.Key != "c_flag=H && new_flag=K" {
 		t.Errorf("key = %q, want c_flag=H && new_flag=K", sc.Key)
+	}
+	if got := strings.Join(sc.FilterMatched, "; "); got != "c_flag=H && new_flag=K" {
+		t.Errorf("filter matched = %q, want the one intersection assignment", got)
 	}
 	byLine := bodyByLine(sc.Body)
 	h := byLine[6]
@@ -125,6 +139,9 @@ func TestScenarioForFilterNotEqualsKeepsDefault(t *testing.T) {
 	}
 	if !sc.Default {
 		t.Error("default = false, want true (the default arm is a surviving assignment)")
+	}
+	if got := strings.Join(sc.FilterMatched, "; "); got != "c_flag=F; c_flag=I; c_flag=default" {
+		t.Errorf("filter matched = %q, want the complement plus the default arm", got)
 	}
 	byLine := bodyByLine(sc.Body)
 	if n := byLine[6]; n != nil {
@@ -183,6 +200,9 @@ func TestScenarioForFilterReachabilityPrune(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default && K: %v", err)
 	}
+	if got := strings.Join(sc.FilterMatched, "; "); got != "c_flag=default && new_flag=K" {
+		t.Errorf("filter matched = %q, want the default&&K assignment", got)
+	}
 	byLine := bodyByLine(sc.Body)
 	if n := byLine[8]; n == nil || n.Fold != FoldKept {
 		t.Errorf("default arm = %+v, want kept", n)
@@ -192,6 +212,61 @@ func TestScenarioForFilterReachabilityPrune(t *testing.T) {
 	}
 	if n := byLine[11]; n != nil {
 		t.Errorf("J arm = %+v, want dropped", n)
+	}
+}
+
+// TestScenarioForFilterUnionWitnessNoCrossTalk pins the reach-gated witness
+// rule: in a union, a guard walked because another assignment reaches its
+// arm never witnesses an assignment that cannot — `(H && K) || (default &&
+// K)` keeps default&&K and prunes H&&K (K never lives under H), instead of
+// cross-witnessing K through the default arm's nested chain.
+func TestScenarioForFilterUnionWitnessNoCrossTalk(t *testing.T) {
+	tree := axesTree(t, crossedAxisSrc, nil)
+	registry := tree.AxesFor([]byte(crossedAxisSrc))
+	sc, err := ScenarioForFilter(tree, registry,
+		mustFilter(t, "(c_flag == 'H' && new_flag == 'K') || (c_flag == 'default' && new_flag == 'K')"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(sc.FilterMatched, "; "); got != "c_flag=default && new_flag=K" {
+		t.Errorf("matched = %q, want only the reachable default&&K assignment", got)
+	}
+	if len(sc.FilterPruned) != 1 || !strings.Contains(sc.FilterPruned[0], "c_flag=H && new_flag=K") {
+		t.Errorf("pruned = %v, want the H&&K assignment with its no-reachable reason", sc.FilterPruned)
+	}
+	byLine := bodyByLine(sc.Body)
+	if n := byLine[6]; n != nil {
+		t.Errorf("H arm = %+v, want dropped (K does not live under H)", n)
+	}
+	if n := byLine[9]; n == nil || n.Fold != FoldSatisfied {
+		t.Errorf("K arm = %+v, want satisfied under the default assignment", n)
+	}
+}
+
+// TestFilterExamplesFoldVerified pins the draft-example helper (plan §5):
+// the union over the primary's first two values plus the first reachable
+// primary×secondary conjunction — the unreachable F&&K candidate is skipped
+// by the real fold, never commented.
+func TestFilterExamplesFoldVerified(t *testing.T) {
+	tree := axesTree(t, nestedAxisSrc, nil)
+	axes := tree.AxesFor([]byte(nestedAxisSrc))
+	exs := FilterExamples(tree, axes)
+	if len(exs) != 2 {
+		t.Fatalf("examples = %+v, want the union + intersection pair", exs)
+	}
+	if exs[0].Expr != "c_flag == 'F' || c_flag == 'H'" || exs[0].Key != "c_flag in {F,H}" {
+		t.Errorf("union example = %q → %q", exs[0].Expr, exs[0].Key)
+	}
+	if exs[1].Expr != "c_flag == 'H' && new_flag == 'J'" {
+		t.Errorf("intersection example = %q, want the first reachable H×new_flag pair (F×K/F×J are never witnessed)", exs[1].Expr)
+	}
+	for _, ex := range exs {
+		if ex.Lines == 0 || len(ex.Blocks) == 0 {
+			t.Errorf("example %q lacks block evidence: %+v", ex.Expr, ex)
+		}
+	}
+	if got := FilterExamples(tree, nil); got != nil {
+		t.Errorf("no registry must yield no examples, got %v", got)
 	}
 }
 
