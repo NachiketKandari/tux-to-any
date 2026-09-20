@@ -342,6 +342,17 @@ full real round-trip (`discover -target cs` → `convertcs`) is clean: 0 sql
 deviations, 0 structural issues; the Go real run lands the combined
 controller body with both arms' store calls.
 
+Open follow-up **S7** (found by a real OpenRouter run on mainTux F||I):
+the accepted merged-filter body kept the `c_flag == "I"` runtime guard but
+dropped the `c_flag == "F"` one, and no gate checks mixed-guard retention
+for scenario endpoints — `conditionPresenceErrs` is wired only to the
+census-draft path and matches on a shared identifier, which two
+value-guards of one axis satisfy loosely. The filtered slice's
+`FoldMixed` guards are the runtime dispatch contract, so this needs a
+scenario-guard presence gate (skeleton + literal per mixed node) and/or
+prompt hardening. The deterministic `-no-llm` body stays flat by design
+(best-effort, LLM resume upgrades) and does not encode dispatch either.
+
 Acceptance gates: S1 must be byte-neutral for every existing consumer
 (`go test ./internal/flow ./internal/plan ./internal/gen` green with no
 golden diff); S3's single-value equivalence is a pinned property test;
