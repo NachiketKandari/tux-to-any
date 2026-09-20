@@ -136,10 +136,16 @@ type scenRun struct {
 }
 
 // scenPrompt is one endpoint's scenario-shaped prompt additions: the slice
-// context, the shared-block extents (compact — the full report lives in
-// scenarios/<entry>.shared.md), and the legacy transaction facts.
+// context, the scenarioFilter evidence (expression + matched/pruned
+// assignments), the loud unfold residue, the shared-block extents (compact
+// — the full report lives in scenarios/<entry>.shared.md), and the legacy
+// transaction facts.
 type scenPrompt struct {
 	Key     string
+	Filter  string
+	Matched []string
+	Pruned  []string
+	Residue []string
 	Shared  []string
 	TxNotes []string
 }
@@ -1232,7 +1238,7 @@ func scenarioView(opts Options, svc *gen.Service, sc *flow.Scenario, tree *flow.
 // scenarios/<entry>.shared.md), and the legacy transaction facts (SCEN-D8
 // evidence) with the ExecTransaction wrap pattern.
 func scenPromptOf(sc *flow.Scenario, diff *flow.ScenarioDiff) *scenPrompt {
-	p := &scenPrompt{Key: sc.Key}
+	p := &scenPrompt{Key: sc.Key, Filter: sc.Filter, Matched: sc.FilterMatched, Pruned: sc.FilterPruned, Residue: sc.Residue}
 	if diff != nil {
 		samples := diff.Shared
 		if len(samples) > sharedPromptSamples {

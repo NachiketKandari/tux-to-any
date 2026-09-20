@@ -700,6 +700,41 @@ func TestScenarioViewReplacesSQLNoLeak(t *testing.T) {
 	}
 }
 
+// TestScenarioFilterPromptFacts pins the S6 prompt/audit contract: a
+// scenarioFilter endpoint's assembled facts carry the expression verbatim,
+// the matched assignments, the prune reasons, and the unfold residue — the
+// audit exchange archives this same prompt.
+func TestScenarioFilterPromptFacts(t *testing.T) {
+	sc := &flow.Scenario{
+		Key: "trn_cd=A", Filter: "trn_cd == 'A'",
+		FilterMatched: []string{"trn_cd=A"},
+		FilterPruned:  []string{"trn_cd=P (no reachable arm)"},
+		Residue:       []string{"L88: trn_cd == 'Q'"},
+	}
+	var sb strings.Builder
+	writePromptFacts(&sb, viewWording, scenPromptOf(sc, nil), true,
+		"s.store.GetX(c)", "s.store.", "db contract", "struct contract", nil, nil, nil, nil)
+	got := sb.String()
+	for _, want := range []string{
+		"Scenario slice: trn_cd=A",
+		"Scenario filter: trn_cd == 'A' — the slice is the re-fold under trn_cd=A",
+		"pruned at plan time: trn_cd=P (no reachable arm)",
+		"Unfolded predicate — kept verbatim, the fold could not decide it: L88: trn_cd == 'Q'",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt facts missing %q:\n%s", want, got)
+		}
+	}
+	// A scenarioRef endpoint's facts stay byte-identical to the pre-filter
+	// prompt (no filter section, no residue lines).
+	var plain strings.Builder
+	writePromptFacts(&plain, viewWording, scenPromptOf(&flow.Scenario{Key: "trn_cd=A"}, nil), true,
+		"s.store.GetX(c)", "s.store.", "db contract", "struct contract", nil, nil, nil, nil)
+	if strings.Contains(plain.String(), "Scenario filter") || strings.Contains(plain.String(), "Unfolded predicate") {
+		t.Errorf("scenarioRef facts grew filter/residue sections:\n%s", plain.String())
+	}
+}
+
 // TestDBSignaturesForPrefixedNames pins the fragment-path contract fix
 // (audit 2026-09-16): the chunked path passes receiver-prefixed names
 // (s.store.GetDateRange) while the single-call path passes bare names —

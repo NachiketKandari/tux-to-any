@@ -257,10 +257,25 @@ func normalizeSQL(sql string) string {
 // countOracleParams counts the OracleParameter ctor calls carrying the
 // query's bind names (binds are unique per query in practice and the
 // render is deterministic).
+// countOracleParams counts the OracleParameter constructions inside the
+// repo method that calls the query's const. The count is method-scoped: a
+// merged endpoint's queries can share a bind name (two MF_COMPANIES shapes
+// both bind c_enable_d2u_flg), and a file-wide count would double.
 func countOracleParams(content string, qp csplan.QueryPlan) int {
-	n := 0
-	for _, prm := range qp.Params {
-		n += strings.Count(content, fmt.Sprintf("new OracleParameter(%q", prm.Bind))
+	idx := strings.Index(content, "."+qp.Name+",")
+	if idx < 0 {
+		idx = strings.Index(content, qp.Name)
 	}
-	return n
+	if idx < 0 {
+		return 0
+	}
+	start := strings.LastIndex(content[:idx], "public async Task")
+	if start < 0 {
+		start = 0
+	}
+	end := len(content)
+	if next := strings.Index(content[idx:], "public async Task"); next >= 0 {
+		end = idx + next
+	}
+	return strings.Count(content[start:end], "new OracleParameter(")
 }

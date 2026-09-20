@@ -81,6 +81,12 @@ type EpData struct {
 	// Scenario is the scenarioRef key when the arm comes from a scenario
 	// slice ("c_flag=F"); "" for condition-sliced arms.
 	Scenario string
+	// Filter is the scenarioFilter expression behind the arm ("" for
+	// scenarioRef / condition arms); Matched/Pruned carry its assignment
+	// evidence into the seam prompt.
+	Filter        string
+	FilterMatched []string
+	FilterPruned  []string
 	// Residue is the loud SCEN-D4 slice evidence: source regions the
 	// planner kept verbatim because they touch the axis. The seam prompt
 	// carries them so the LLM implements the kept branches faithfully.
@@ -300,6 +306,7 @@ func buildEndpoints(p *csplan.Plan) ([]EpData, []QData) {
 			Name: ep.Name, Route: ep.Route, DTOName: ep.DTOName,
 			Span:     ep.SourceSpan,
 			Scenario: ep.Scenario, Residue: ep.Residue, LineSpan: ep.LineSpan,
+			Filter: ep.Filter, FilterMatched: ep.FilterMatched, FilterPruned: ep.FilterPruned,
 		}
 		methodSfx := 0
 		var props []string

@@ -41,6 +41,35 @@ func TestSeamPromptCarriesScenarioAndResidue(t *testing.T) {
 	}
 }
 
+// TestSeamPromptCarriesFilterFacts pins the S6 convertcs twin: a
+// scenarioFilter arm's seam prompt carries the expression and its
+// matched/pruned assignment evidence (a scenarioRef arm stays clean).
+func TestSeamPromptCarriesFilterFacts(t *testing.T) {
+	ep := EpData{
+		Name: "HistOrFull", Route: "hist-full", DTOName: "CustF", RetType: "CustFDto",
+		ReturnExpr: "response", Span: "40-120",
+		Scenario: "c_flag in {F,H}", Filter: "c_flag == 'H' || c_flag == 'F'",
+		FilterMatched: []string{"c_flag=F", "c_flag=H"},
+		FilterPruned:  []string{"c_flag=default && new_flag=K (no reachable new_flag)"},
+		LineSpan:      [2]int{40, 120},
+	}
+	p := &csplan.Plan{Component: "CustComponent", Service: "CustService"}
+	prompt := userPrompt(p, ep, fileData{RepoField: "Repo", Service: "CustService"}, "src", nil)
+	for _, want := range []string{
+		"Scenario filter: c_flag == 'H' || c_flag == 'F' — the arm is the re-fold under c_flag=F, c_flag=H",
+		"pruned at plan time: c_flag=default && new_flag=K (no reachable new_flag)",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("seam prompt missing %q\ngot:\n%s", want, prompt)
+		}
+	}
+	ep.Filter, ep.FilterMatched, ep.FilterPruned = "", nil, nil
+	prompt = userPrompt(p, ep, fileData{RepoField: "Repo", Service: "CustService"}, "src", nil)
+	if strings.Contains(prompt, "Scenario filter") {
+		t.Errorf("scenarioRef/condition arm must not carry filter facts, got:\n%s", prompt)
+	}
+}
+
 func TestEpLineSpanReadsPlanSpan(t *testing.T) {
 	if from, to := epLineSpan(EpData{LineSpan: [2]int{40, 120}}); from != 40 || to != 120 {
 		t.Errorf("epLineSpan = %d-%d, want 40-120 (the plan's LineSpan, not a string re-parse)", from, to)

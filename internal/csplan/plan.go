@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"tux-to-any/internal/flow"
@@ -50,15 +51,21 @@ type QueryPlan struct {
 // EndpointPlan is one action's C# shape: the controller action, its
 // response DTO, the request properties it reads, and its queries.
 type EndpointPlan struct {
-	Name       string   `json:"name"`
-	Route      string   `json:"route"`
-	Scenario   string   `json:"scenario,omitempty"` // scenarioRef key when arm-sliced
-	DTOName    string   `json:"dto_name"`
-	Requests   []string `json:"requests"` // request properties read, in bind order
-	QueryIDs   []string `json:"query_ids"`
-	Residue    []string `json:"residue,omitempty"` // loud slice residue (SCEN-D4)
-	LineSpan   [2]int   `json:"line_span"`         // source span of the arm (the LLM seam's code view)
-	SourceSpan string   `json:"source_span,omitempty"`
+	Name     string `json:"name"`
+	Route    string `json:"route"`
+	Scenario string `json:"scenario,omitempty"` // scenarioRef key when arm-sliced
+	// Filter is the scenarioFilter expression when the arm comes from a
+	// filter endpoint ("" for scenarioRef / condition arms); Matched/Pruned
+	// are its surviving and reachability-pruned assignment keys.
+	Filter        string   `json:"filter,omitempty"`
+	FilterMatched []string `json:"filter_matched,omitempty"`
+	FilterPruned  []string `json:"filter_pruned,omitempty"`
+	DTOName       string   `json:"dto_name"`
+	Requests      []string `json:"requests"` // request properties read, in bind order
+	QueryIDs      []string `json:"query_ids"`
+	Residue       []string `json:"residue,omitempty"` // loud slice residue (SCEN-D4)
+	LineSpan      [2]int   `json:"line_span"`         // source span of the arm (the LLM seam's code view)
+	SourceSpan    string   `json:"source_span,omitempty"`
 }
 
 // Plan is the deterministic convertcs decomposition for one entry file.
@@ -199,6 +206,7 @@ func Build(opts Options) (*Plan, error) {
 			}
 			ep.Scenario = scen.Key
 			ep.Residue = scen.Residue
+			ep.Filter, ep.FilterMatched, ep.FilterPruned = scen.Filter, scen.FilterMatched, scen.FilterPruned
 			cond = flow.ScenarioCondition(scen, t)
 			if cond == nil {
 				return nil, fmt.Errorf("csplan: endpoint %s: scenario %s has no condition", e.Name, e.ScenarioRef)
@@ -222,6 +230,7 @@ func Build(opts Options) (*Plan, error) {
 			}
 			ep.Scenario = scen.Key
 			ep.Residue = scen.Residue
+			ep.Filter, ep.FilterMatched, ep.FilterPruned = scen.Filter, scen.FilterMatched, scen.FilterPruned
 			cond = flow.ScenarioCondition(scen, t)
 			if cond == nil {
 				return nil, fmt.Errorf("csplan: endpoint %s: scenarioFilter %s has no condition", e.Name, e.ScenarioFilter)
@@ -250,6 +259,7 @@ func Build(opts Options) (*Plan, error) {
 		}
 		ep.LineSpan = [2]int{cond.StartLine, cond.EndLine}
 		ep.SourceSpan = fmt.Sprintf("%d-%d", cond.StartLine, cond.EndLine)
+		seenQuery := map[string]bool{}
 		for _, id := range ids {
 			q := queryByID[id]
 			if q == nil {
@@ -258,6 +268,13 @@ func Build(opts Options) (*Plan, error) {
 			if q.DuplicateOf != "" {
 				q = queryByID[q.DuplicateOf]
 			}
+			// One entry per canonical query: a merged filter arm can reach
+			// the same query through two sites (an F and an I count), and
+			// the generator emits one const/method per entry.
+			if seenQuery[q.ID] {
+				continue
+			}
+			seenQuery[q.ID] = true
 			ep.QueryIDs = append(ep.QueryIDs, q.ID)
 			if !canonical[q.ID] {
 				canonical[q.ID] = true
@@ -294,6 +311,14 @@ func Build(opts Options) (*Plan, error) {
 		covers = append(covers, epCover{scen: scen, cond: cond})
 		p.Endpoints = append(p.Endpoints, ep)
 	}
+
+	// Unpinned const names must be unique among the planned queries (plan
+	// order): a merged scenarioFilter arm reaches two arms whose SQL can
+	// derive the same DefaultQueryName (two shapes named after one first
+	// table), and duplicate consts/repo methods do not compile. Pins are
+	// reserved first and never rewritten; a collision renames only the
+	// later unpinned occurrence, so single-arm mappings keep their names.
+	assignUniqueQueryNames(p.Queries, m.DBMethods)
 
 	// Arm-coverage advisory (D4): every reachable dispatch arm no endpoint
 	// covers gets a warning — the same style convertgo prints. The tool
@@ -524,6 +549,52 @@ func DefaultQueryName(q *ir.Query, dml bool) string {
 		table = pascalOf(q.Tables[0])
 	}
 	return verb + table + "Query"
+}
+
+// QueryNamesInOrder assigns every query its default const name walking the
+// given order: a name already taken gains a numeric suffix. The plan passes
+// its planned canonical queries in plan order, and the discover draft
+// passes the same order (its endpoint slices first), so emitted pins and
+// the unpinned fallback agree.
+func QueryNamesInOrder(queries []*ir.Query) map[string]string {
+	out := make(map[string]string, len(queries))
+	used := map[string]bool{}
+	for _, q := range queries {
+		if q == nil || q.DuplicateOf != "" {
+			continue
+		}
+		name := DefaultQueryName(q, q.Type.IsDML())
+		base := name
+		for i := 2; used[name]; i++ {
+			name = base + strconv.Itoa(i)
+		}
+		used[name] = true
+		out[q.ID] = name
+	}
+	return out
+}
+
+// assignUniqueQueryNames rewrites colliding unpinned defaults in place.
+// Pinned names are reserved first and used verbatim; only the later
+// unpinned duplicate moves.
+func assignUniqueQueryNames(queries []QueryPlan, pins map[string]MethodPin) {
+	used := map[string]bool{}
+	for i := range queries {
+		if pin, ok := pins[queries[i].ID]; ok && pin.Name != "" {
+			used[pin.Name] = true
+		}
+	}
+	for i := range queries {
+		qp := &queries[i]
+		if pin, ok := pins[qp.ID]; ok && pin.Name != "" {
+			continue
+		}
+		base := qp.Name
+		for n := 2; used[qp.Name]; n++ {
+			qp.Name = base + strconv.Itoa(n)
+		}
+		used[qp.Name] = true
+	}
 }
 
 // queriesInSpan collects the queries whose span sits inside the

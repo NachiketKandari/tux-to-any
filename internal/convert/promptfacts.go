@@ -48,7 +48,18 @@ var (
 // carries them only on the first fragment).
 func writePromptFacts(sb *strings.Builder, w factsWording, scen *scenPrompt, includeShared bool, source, receiver, dbContract, contract string, helpers, constants, errCodes []string, stubs []plan.Stub) {
 	if scen != nil && w.scenarioDecl != "" {
-		fmt.Fprintf(sb, "Scenario slice: %s — contradicted branches already folded away, implement exactly what remains. %s (int counters, EXEC SQL INCLUDE headers) are context only.\n\n", scen.Key, w.scenarioDecl)
+		fmt.Fprintf(sb, "Scenario slice: %s — contradicted branches already folded away, implement exactly what remains. %s (int counters, EXEC SQL INCLUDE headers) are context only.\n", scen.Key, w.scenarioDecl)
+		if scen.Filter != "" {
+			fmt.Fprintf(sb, "Scenario filter: %s — the slice is the re-fold under %s", scen.Filter, strings.Join(scen.Matched, ", "))
+			if len(scen.Pruned) > 0 {
+				sb.WriteString("; pruned at plan time: " + strings.Join(scen.Pruned, ", "))
+			}
+			sb.WriteString("; the surviving arm guards stay live for runtime dispatch.\n")
+		}
+		for _, r := range scen.Residue {
+			sb.WriteString("Unfolded predicate — kept verbatim, the fold could not decide it: " + r + "\n")
+		}
+		sb.WriteString("\n")
 	}
 	writeDBContract(sb, dbContract)
 	if calls := requiredCalls(source, receiver); len(calls) > 0 {

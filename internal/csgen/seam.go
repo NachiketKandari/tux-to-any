@@ -68,6 +68,13 @@ func userPrompt(p *csplan.Plan, ep EpData, svc fileData, source string, notes []
 	}
 	fmt.Fprintf(&sb, "Component: %s · service: %s · endpoint: %s%s · arm source lines %s\n",
 		p.Component, p.Service, ep.Name, scenario, ep.Span)
+	if ep.Filter != "" {
+		fmt.Fprintf(&sb, "Scenario filter: %s — the arm is the re-fold under %s", ep.Filter, strings.Join(ep.FilterMatched, ", "))
+		if len(ep.FilterPruned) > 0 {
+			sb.WriteString("; pruned at plan time: " + strings.Join(ep.FilterPruned, ", "))
+		}
+		sb.WriteString("; the surviving arm guards stay live for runtime dispatch.\n")
+	}
 	fmt.Fprintf(&sb, "Return type: Task<%s> — the method already ends with `return %s;`\n\n", ep.RetType, ep.ReturnExpr)
 
 	sb.WriteString("Repository methods available (deterministic calls, already rendered in the prologue):\n")

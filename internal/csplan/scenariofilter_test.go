@@ -83,6 +83,12 @@ func TestCSPlanBuildScenarioFilter(t *testing.T) {
 	if got := p.Endpoints[0].Scenario; got != "c_flag in {F,H}" {
 		t.Errorf("scenario = %q, want c_flag in {F,H}", got)
 	}
+	if got := p.Endpoints[0].Filter; got != "c_flag == 'H' || c_flag == 'F'" {
+		t.Errorf("filter = %q, want the expression verbatim", got)
+	}
+	if got := strings.Join(p.Endpoints[0].FilterMatched, "; "); got != "c_flag=F; c_flag=H" {
+		t.Errorf("filter matched = %q, want the F and H assignments", got)
+	}
 	if len(p.Endpoints[0].QueryIDs) != 2 {
 		t.Errorf("endpoint queries = %v, want both arms' inserts", p.Endpoints[0].QueryIDs)
 	}
@@ -99,6 +105,63 @@ func TestCSPlanBuildScenarioFilter(t *testing.T) {
 	}
 	if !defaultWarned {
 		t.Errorf("the uncovered default arm must warn, warnings = %v", p.Warnings)
+	}
+}
+
+// csCollideSrc gives each arm a SELECT from the same first table: the two
+// distinct queries derive the same DefaultQueryName, the merged-filter
+// collision the plan must disambiguate.
+const csCollideSrc = `void SVC_CC(TPSVCINFO *rqst) {
+	char c_flag;
+	long a;
+	long b;
+	if (c_flag == 'H') {
+		EXEC SQL SELECT NVL(MAX(X), 0) INTO :a FROM MF_COMPANIES WHERE A = :sql_x;
+		Fadd32(obuf, FML_H_OUT, (char *)&a, 0);
+	} else if (c_flag == 'F') {
+		EXEC SQL SELECT NVL(MAX(Y), 0) INTO :b FROM MF_COMPANIES WHERE B = :sql_y;
+		Fadd32(obuf, FML_F_OUT, (char *)&b, 0);
+	}
+	tpreturn(TPSUCCESS, 0L, obuf, 0L, 0);
+}
+`
+
+// TestCSPlanMergedFilterQueryNamesUnique pins the merged-endpoint naming
+// fix: two arms whose SQL both name MF_COMPANIES must not emit duplicate
+// NamedQueries consts — the second default gains the numeric suffix, and
+// the pins the draft emits come from the same helper.
+func TestCSPlanMergedFilterQueryNamesUnique(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "SVC_CC.pc")
+	if err := os.WriteFile(path, []byte(csCollideSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := ir.ExtractFileOpts(path, ir.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Mapping{
+		Namespace: "Tux", Component: "Collide",
+		Endpoints: []Endpoint{{ScenarioFilter: "c_flag == 'H' || c_flag == 'F'", Name: "Both", Route: "both"}},
+	}
+	p, err := Build(Options{Main: f, Source: csCollideSrc, Mapping: m})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Queries) != 2 {
+		t.Fatalf("queries = %+v, want the two merged-arm queries", p.Queries)
+	}
+	seen := map[string]bool{}
+	for _, qp := range p.Queries {
+		if seen[qp.Name] {
+			t.Errorf("duplicate NamedQueries const %q: %+v", qp.Name, p.Queries)
+		}
+		seen[qp.Name] = true
+	}
+	if !seen["GetMFCOMPANIESQuery"] || !seen["GetMFCOMPANIESQuery2"] {
+		t.Errorf("names = %v, want the base + numeric-suffix pair", seen)
+	}
+	if got := QueryNamesInOrder(f.Queries)[p.Queries[1].ID]; got != "GetMFCOMPANIESQuery2" {
+		t.Errorf("QueryNamesInOrder[%s] = %q, want the disambiguated suffix", p.Queries[1].ID, got)
 	}
 }
 
