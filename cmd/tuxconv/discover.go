@@ -134,6 +134,7 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *con
 			// (FML traffic on either contract side — a reads-only slice is
 			// a message-only API, the handler returns the string).
 			scens := flow.Scenarios(tree, axis)
+			axes := tree.AxesFor(src)
 			diff := flow.DiffScenarios(f.Entry, scens)
 			qualifying := 0
 			for _, sc := range scens {
@@ -155,6 +156,11 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *con
 				if aerr != nil {
 					return written, aerr
 				}
+				axesPaths, aerr := axesArtifacts(log, scenDir, f.Entry, axes)
+				if aerr != nil {
+					return written, aerr
+				}
+				paths = append(paths, axesPaths...)
 				for _, p := range paths {
 					fmt.Printf("  artifact: %s\n", p)
 				}

@@ -81,3 +81,33 @@ func scenarioArtifacts(log *slog.Logger, dir, entry string, src []byte, scens []
 	}
 	return written, nil
 }
+
+// axesArtifacts writes the dispatch-axis registry twin for one entry
+// (scenario-filter plan §3): <entry>.axes.json (the machine record) +
+// <entry>.axes.md (the human table), in the same scenarios/ dir as the
+// slice artifacts. Same write-verbatim, no-ledger contract as
+// scenarioArtifacts.
+func axesArtifacts(log *slog.Logger, dir, entry string, axes []*flow.DispatchAxis) ([]string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	var written []string
+	jsonPath := filepath.Join(dir, entry+".axes.json")
+	data, err := json.MarshalIndent(flow.AxesReport{Entry: entry, Axes: axes}, "", "  ")
+	if err != nil {
+		return written, err
+	}
+	if err := os.WriteFile(jsonPath, append(data, '\n'), 0o644); err != nil {
+		return written, fmt.Errorf("scenarios: write %s: %w", jsonPath, err)
+	}
+	written = append(written, jsonPath)
+	mdPath := filepath.Join(dir, entry+".axes.md")
+	if err := os.WriteFile(mdPath, []byte(flow.RenderAxesMD(entry, axes)), 0o644); err != nil {
+		return written, fmt.Errorf("scenarios: write %s: %w", mdPath, err)
+	}
+	written = append(written, mdPath)
+	if log != nil {
+		log.Info("axes artifacts written", "dir", dir, "entry", entry, "axes", len(axes))
+	}
+	return written, nil
+}

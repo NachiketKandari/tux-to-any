@@ -22,22 +22,42 @@ import (
 // RefName is the scenario-key identifier — the alias when present, else the
 // ref's base ident before the first '.'.
 type DispatchAxis struct {
-	Ref     string
-	RefName string
-	Alias   string
-	Domain  []string
-	Sites   int
+	Ref     string   `json:"ref"`
+	RefName string   `json:"ref_name"`
+	Alias   string   `json:"alias,omitempty"`
+	Domain  []string `json:"domain"`
+	Sites   int      `json:"sites"`
 	// Normalized records that the axis ref needed the normalize chain
 	// (strcmp/upper-casing) to match its domain. RESERVED as data — no
 	// reader propagates it yet (engine-wiring audit Tier-2 note).
-	Normalized bool
+	Normalized bool `json:"normalized,omitempty"`
 	// HasDefault marks a dispatch chain that terminates in an else — the
 	// entry dispatches a default arm no domain value names. Detected from
 	// the flow tree (unbraced chain arms never join the condition
 	// inventory, so the tree is the truth here); the default arm's slice
 	// keys `<var>=DefaultKey()`.
-	HasDefault bool
+	HasDefault bool `json:"has_default,omitempty"`
+	// GuardLines lists the distinct branch-guard lines the axis values sit
+	// in (the ≥2-guards rubric evidence). Filled by every composer; the
+	// axes registry sorts and renders it.
+	GuardLines []int `json:"guard_lines,omitempty"`
+	// Kind classifies the axis's place in the dispatch structure when a
+	// registry is requested (Tree.AxesFor): primary = a top-level dispatch
+	// chain, secondary = guards nested inside another arm's span. Empty
+	// from the single-axis DispatchAxisFor (it does not classify).
+	Kind AxisKind `json:"kind,omitempty"`
 }
+
+// AxisKind classifies a registry axis's place in the entry's dispatch
+// structure (scenario-filter plan §3): the primary axis is the top dispatch
+// chain; a secondary axis dispatches inside one of its arms (e.g. a
+// `new_flag` chain nested under `c_flag == 'H'`).
+type AxisKind string
+
+const (
+	AxisPrimary   AxisKind = "primary"
+	AxisSecondary AxisKind = "secondary"
+)
 
 // DefaultKey returns the scenario value naming the default (else) arm:
 // "default" unless a domain value already claims it, then the first free
@@ -145,145 +165,27 @@ func axisSymbolValue(f *ir.File, fn string, line int, name string) (string, bool
 // entry's body span with comment masking (facts.InComment) so commented-out
 // predicates never pollute the domain.
 func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string, irFile *ir.File) *DispatchAxis {
-	span, ok := entrySpan(facts, entry)
-	if !ok {
+	h := harvestAxes(src, facts, entry, irFile)
+	if h == nil {
 		return nil
-	}
-	lines := bytes.Split(src, []byte("\n"))
-	from, to := span[0], span[1]
-	if from < 1 {
-		from = 1
-	}
-	if to > len(lines) {
-		to = len(lines)
-	}
-	if from > to {
-		return nil
-	}
-
-	refs := map[string]*axisStats{}
-	idents := map[string]*axisStats{}
-	symbs := map[string]*axisStats{}     // ident == defined-constant compares
-	links := map[string]map[string]int{} // ref → alias → linked count
-
-	// Pass 1: strcmp + normalize + char-compare harvest (comment-masked).
-	for i := from; i <= to; i++ {
-		text := string(lines[i-1])
-		if lineCommentMasked(facts, i, text) {
-			continue
-		}
-		for _, m := range strcmpSiteRe.FindAllStringSubmatch(text, -1) {
-			ref, val := m[1], m[2]
-			st, ok := refs[ref]
-			if !ok {
-				st = newAxisStats(ref)
-				refs[ref] = st
-			}
-			st.vals[val] = true
-			st.sites++
-		}
-		for _, m := range charAssignRe.FindAllStringSubmatch(text, -1) {
-			ident, ch := m[1], m[2]
-			st, ok := idents[ident]
-			if !ok {
-				st = newAxisStats(ident)
-				idents[ident] = st
-			}
-			st.cvals[ch] = true
-			// Normalization link: the nearest preceding strcmp guarding
-			// this assignment (unbraced if-bodies keep them adjacent).
-			linkNormal(links, refs, i, ident, ch, lines, from)
-		}
-		for _, m := range charCompareRe.FindAllStringSubmatch(text, -1) {
-			ident, ch := m[1], m[2]
-			st, ok := idents[ident]
-			if !ok {
-				st = newAxisStats(ident)
-				idents[ident] = st
-			}
-			st.compares++
-			st.cvals[ch] = true
-		}
-		for _, m := range identCompareRe.FindAllStringSubmatch(text, -1) {
-			ident, konst := m[1], m[2]
-			val, defined := axisSymbolValue(irFile, entry, i, konst)
-			if !defined {
-				continue
-			}
-			if _, isConst := axisSymbolValue(irFile, entry, i, ident); isConst {
-				continue // constant==constant folds at compile time — never dispatch
-			}
-			st, ok := symbs[ident]
-			if !ok {
-				st = newAxisStats(ident)
-				symbs[ident] = st
-			}
-			st.sites++
-			st.vals[val] = true
-		}
-	}
-
-	// Pass 2: guard structure. An axis is dispatch structure, not string
-	// similarity: its values must sit in the guards of (mutually exclusive)
-	// branch arms. One branch record is ONE guard however many values its
-	// compound condition tests — a membership strcmp chain (`!=0 && !=0`)
-	// is flag derivation inside one arm, never a dispatch spine.
-	for bi := range facts.Branches {
-		b := &facts.Branches[bi]
-		if b.Function != entry || b.Cond == "" || b.StartLine < from || b.StartLine > to {
-			continue
-		}
-		for _, m := range strcmpSiteRe.FindAllStringSubmatch(b.Cond, -1) {
-			if st := refs[m[1]]; st != nil {
-				st.guards[b.StartLine] = true
-			}
-		}
-		for _, m := range charCompareRe.FindAllStringSubmatch(b.Cond, -1) {
-			if st := idents[m[1]]; st != nil {
-				st.guards[b.StartLine] = true
-			}
-		}
-		for _, m := range identCompareRe.FindAllStringSubmatch(b.Cond, -1) {
-			if st := symbs[m[1]]; st != nil {
-				st.guards[b.StartLine] = true
-			}
-		}
 	}
 
 	// Recognizer 1: the ref with the most normalization links (its alias
 	// is the most-linked ident); domain = linked values ∪ strcmp values.
-	best := pickAxis(refs, links, idents, func(st *axisStats) (alias string, weight int) {
-		maxAlias, maxN := "", 0
-		for al, n := range links[st.ref] {
-			if n > maxN {
-				maxAlias, maxN = al, n
-			}
-		}
-		if maxAlias == "" {
-			return "", 0
-		}
-		return maxAlias, maxN
-	})
+	best := h.normalizeFirst()
 
 	// Recognizer 2: direct compare — strcmp refs and defined-constant
 	// compares compete on the same rubric, most distinct values first
 	// (the file's main if-chain is the dispatcher, whatever spelling its
 	// tests use); ties break by site count, then identifier.
 	if best == nil {
-		byValues := func(st *axisStats) (alias string, weight int) {
-			return "", len(st.vals)
-		}
-		refBest := pickAxis(refs, links, idents, byValues)
-		symbBest := pickAxis(symbs, links, idents, byValues)
-		best = betterDirectAxis(refBest, symbBest)
+		best = h.directBest()
 	}
 
 	// Recognizer 3: char-compare scalar (no strcmp or defined-constant
 	// compare anywhere).
 	if best == nil {
-		best = pickAxis(idents, links, idents, func(st *axisStats) (alias string, weight int) {
-			return st.ref, st.compares
-		})
+		best = h.charFirst()
 	}
 	if best == nil || len(best.Domain) < 2 {
 		return nil
@@ -320,64 +222,18 @@ func betterDirectAxis(refBest, symbBest *DispatchAxis) *DispatchAxis {
 }
 
 // pickAxis selects the qualifying stats with the recognizer's weight,
-// breaking ties by site count then identifier, and composes the axis. A
+// breaking ties by site count then identifier, and composes the axis (the
+// ranking lives in collectAxes, axes.go — one home for the rubric). A
 // candidate qualifies only when its values sit in at least two distinct
 // branch guards (the candidate's own strcmp/compare guards, plus the
 // alias's char-compare guards — the normalize idiom splits the test
 // between spellings): one guard is a compound condition, not a dispatch.
 func pickAxis(stats map[string]*axisStats, links map[string]map[string]int, idents map[string]*axisStats, weightOf func(*axisStats) (alias string, weight int)) *DispatchAxis {
-	var best *axisStats
-	var bestAlias string
-	var bestWeight int
-	refs := make([]string, 0, len(stats))
-	for r := range stats {
-		refs = append(refs, r)
-	}
-	sort.Strings(refs)
-	for _, r := range refs {
-		st := stats[r]
-		alias, weight := weightOf(st)
-		if weight <= 0 {
-			continue
-		}
-		if guardSitesOf(st, alias, idents) < 2 {
-			continue
-		}
-		if weight > bestWeight || (weight == bestWeight && best != nil && (st.sites+st.compares) > (best.sites+best.compares)) {
-			best, bestAlias, bestWeight = st, alias, weight
-		}
-	}
-	if best == nil {
+	cands := collectAxes(stats, links, idents, weightOf)
+	if len(cands) == 0 {
 		return nil
 	}
-	domain := map[string]bool{}
-	for v := range best.vals {
-		domain[v] = true
-	}
-	for v := range best.cvals {
-		domain[v] = true
-	}
-	var vals []string
-	for v := range domain {
-		vals = append(vals, v)
-	}
-	sort.Strings(vals)
-	name := bestAlias
-	if name == "" {
-		name = best.ref
-	}
-	if dot := strings.Index(name, "."); dot > 0 {
-		name = name[:dot]
-	}
-	normalized := bestAlias != "" && len(links[best.ref]) > 0
-	return &DispatchAxis{
-		Ref:        best.ref,
-		RefName:    name,
-		Alias:      bestAlias,
-		Domain:     vals,
-		Sites:      best.sites + best.compares,
-		Normalized: normalized,
-	}
+	return cands[0].axis
 }
 
 // guardSitesOf counts the distinct branch-guard lines a candidate's values
@@ -658,18 +514,18 @@ type ScenarioCounts struct {
 // wraps it.
 func ScenarioFor(tree *Tree, axis *DispatchAxis, value string) *Scenario {
 	sc := &Scenario{Key: axis.Key() + "=" + value, Var: axis.Key(), Value: value}
-	ref, alias := "", ""
+	var fs foldAssumptions
 	if axis != nil {
-		ref, alias = axis.Ref, axis.Alias
+		// Aliases fold too: predicates may use either the ref (strcmp) or
+		// the alias (char compare) — the assumption covers both spellings.
+		fs = foldAssumptions{{Key: axis.Key(), Ref: axis.Ref, Alias: axis.Alias, Value: value}}
 		sc.Default = axis.HasDefault && value == axis.DefaultKey()
 	}
-	// Aliases fold too: predicates may use either the ref (strcmp) or the
-	// alias (char compare) — the assumption covers both spellings.
 	inAxis := func(e *pred.Expr) bool {
-		return exprTouchesAxis(e, ref, alias)
+		return exprTouchesAny(e, fs)
 	}
 	assume := func(e *pred.Expr) (pred.Expr, tribool, bool) {
-		return foldExpr(e, ref, alias, value)
+		return foldExpr(e, fs)
 	}
 	var walk func(nodes []*Node) []*SliceNode
 	// foldArm folds one node under the scenario assumption — the chain
@@ -822,44 +678,89 @@ const (
 	triMixed
 )
 
+// axisAssumption is one assumed axis binding for the fold: Ref/Alias name
+// the axis in source text, Value is the assumed domain value, Key is the
+// registry identifier the binding was derived from ("" for the legacy
+// single-axis slice).
+type axisAssumption struct {
+	Key   string
+	Ref   string
+	Alias string
+	Value string
+}
+
+// foldAssumptions is the fold's assumption set: one binding for a
+// single-value scenario slice, several for a scenario filter's matching
+// assignment (the values hold simultaneously). One fold implementation
+// serves both — no parallel semantics to drift.
+type foldAssumptions []axisAssumption
+
+// lookup resolves leaf text to its assumed binding index and value.
+func (fs foldAssumptions) lookup(text string) (int, string, bool) {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return -1, "", false
+	}
+	for i := range fs {
+		if t == fs[i].Ref || t == fs[i].Alias {
+			return i, fs[i].Value, true
+		}
+	}
+	return -1, "", false
+}
+
 // exprTouchesAxis reports whether any leaf of e references the axis ref or
 // alias in a COMPARISON sense: strcmp/strncmp calls whose compared argument
 // is the ref (the dispatch idiom), ident leaves, or raw text mentioning the
 // axis. Write-target mentions (Fget32/Fadd32 buffer arguments) never count
 // — the read guard is not a predicate on the axis value.
 func exprTouchesAxis(e *pred.Expr, ref, alias string) bool {
+	return exprTouchesAny(e, foldAssumptions{{Ref: ref, Alias: alias}})
+}
+
+// exprTouchesAny is exprTouchesAxis generalized to an assumption set.
+func exprTouchesAny(e *pred.Expr, fs foldAssumptions) bool {
 	if e == nil {
 		return false
-	}
-	touch := func(text string) bool {
-		return text != "" && (text == ref || text == alias)
 	}
 	switch e.Kind {
 	case pred.KindOr, pred.KindAnd:
 		for i := range e.Items {
-			if exprTouchesAxis(&e.Items[i], ref, alias) {
+			if exprTouchesAny(&e.Items[i], fs) {
 				return true
 			}
 		}
 	case pred.KindNot:
-		return exprTouchesAxis(e.Inner, ref, alias)
+		return exprTouchesAny(e.Inner, fs)
 	case pred.KindCmp:
-		return exprTouchesAxis(e.L, ref, alias) || exprTouchesAxis(e.R, ref, alias)
+		return exprTouchesAny(e.L, fs) || exprTouchesAny(e.R, fs)
 	case pred.KindCall:
 		if isStrcmpName(e.Name) {
-			if len(e.Args) > 0 && (touch(strings.TrimSpace(e.Args[0])) || len(e.Args) > 1 && touch(strings.TrimSpace(e.Args[1]))) {
+			if len(e.Args) > 0 && fs.touches(strings.TrimSpace(e.Args[0])) ||
+				len(e.Args) > 1 && fs.touches(strings.TrimSpace(e.Args[1])) {
 				return true
 			}
 		}
 		return false
 	case pred.KindIdent:
-		return touch(e.Name)
+		return fs.touches(e.Name)
 	case pred.KindLit:
 		return false
 	case pred.KindRaw:
-		return ref != "" && containsIdent(e.Text, ref) || alias != "" && containsIdent(e.Text, alias)
+		for i := range fs {
+			if fs[i].Ref != "" && containsIdent(e.Text, fs[i].Ref) ||
+				fs[i].Alias != "" && containsIdent(e.Text, fs[i].Alias) {
+				return true
+			}
+		}
 	}
 	return false
+}
+
+// touches reports whether text names any assumed axis.
+func (fs foldAssumptions) touches(text string) bool {
+	_, _, ok := fs.lookup(text)
+	return ok
 }
 
 // containsIdent reports whether name appears in text as a complete
@@ -887,14 +788,14 @@ func isStrcmpName(name string) bool {
 	return name == "strcmp" || name == "strncmp"
 }
 
-// foldExpr evaluates e under the assumption `ref/alias == value`: axis
-// literals match the value; `x == v` (axis side) → true, `x != v` → false;
-// strcmp-forms: strcmp(ref,v)==0 → v==value; !strcmp / strcmp!=0 invert;
-// and/or/not compose; any non-axis leaf or any Raw degrades to mixed when
-// it shares a node with axis terms, unknown otherwise. Returns the residual
+// foldExpr evaluates e under an assumption set: assumed axis literals match
+// their values; `x == v` (axis side) → true, `x != v` → false; strcmp-forms:
+// strcmp(ref,v)==0 → v==assumed value; !strcmp / strcmp!=0 invert;
+// and/or/not compose; any non-axis leaf or any Raw degrades to mixed when it
+// shares a node with axis terms, unknown otherwise. Returns the residual
 // expression (axis terms removed), the folded truth, and whether the fold
 // was conclusive.
-func foldExpr(e *pred.Expr, ref, alias, value string) (pred.Expr, tribool, bool) {
+func foldExpr(e *pred.Expr, fs foldAssumptions) (pred.Expr, tribool, bool) {
 	if e == nil {
 		return pred.Expr{}, triUnknown, false
 	}
@@ -904,7 +805,7 @@ func foldExpr(e *pred.Expr, ref, alias, value string) (pred.Expr, tribool, bool)
 		anyTrue := false
 		raw := false
 		for i := range e.Items {
-			r, t, ok := foldExpr(&e.Items[i], ref, alias, value)
+			r, t, ok := foldExpr(&e.Items[i], fs)
 			if !ok {
 				raw = true
 				resid = append(resid, r)
@@ -936,7 +837,7 @@ func foldExpr(e *pred.Expr, ref, alias, value string) (pred.Expr, tribool, bool)
 		anyFalse := false
 		raw := false
 		for i := range e.Items {
-			r, t, ok := foldExpr(&e.Items[i], ref, alias, value)
+			r, t, ok := foldExpr(&e.Items[i], fs)
 			if !ok {
 				raw = true
 				resid = append(resid, r)
@@ -966,7 +867,7 @@ func foldExpr(e *pred.Expr, ref, alias, value string) (pred.Expr, tribool, bool)
 			return pred.Expr{}, triTrue, true
 		}
 	case pred.KindNot:
-		r, t, ok := foldExpr(e.Inner, ref, alias, value)
+		r, t, ok := foldExpr(e.Inner, fs)
 		if !ok {
 			return pred.Expr{Kind: pred.KindNot, Inner: &r}, triUnknown, false
 		}
@@ -981,11 +882,11 @@ func foldExpr(e *pred.Expr, ref, alias, value string) (pred.Expr, tribool, bool)
 			return pred.Expr{Kind: pred.KindNot, Inner: &r}, triUnknown, false
 		}
 	case pred.KindCmp:
-		return foldCmp(e, ref, alias, value)
+		return foldCmp(e, fs)
 	case pred.KindCall:
-		return foldCall(e, ref, alias, value)
+		return foldCall(e, fs)
 	case pred.KindIdent:
-		if isAxisLeaf(e.Name, ref, alias) {
+		if fs.touches(e.Name) {
 			// A bare axis ident in a boolean context: `if (strcmp(...))`
 			// shape is a Call; a bare ident equals its value only if the
 			// value is nonzero — undecidable textually → mixed keeps it.
@@ -1001,26 +902,31 @@ func foldExpr(e *pred.Expr, ref, alias, value string) (pred.Expr, tribool, bool)
 // `trn_cd != 'P'`, `strcmp(x,"A") == 0`, `strcmp(x,"A") != 0`, and
 // `(trn_cd=='A') && (sql_mf_sch_mul_trn_alwd=='Y')`. C semantics: strcmp
 // returns 0 when EQUAL, so `strcmp(x,v) == 0` is the equals-test.
-func foldCmp(e *pred.Expr, ref, alias, value string) (pred.Expr, tribool, bool) {
+func foldCmp(e *pred.Expr, fs foldAssumptions) (pred.Expr, tribool, bool) {
 	lText, rText := leafText(e.L), leafText(e.R)
-	lAxis := isAxisLeaf(lText, ref, alias)
-	rAxis := isAxisLeaf(rText, ref, alias)
+	lIdx, lVal, lAxis := fs.lookup(lText)
+	rIdx, rVal, rAxis := fs.lookup(rText)
 	// strcmp(x, "v") == 0 → equals-test; != 0 → not-equals. Either operand
 	// may carry the call (both C spellings occur).
-	if v, axis := strcmpAxisOf(e.L, ref, alias); axis && isNumericZero(rText) {
-		return equalsFold(v, value, e.Op)
+	if v, av, axis := strcmpAxisOf(e.L, fs); axis && isNumericZero(rText) {
+		return equalsFold(v, av, e.Op)
 	}
-	if v, axis := strcmpAxisOf(e.R, ref, alias); axis && isNumericZero(lText) {
-		return equalsFold(v, value, e.Op)
+	if v, av, axis := strcmpAxisOf(e.R, fs); axis && isNumericZero(lText) {
+		return equalsFold(v, av, e.Op)
 	}
 	if lAxis && rAxis {
-		// ref vs alias comparisons are internal to the axis.
-		return pred.Expr{}, triTrue, true
+		if lIdx == rIdx {
+			// ref vs alias comparisons are internal to one axis.
+			return pred.Expr{}, triTrue, true
+		}
+		// Two different assumed axes compared: runtime truth.
+		return *e, triMixed, true
 	}
 	if lAxis || rAxis {
 		other := rText
+		value := lVal
 		if rAxis {
-			other = lText
+			other, value = lText, rVal
 		}
 		if pred.IsLitText(other) {
 			lit := unquote(other)
@@ -1033,30 +939,31 @@ func foldCmp(e *pred.Expr, ref, alias, value string) (pred.Expr, tribool, bool) 
 		}
 		return pred.Expr{Kind: pred.KindCmp, L: e.L, Op: e.Op, R: predLitPtr(value)}, triMixed, true
 	}
-	// Neither side touches the axis (e.g. `extra == 1`, `Fget32(...) == -1`):
-	// runtime truth — the caller keeps it (never residue: not axis text).
+	// Neither side touches an assumed axis (e.g. `extra == 1`,
+	// `Fget32(...) == -1`): runtime truth — the caller keeps it (never
+	// residue: not axis text).
 	return *e, triMixed, true
 }
 
-// strcmpAxisOf reports (value, true) when e is a strcmp/strncmp call whose
-// buffer argument is the axis ref/alias and whose other argument is a
-// string literal; ("", false) otherwise.
-func strcmpAxisOf(e *pred.Expr, ref, alias string) (string, bool) {
+// strcmpAxisOf reports (literal, assumedValue, true) when e is a
+// strcmp/strncmp call whose buffer argument is an assumed axis and whose
+// other argument is a string literal; ("", "", false) otherwise.
+func strcmpAxisOf(e *pred.Expr, fs foldAssumptions) (string, string, bool) {
 	if e == nil || e.Kind != pred.KindCall || !isStrcmpName(e.Name) || len(e.Args) != 2 {
-		return "", false
+		return "", "", false
 	}
 	a0, a1 := strings.TrimSpace(e.Args[0]), strings.TrimSpace(e.Args[1])
-	if isAxisLeaf(a0, ref, alias) {
+	if _, av, ok := fs.lookup(a0); ok {
 		if v, ok := litString(a1); ok {
-			return v, true
+			return v, av, true
 		}
 	}
-	if isAxisLeaf(a1, ref, alias) {
+	if _, av, ok := fs.lookup(a1); ok {
 		if v, ok := litString(a0); ok {
-			return v, true
+			return v, av, true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // isNumericZero reports the `== 0` comparison operand (plain 0 / 0L).
@@ -1085,21 +992,15 @@ func equalsFold(v, value, op string) (pred.Expr, tribool, bool) {
 
 // foldCall folds a Call leaf. strcmp truth is C's: nonzero (= different)
 // is true; `!strcmp` inverts to the equals-test.
-func foldCall(e *pred.Expr, ref, alias, value string) (pred.Expr, tribool, bool) {
-	if v, axis := strcmpAxisOf(e, ref, alias); axis {
-		if v == value {
+func foldCall(e *pred.Expr, fs foldAssumptions) (pred.Expr, tribool, bool) {
+	if v, av, axis := strcmpAxisOf(e, fs); axis {
+		if v == av {
 			return pred.Expr{}, triFalse, true
 		}
 		return pred.Expr{}, triTrue, true
 	}
 	// Any other call is runtime truth → mixed (kept, not residue).
 	return *e, triMixed, true
-}
-
-// isAxisLeaf reports whether text names the axis ref or alias exactly.
-func isAxisLeaf(text, ref, alias string) bool {
-	t := strings.TrimSpace(text)
-	return t != "" && (t == ref || t == alias)
 }
 
 // litString extracts the C string literal content ("A") from raw arg text.
