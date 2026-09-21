@@ -154,7 +154,7 @@ func (s *Service) Pin(queryID string) (plan.MethodPin, bool) {
 // fieldFromFML derives a Go field name from an FML field name:
 // FML_COMP_CD → CompCd (deterministic; reference prettiness is a §4.8.5 note).
 func fieldFromFML(fml string) string {
-	return common.Export(common.CamelLowerGo(strings.ToLower(strings.TrimPrefix(fml, "FML_"))))
+	return common.FieldFromFML(fml)
 }
 
 // camelLower renders snake_case host var names as lowerCamelCase Go names.

@@ -342,16 +342,59 @@ full real round-trip (`discover -target cs` → `convertcs`) is clean: 0 sql
 deviations, 0 structural issues; the Go real run lands the combined
 controller body with both arms' store calls.
 
-Open follow-up **S7** (found by a real OpenRouter run on mainTux F||I):
-the accepted merged-filter body kept the `c_flag == "I"` runtime guard but
-dropped the `c_flag == "F"` one, and no gate checks mixed-guard retention
-for scenario endpoints — `conditionPresenceErrs` is wired only to the
-census-draft path and matches on a shared identifier, which two
-value-guards of one axis satisfy loosely. The filtered slice's
-`FoldMixed` guards are the runtime dispatch contract, so this needs a
-scenario-guard presence gate (skeleton + literal per mixed node) and/or
-prompt hardening. The deterministic `-no-llm` body stays flat by design
-(best-effort, LLM resume upgrades) and does not encode dispatch either.
+**S7 — fixed** (found by a real OpenRouter run on mainTux F||I; the
+accepted merged-filter body kept `if c_flag == "I"` and ran the F arm
+unconditionally). Root cause was gate-shaped, not prompt-shaped: the
+fragment gate is partial by construction and the combined gates carried
+no guard check at all — `conditionPresenceErrs` is census-fed, and
+scenario slices carry no census (the flattened slice replaces the
+`flowDraft`); even a census would have matched loosely (skeleton-equal OR
+shares ≥1 identifier, effects-only coverage), and two value-guards of one
+axis share the identifier. The repair prompt that fixed the five
+identifier errors had no scenario facts, so nothing in the run could see
+the dropped guard.
+
+The deterministic fix is `flow.MixedGuards` (the shared collection: every
+`FoldMixed` node with surviving behavior; `Cond` — verbatim for a merged
+filter, axis-stripped for a single-value slice — plus the pre-fold `Alt`
+when it differs) gated by **predicate equivalence with identifier
+binding** (`pred.Equivalent` + `pred.ParseCode`), not loose skeletons:
+
+* `internal/convert/guards.go` binds the guard identifiers to the
+  accepted host spellings (`pred.IdentKey` snake/camel/Pascal collapse,
+  the endpoint's FML-mapped request fields, and body locals derived from
+  either) and requires an `if` whose whole predicate is structurally
+  identical — operators, literals, and variables. `c_flag == "F"` never
+  matches `c_flag == "I"` (literal), `x == "F"` (unbound variable),
+  `!(c_flag == "F")` (inverted), `a || b` (widened), `a && b`
+  (narrowed), or a mutated comparison; `&&`/`||` reordering and
+  camel/Pascal/request-field spellings are accepted. Single-value slices
+  accept either the stripped residual or the full legacy predicate.
+* The gate is wired into the single-call gate and every chunk-path gate
+  (combined, tx-wrap recheck, composer, repair) and feeds the retry notes
+  + run-level `ConditionGaps`; fragments stay exempt (a guard may live in
+  any fragment). All prompt stances carry a `Runtime dispatch guards`
+  fact line.
+* CS twin: `csplan.buildGuards` carries the same guards with their
+  accepted C# spellings (legacy, mapping `requestFields`, `pascalOf`,
+  `common.FieldFromFML`); `csgen.guardErrs` extracts the block's `if`
+  conditions (string/comment aware) and gates them in `armGates`, and the
+  CS seam prompt carries the same guard line.
+
+Covered by `guards_test.go` (Go unit + the S7 end-to-end fixture with the
+retaining positive control + a chunked-path/repair regression mirroring
+the incident), `pred/equivalence_test.go`, `csplan`/`csgen` guard tests.
+Replaying the real run's accepted body
+(`audit/21092026_035346/...#repair-attempt0`) against the real mainTux
+F||I slice rejects exactly: `condition at line 352 (c_flag == 'F') lost —
+runtime dispatch guard`.
+
+Known limits, deliberate: a guard-clause rewrite (`if cFlag != "F" {
+return }`) is rejected into a retry — the contract is the same predicate,
+not logical normalization; the `-no-llm` deterministic body stays flat by
+design (best-effort, LLM resume upgrades) and does not encode dispatch;
+and a CS request-field spelling the plan cannot derive falls to a retry
+rather than a silent accept.
 
 Acceptance gates: S1 must be byte-neutral for every existing consumer
 (`go test ./internal/flow ./internal/plan ./internal/gen` green with no

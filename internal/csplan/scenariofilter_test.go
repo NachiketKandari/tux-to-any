@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"tux-to-any/internal/ir"
+	"tux-to-any/internal/pred"
 )
 
 // csFilterSrc is the filter fixture: an H/F/default dispatch ladder where
@@ -105,6 +106,23 @@ func TestCSPlanBuildScenarioFilter(t *testing.T) {
 	}
 	if !defaultWarned {
 		t.Errorf("the uncovered default arm must warn, warnings = %v", p.Warnings)
+	}
+	// S7 twin: the merged arms' runtime-dispatch guards ride the plan with
+	// their accepted C# spellings bound.
+	guards := p.Endpoints[0].Guards
+	if len(guards) != 2 {
+		t.Fatalf("guards = %+v, want the H and F mixed guards", guards)
+	}
+	if guards[0].Cond != "c_flag == 'H'" || guards[1].Cond != "c_flag == 'F'" {
+		t.Errorf("guard conditions = %q / %q, want H then F", guards[0].Cond, guards[1].Cond)
+	}
+	for _, g := range guards {
+		if got := g.Bind[pred.IdentKey("cFlag")]; got != "c_flag" {
+			t.Errorf("guard %q bindings = %v, want the camel spelling bound to c_flag", g.Cond, g.Bind)
+		}
+		if got := g.Bind[pred.IdentKey("CFlag")]; got != "c_flag" {
+			t.Errorf("guard %q bindings = %v, want the Pascal spelling bound to c_flag", g.Cond, g.Bind)
+		}
 	}
 }
 

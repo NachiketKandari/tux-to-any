@@ -7,9 +7,11 @@ import (
 	"strconv"
 	"strings"
 
+	"tux-to-any/internal/common"
 	"tux-to-any/internal/flow"
 	"tux-to-any/internal/ir"
 	"tux-to-any/internal/plan"
+	"tux-to-any/internal/pred"
 	"tux-to-any/internal/sqltext"
 )
 
@@ -48,6 +50,20 @@ type QueryPlan struct {
 	Line     [2]int  `json:"line,omitempty"`
 }
 
+// Guard is one runtime-dispatch guard the arm must keep live (the S7 CS
+// twin): the residual predicate plus the C# spellings that bind to its
+// identifiers (legacy name, mapping request field, suggested prop, and the
+// FML-derived request name). The CS seam gates its accepted residual block
+// against these with predicate equivalence.
+type Guard struct {
+	Line int    `json:"line"`
+	Cond string `json:"cond"`
+	// Alt is the original pre-fold predicate when it differs (single-value
+	// slices may keep the full legacy condition). Empty for merged filters.
+	Alt  string            `json:"alt,omitempty"`
+	Bind map[string]string `json:"bind,omitempty"` // spellings (lowercased camel) → legacy ident
+}
+
 // EndpointPlan is one action's C# shape: the controller action, its
 // response DTO, the request properties it reads, and its queries.
 type EndpointPlan struct {
@@ -64,6 +80,7 @@ type EndpointPlan struct {
 	Requests      []string `json:"requests"` // request properties read, in bind order
 	QueryIDs      []string `json:"query_ids"`
 	Residue       []string `json:"residue,omitempty"` // loud slice residue (SCEN-D4)
+	Guards        []Guard  `json:"guards,omitempty"`  // FoldMixed runtime-dispatch guards (S7)
 	LineSpan      [2]int   `json:"line_span"`         // source span of the arm (the LLM seam's code view)
 	SourceSpan    string   `json:"source_span,omitempty"`
 }
@@ -251,6 +268,10 @@ func Build(opts Options) (*Plan, error) {
 				return nil, fmt.Errorf("csplan: endpoint %s maps condition %d — inventory has %d conditions",
 					e.Name, e.Condition, len(opts.Main.Conditions))
 			}
+		}
+
+		if scen != nil {
+			ep.Guards = buildGuards(scen, cond, m)
 		}
 
 		ids := cond.QueryIDs
@@ -527,6 +548,72 @@ func pascalOf(bind string) string {
 // property the discover -target cs drafts suggest for a bind host var —
 // exactly the name the plan derives when the mapping leaves it unset.
 func SuggestRequestProp(bind string) string { return pascalOf(bind) }
+
+// buildGuards derives the arm's runtime-dispatch guards and their accepted
+// C# spellings: the legacy identifier, the mapping's request field, the
+// suggested prop (pascalOf), and the FML-derived request name for the Fget
+// that fills the identifier. Never nil-element, deterministic.
+func buildGuards(scen *flow.Scenario, cond *ir.Condition, m *Mapping) []Guard {
+	mixed := flow.MixedGuards(scen)
+	if len(mixed) == 0 {
+		return nil
+	}
+	out := make([]Guard, 0, len(mixed))
+	for _, g := range mixed {
+		idents := map[string]bool{}
+		for _, text := range []string{g.Cond, g.Alt} {
+			if text == "" {
+				continue
+			}
+			pe := pred.Parse(text)
+			for _, id := range flow.ExprIdents(&pe) {
+				idents[id] = true
+			}
+		}
+		names := make([]string, 0, len(idents))
+		for id := range idents {
+			names = append(names, id)
+		}
+		sort.Strings(names)
+		bind := map[string]string{}
+		claim := func(spelling, ident string) {
+			k := pred.IdentKey(spelling)
+			if k == "" {
+				return
+			}
+			if prev, ok := bind[k]; ok {
+				if prev != ident {
+					bind[k] = ""
+				}
+				return
+			}
+			bind[k] = ident
+		}
+		for _, id := range names {
+			claim(id, id)
+			if n := m.RequestFields[id]; n != "" {
+				claim(n, id)
+			}
+			claim(SuggestRequestProp(id), id)
+		}
+		if cond != nil {
+			for _, op := range cond.FmlOps {
+				if op.Kind != ir.FmlGet || op.Dropped || op.Error {
+					continue
+				}
+				base := strings.TrimSuffix(op.Target, ".arr")
+				base = strings.TrimSuffix(base, ".len")
+				for _, id := range names {
+					if base == id || strings.HasSuffix(base, id) {
+						claim(common.FieldFromFML(op.Field), id)
+					}
+				}
+			}
+		}
+		out = append(out, Guard{Line: g.Line, Cond: g.Cond, Alt: g.Alt, Bind: bind})
+	}
+	return out
+}
 
 // DefaultQueryName derives the NamedQueries const when unpinned:
 // <Verb><Table>Query (GetCstMblAccopnRqstQuery / Update…Query). Exported

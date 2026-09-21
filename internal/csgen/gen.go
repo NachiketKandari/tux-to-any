@@ -91,6 +91,10 @@ type EpData struct {
 	// planner kept verbatim because they touch the axis. The seam prompt
 	// carries them so the LLM implements the kept branches faithfully.
 	Residue []string
+	// Guards are the slice's FoldMixed runtime-dispatch guards (S7 CS
+	// twin): the arm gate requires each one as a live C# if condition with
+	// the same predicate and a bound identifier spelling.
+	Guards []csplan.Guard
 	// LineSpan is the arm's source span (the arm view's extent) — read
 	// directly instead of re-parsing Span (engine-wiring audit Tier-1 #7:
 	// the Sscanf round-trip was a live drift trap).
@@ -307,6 +311,7 @@ func buildEndpoints(p *csplan.Plan) ([]EpData, []QData) {
 			Span:     ep.SourceSpan,
 			Scenario: ep.Scenario, Residue: ep.Residue, LineSpan: ep.LineSpan,
 			Filter: ep.Filter, FilterMatched: ep.FilterMatched, FilterPruned: ep.FilterPruned,
+			Guards: ep.Guards,
 		}
 		methodSfx := 0
 		var props []string

@@ -75,6 +75,13 @@ func userPrompt(p *csplan.Plan, ep EpData, svc fileData, source string, notes []
 		}
 		sb.WriteString("; the surviving arm guards stay live for runtime dispatch.\n")
 	}
+	if len(ep.Guards) > 0 {
+		var lines []string
+		for _, g := range ep.Guards {
+			lines = append(lines, fmt.Sprintf("L%d: %s", g.Line, g.Cond))
+		}
+		sb.WriteString("Runtime dispatch guards — keep every one live as an if condition in the residual block: " + strings.Join(lines, "; ") + "\n")
+	}
 	fmt.Fprintf(&sb, "Return type: Task<%s> — the method already ends with `return %s;`\n\n", ep.RetType, ep.ReturnExpr)
 
 	sb.WriteString("Repository methods available (deterministic calls, already rendered in the prologue):\n")
@@ -283,6 +290,7 @@ func armGates(prov templates.Provider, p *csplan.Plan, ep EpData, svc fileData, 
 	if strings.Contains(body, "tuxgo:TODO") {
 		errs = append(errs, "the residual block echoes the tuxgo:TODO marker — emit implemented logic, not the placeholder")
 	}
+	errs = append(errs, guardErrs(ep.Guards, body)...)
 	sort.Strings(errs)
 	return errs
 }

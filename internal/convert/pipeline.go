@@ -146,6 +146,7 @@ type scenPrompt struct {
 	Matched []string
 	Pruned  []string
 	Residue []string
+	Guards  []string // FoldMixed runtime-dispatch guards (contract + evidence)
 	Shared  []string
 	TxNotes []string
 }
@@ -534,6 +535,8 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 	axisVar := ""
 	draft := ""
 	var census []flow.CensusCond
+	var guards []flow.MixedGuard
+	var guardBind *guardBindings
 	if sr != nil {
 		if sc := svc.ScenarioOf(u.Name); sc != nil {
 			view, err = scenarioView(opts, svc, sc, sr.tree, calls)
@@ -542,6 +545,11 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 			}
 			axisVar = sc.Var
 			scen = scenPromptOf(sc, sr.diff)
+			// The FoldMixed guards are the slice's runtime dispatch contract
+			// (S7): the same specs feed the prompt facts and the guard gate,
+			// with the endpoint's request-field spellings bound.
+			guards = flow.MixedGuards(sc)
+			guardBind = guardBindingsFor(guards, u.Name, c, svc)
 			// The flattened slice IS the deterministic base for a scenario
 			// endpoint — a span-limited Go draft would render dropped
 			// branches, so the flowDraft seam stays off here.
@@ -669,7 +677,7 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 		body, chunkRej, cerr := controllerBodyChunked(chunkCtx{
 			ctx: ctx, opts: opts, res: res, svc: svc, unit: u, db: dbBodies,
 			cond: c, view: view, scen: scen, axisVar: axisVar, prompt: prompt, calls: calls,
-			census: census,
+			census: census, guards: guards, guardBind: guardBind,
 		})
 		if cerr != nil {
 			writeConditionCensusAudit(ctx, opts, u, census, []string{cerr.Error()})
@@ -708,6 +716,10 @@ func controllerBody(ctx context.Context, opts Options, res *Result, svc *gen.Ser
 			if draft != "" {
 				verr = append(verr, conditionPresenceErrs(census, body)...)
 			}
+			// S7 guard retention: scenario slices carry no census (the
+			// flattened slice replaces the draft), so the FoldMixed
+			// dispatch guards need their own deterministic gate.
+			verr = append(verr, scenarioGuardErrs(guards, guardBind, body)...)
 			return verr
 		},
 		Rejected: func(payload string) { rej = payload },
@@ -1239,6 +1251,9 @@ func scenarioView(opts Options, svc *gen.Service, sc *flow.Scenario, tree *flow.
 // evidence) with the ExecTransaction wrap pattern.
 func scenPromptOf(sc *flow.Scenario, diff *flow.ScenarioDiff) *scenPrompt {
 	p := &scenPrompt{Key: sc.Key, Filter: sc.Filter, Matched: sc.FilterMatched, Pruned: sc.FilterPruned, Residue: sc.Residue}
+	for _, g := range flow.MixedGuards(sc) {
+		p.Guards = append(p.Guards, fmt.Sprintf("L%d: %s", g.Line, g.Cond))
+	}
 	if diff != nil {
 		samples := diff.Shared
 		if len(samples) > sharedPromptSamples {

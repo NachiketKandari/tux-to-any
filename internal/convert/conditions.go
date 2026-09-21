@@ -142,7 +142,8 @@ func conditionPresenceErrs(census []flow.CensusCond, body string) []string {
 // transparency gates (empty-if or lost-condition), for run-level surfacing.
 func isConditionGap(note string) bool {
 	return strings.Contains(note, "empty if —") ||
-		strings.Contains(note, "lost — implement the branch")
+		strings.Contains(note, "lost — implement the branch") ||
+		strings.Contains(note, "lost — runtime dispatch guard")
 }
 
 // recordConditionGaps appends a unit's condition-transparency notes to the

@@ -61,6 +61,13 @@ func writePromptFacts(sb *strings.Builder, w factsWording, scen *scenPrompt, inc
 		}
 		sb.WriteString("\n")
 	}
+	// The FoldMixed guards are the runtime dispatch contract — the
+	// deterministic guard gate rejects a body that drops one, so every seam
+	// (view, fragment, composer, repair) carries them explicitly.
+	if scen != nil && len(scen.Guards) > 0 {
+		sb.WriteString("Runtime dispatch guards — keep every one live as an if condition in the body: " +
+			strings.Join(scen.Guards, "; ") + "\n\n")
+	}
 	writeDBContract(sb, dbContract)
 	if calls := requiredCalls(source, receiver); len(calls) > 0 {
 		sb.WriteString("REQUIRED CALLS — every one must appear " + w.requiredCall +

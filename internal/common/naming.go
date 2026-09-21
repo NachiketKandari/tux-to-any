@@ -53,6 +53,14 @@ func CamelGo(s string) string {
 	return EscapeLeadingDigit(sb.String())
 }
 
+// FieldFromFML derives the host field name for an FML field name —
+// FML_COMP_CD → CompCd. The single naming policy every target path (Go
+// request structs, CS request DTOs) reads; readers that must recognize a
+// translated FML read use it instead of re-spelling the convention.
+func FieldFromFML(fml string) string {
+	return Export(CamelLowerGo(strings.ToLower(strings.TrimPrefix(fml, "FML_"))))
+}
+
 // CamelLowerGo renders a snake_case identifier with the first segment kept
 // verbatim and later segments capitalized ("comp_cd" → "compCd"). The Go
 // field-name policy (gen.camelLower) — the inverse of Export∘CamelGo.

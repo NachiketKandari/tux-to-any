@@ -105,6 +105,12 @@ type chunkCtx struct {
 	// draft-off runs). The combined gate requires it; per-fragment gates
 	// stay census-free (fragments are partial by construction).
 	census []flow.CensusCond
+	// guards are the scenario slice's FoldMixed runtime-dispatch guards
+	// (S7) and guardBind maps their identifiers to the endpoint's request
+	// spellings. Like the census they gate the combined body only — a guard
+	// may live in any fragment, so fragments are exempt by construction.
+	guards    []flow.MixedGuard
+	guardBind *guardBindings
 }
 
 // systemPromptFragment is the fragment-framed system prompt: the same rules
@@ -616,6 +622,7 @@ func controllerBodyChunked(cx chunkCtx) (string, string, error) {
 	if len(cx.census) > 0 {
 		condErrs = append(condErrs, conditionPresenceErrs(cx.census, combined)...)
 	}
+	condErrs = append(condErrs, scenarioGuardErrs(cx.guards, cx.guardBind, combined)...)
 	repaired := false
 	if len(parseErrs) == 0 && len(reqErrs) == 0 && len(condErrs) == 0 && len(txErrs) > 0 && cx.opts.TxWrap {
 		// Deterministic tx-wrap repair: the systematic stitch gap —
@@ -632,6 +639,7 @@ func controllerBodyChunked(cx chunkCtx) (string, string, error) {
 			if len(cx.census) > 0 {
 				rerrs = append(rerrs, conditionPresenceErrs(cx.census, fixed)...)
 			}
+			rerrs = append(rerrs, scenarioGuardErrs(cx.guards, cx.guardBind, fixed)...)
 			if len(rerrs) == 0 {
 				telemetry.Log(cx.ctx).Info("tx-wrap repair stitched fragments",
 					"unit", cx.unit.Name, "fragments", n)
@@ -741,6 +749,7 @@ func composeFragments(cx chunkCtx, contract, fullSigs string, bodies []string) (
 			if len(cx.census) > 0 {
 				verr = append(verr, conditionPresenceErrs(cx.census, body)...)
 			}
+			verr = append(verr, scenarioGuardErrs(cx.guards, cx.guardBind, body)...)
 			return verr
 		},
 	})
@@ -800,6 +809,7 @@ func repairCombinedBody(cx chunkCtx, contract, fullSigs, body string, errs []str
 			if len(cx.census) > 0 {
 				verr = append(verr, conditionPresenceErrs(cx.census, b)...)
 			}
+			verr = append(verr, scenarioGuardErrs(cx.guards, cx.guardBind, b)...)
 			return verr
 		},
 		Rejected: func(payload string) { rej = payload },
