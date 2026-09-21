@@ -19,12 +19,12 @@ func TestFormat(t *testing.T) {
 		{
 			"insert values",
 			"insert into t (a, b) values (:a, :b)",
-			"insert into t (a, b)\nvalues (:a, :b)",
+			"insert into t (a,\n    b)\nvalues (:a,\n    :b)",
 		},
 		{
 			"update set stays with update",
 			"UPDATE T SET A = :x_a, B = :x_b WHERE C = :x_c AND D = :x_a",
-			"UPDATE T\nSET A = :x_a, B = :x_b\nWHERE C = :x_c\n    AND D = :x_a",
+			"UPDATE T\nSET A = :x_a,\n    B = :x_b\nWHERE C = :x_c\n    AND D = :x_a",
 		},
 		{
 			"delete from stays together",
@@ -44,7 +44,7 @@ func TestFormat(t *testing.T) {
 		{
 			"merge clauses",
 			"MERGE INTO A a USING (SELECT :id AS \"ID\" FROM DUAL) s ON (a.ID = s.ID) WHEN MATCHED THEN UPDATE SET a.B = :b WHEN NOT MATCHED THEN INSERT (ID, B) VALUES (:id, :b)",
-			"MERGE INTO A a\nUSING (SELECT :id AS \"ID\" FROM DUAL) s\nON (a.ID = s.ID)\nWHEN MATCHED THEN\nUPDATE SET a.B = :b\nWHEN NOT MATCHED THEN\nINSERT (ID, B)\nVALUES (:id, :b)",
+			"MERGE INTO A a\nUSING (SELECT :id AS \"ID\" FROM DUAL) s\nON (a.ID = s.ID)\nWHEN MATCHED THEN\nUPDATE SET a.B = :b\nWHEN NOT MATCHED THEN\nINSERT (ID,\n    B)\nVALUES (:id,\n    :b)",
 		},
 		{
 			"case when stays inline",
@@ -75,6 +75,26 @@ func TestFormat(t *testing.T) {
 			"value adjacency kept, whitespace collapsed",
 			"select  a = 1   from   t",
 			"select\n    a = 1\nfrom t",
+		},
+		{
+			"function args stay inline in dml lists",
+			"insert into t (a, b) values (NVL(:a, 0), :b)",
+			"insert into t (a,\n    b)\nvalues (NVL(:a, 0),\n    :b)",
+		},
+		{
+			"update set with function stays inline",
+			"UPDATE T SET A = NVL(:x, :y), B = :b WHERE C = :c",
+			"UPDATE T\nSET A = NVL(:x, :y),\n    B = :b\nWHERE C = :c",
+		},
+		{
+			"merge update with two assignments splits",
+			"MERGE INTO A a USING (SELECT :id AS \"ID\" FROM DUAL) s ON (a.ID = s.ID) WHEN MATCHED THEN UPDATE SET a.B = :b, a.C = :c WHEN NOT MATCHED THEN INSERT (ID, B, C) VALUES (:id, :b, :c)",
+			"MERGE INTO A a\nUSING (SELECT :id AS \"ID\" FROM DUAL) s\nON (a.ID = s.ID)\nWHEN MATCHED THEN\nUPDATE SET a.B = :b,\n    a.C = :c\nWHEN NOT MATCHED THEN\nINSERT (ID,\n    B,\n    C)\nVALUES (:id,\n    :b,\n    :c)",
+		},
+		{
+			"insert-select subquery stays inline",
+			"INSERT INTO T (A, B) (SELECT C, D FROM U WHERE Z = 1)",
+			"INSERT INTO T (A,\n    B) (SELECT C, D FROM U WHERE Z = 1)",
 		},
 		{"empty", "", ""},
 		{"blank", "   \n\t", ""},

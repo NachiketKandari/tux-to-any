@@ -29,7 +29,11 @@ WHERE DEMO_TI_STATUS='A'
 
 UPDATE_DEMO_TI_REJECT_QUERY = """
 UPDATE DEMO_TI_ORDERS
-SET DEMO_TI_STATUS = 'X', DEMO_TI_REJ_REM = 'Demo rejection remark for the synthetic corpus', DEMO_TI_REJ_DATE = sysdate, DEMO_TI_STTS_CHG_DT = sysdate, DEMO_TI_UPDT_CNT = 1
+SET DEMO_TI_STATUS = 'X',
+    DEMO_TI_REJ_REM = 'Demo rejection remark for the synthetic corpus',
+    DEMO_TI_REJ_DATE = sysdate,
+    DEMO_TI_STTS_CHG_DT = sysdate,
+    DEMO_TI_UPDT_CNT = 1
 WHERE DEMO_TI_FORM_NO = :sql_demo_ti_form_no
     AND DEMO_TI_STATUS = 'A'
 """
@@ -49,7 +53,8 @@ WHERE NOT EXISTS (SELECT 'x' FROM demo_folio_rqst_mkcrkr b WHERE a.DFC_MATCH_ACC
 
 UPDATE_DEMO_FOLIO_EXP_QUERY = """
 UPDATE demo_folio_rqst
-SET DFC_PROCESS_FLAG = 'X', DFC_UPDATE_DT = sysdate
+SET DFC_PROCESS_FLAG = 'X',
+    DFC_UPDATE_DT = sysdate
 WHERE DFC_MATCH_ACC = :sql_dfc_match_acc
     AND DFC_COMP_CD = :sql_dfc_comp_cd
     AND NVL(DFC_SCH_CD,'N') = :sql_dfc_sch_cd

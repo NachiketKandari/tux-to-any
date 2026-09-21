@@ -23,8 +23,10 @@ var formatClauseHeads = map[string]bool{
 var formatSelectPrefixes = map[string]bool{"DISTINCT": true, "ALL": true, "UNIQUE": true}
 
 // Format renders SQL in the shared pretty layout: top-level clauses start at
-// column zero, select-list entries and top-level AND/OR continuations are
-// indented one level, and BETWEEN's AND never splits. Whitespace outside
+// column zero, select-list entries, SET assignments, RETURNING items,
+// multi-row VALUES tuples and top-level AND/OR continuations are indented
+// one level, INSERT column lists and VALUES tuples split one item per line
+// inside their parens, and BETWEEN's AND never splits. Whitespace outside
 // string literals, quoted identifiers and comments is normalized; token
 // text, casing and literals are untouched, so the result stays executable
 // SQL and Format is idempotent. Empty input stays empty.
@@ -41,13 +43,34 @@ func Format(sql string) string {
 	caseDepth := 0
 	between := 0
 	prevWord := ""
+	// lastClause tracks the most recent top-level clause head so paren
+	// lists can tell INSERT/VALUES tuples (split) from function args,
+	// ON/USING parens and subqueries (kept inline). parenStack remembers
+	// that clause per open paren; only depth-1 commas under INSERT/VALUES
+	// split, deeper function commas never do.
+	lastClause := ""
+	var parenStack []string
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
 		if t.kind == tokPunct {
 			switch t.text {
 			case "(":
+				// A paren opening a subquery (`(SELECT …)`, as in
+				// INSERT..SELECT or USING (SELECT …)) keeps the old inline
+				// nested-select layout; only real INSERT/VALUES item lists
+				// split. Peek the next token so the SELECT's own commas
+				// (depth 1 under an INSERT) don't get claimed as list
+				// items while FROM/WHERE inside stay inline.
+				top := lastClause
+				if i+1 < len(toks) && toks[i+1].kind == tokWord && strings.EqualFold(toks[i+1].text, "SELECT") {
+					top = "QUERY"
+				}
+				parenStack = append(parenStack, top)
 				depth++
 			case ")":
+				if len(parenStack) > 0 {
+					parenStack = parenStack[:len(parenStack)-1]
+				}
 				if depth > 0 {
 					depth--
 				}
@@ -69,12 +92,19 @@ func Format(sql string) string {
 				w.newline("")
 				inSelect = true
 				selectHead = true
+				lastClause = "SELECT"
 			case formatClauseHeads[up] &&
 				!(up == "FROM" && prevWord == "DELETE") &&
 				!(up == "SET" && prevWord == "UPDATE") &&
 				!(up == "WHEN" && caseDepth > 0):
 				w.newline("")
 				inSelect = false
+				lastClause = up
+			case formatClauseHeads[up]:
+				// Held on the same line (DELETE FROM, MERGE's UPDATE SET,
+				// CASE's WHEN) but still a new list context.
+				inSelect = false
+				lastClause = up
 			}
 			switch up {
 			case "CASE":
@@ -96,8 +126,20 @@ func Format(sql string) string {
 			}
 		}
 		w.write(t)
-		if t.kind == tokPunct && t.text == "," && depth == 0 && inSelect {
-			w.newline(formatIndent)
+		if t.kind == tokPunct && t.text == "," {
+			switch {
+			case depth == 0 && inSelect:
+				w.newline(formatIndent)
+			case depth == 0 && (lastClause == "SET" || lastClause == "RETURNING" || lastClause == "VALUES"):
+				// UPDATE SET assignments, RETURNING items and
+				// inter-tuple VALUES commas: one entry per line.
+				w.newline(formatIndent)
+			case depth == 1 && len(parenStack) > 0 && (parenStack[len(parenStack)-1] == "INSERT" || parenStack[len(parenStack)-1] == "VALUES"):
+				// INSERT column lists and VALUES tuples: one item per
+				// line. Deeper commas (function args like
+				// NVL(a, b) inside the list) stay inline.
+				w.newline(formatIndent)
+			}
 		}
 		if t.kind == tokLineComment {
 			w.newline("")
