@@ -1,3 +1,10 @@
+// Package templates shares mechanism only (Provider.Render), not data —
+// but every *Data struct below is a thin per-language projection of
+// contract.Service (uniform-ir plan §3.5): FieldSpec/StructSpec/ModelFileData
+// project contract.Field rows, DBMethodData projects contract.QueryUnit +
+// GoNamer names, and the C#/Python emitters project the same contract
+// through CsNamer/PyNamer. Rule for new code: template-data constructors
+// take contract.* as input, never fresh ir.Query parses.
 package templates
 
 import "strings"

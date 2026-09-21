@@ -12,6 +12,7 @@ import (
 
 	"tux-to-any/internal/batchflow"
 	"tux-to-any/internal/common"
+	"tux-to-any/internal/contract"
 	"tux-to-any/internal/ir"
 	"tux-to-any/internal/sqltext"
 )
@@ -230,12 +231,15 @@ func (p *Plan) ConstName(queryID string) string { return p.constByQuery[queryID]
 func (p *Plan) CallName(queryID string) string { return p.callByQuery[queryID] }
 
 // verbOf maps a query type to its Python verb (fetch for SELECTs).
+// It delegates to the contract kind's shared verb (uniform-ir plan
+// §3.3/Phase 4): select_one/select_many → fetch, DML kinds → their
+// lowercase name — identical to the old switch by construction.
 func verbOf(t ir.QueryType) string {
-	switch t {
-	case ir.QuerySelectSingle, ir.QuerySelectMulti:
+	switch contract.QueryKindOf(t) {
+	case contract.QuerySelectOne, contract.QuerySelectMany:
 		return "fetch"
 	default:
-		return strings.ToLower(string(t)) // update/delete/insert/merge
+		return strings.ToLower(string(contract.QueryKindOf(t)))
 	}
 }
 

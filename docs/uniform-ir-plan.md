@@ -1,6 +1,11 @@
 # Uniform TUX Extracted Model — Assessment & Plan for Multi-Language / Multi-Template Conversion
 
-Status: proposal (2026-09-17). Goal: one language-agnostic parsed core that Go (multiple templates), Python, and C# all plug into by arrangement only.
+Status: in progress (updated 2026-09-21). Goal: one language-agnostic parsed core that Go (multiple templates), Python, and C# all plug into by arrangement only.
+
+Progress snapshot (2026-09-21 audit):
+- DONE: `internal/contract` types + `Build` + goldens (§3.1 core); `internal/namer` Go/Py/Cs + type maps + tests; `ir.CanonicalCType`; `sqltext.CanonicalSQL`/`ExecutableBinds` with `csplan.cleanSQL` + `pyplan.emitSQL`/`bindsOf` delegating; `goHint` → `gen/gotype.go`, `TemplateID()` → `gen/txvariant.go` (deprecated shims kept); `common.Pascal`/`UpperSnake`/`Snake`/`StripHungarianPrefix` promoted; `docs/adding-a-language.md`; `contract_parity_test.go` in `csplan`/`pyplan`.
+- PARTIAL: endpoint resolution still lives per-plan (`contract.Build` takes caller-resolved `EndpointInput`); `flow.ArmView` + `CallResolver` exist with `Resolver` kept for compat (backends cut over in Phase 4); `Condition.Predicate` still RESERVED/divergent.
+- PENDING: Phase 4 backend delegation (naming now delegates — `csplan.pascalOf`/`propNameOf` → `common`, `pyplan.verbOf` → `contract`, `gen` row names → `GoNamer` — but query/param derivation still reads raw `ir`); Phase 5 second Go set + shim removal (blocked: IR goldens still pin `template_id`/`go_hint`); Phase 6 unified mapping (scaffolded as `contract.MappingView` adapters, YAMLs unchanged).
 
 ## 1. TL;DR answer
 
@@ -190,53 +195,54 @@ After `contract` exists, today's plans shrink:
 
 ### Phase 0 — Freeze & inventory (0.5 day, no code changes to output)
 
-- [ ] Pin current goldens: run full `go test ./...`, archive `conversion_logs` + `testdata` goldens as pre-refactor baseline.
-- [ ] Add read-only audit test `internal/contract/audit_test.go` that asserts current facts: every `gen/pygen/csgen` imports `ir`; list all `TemplateID`/`GoHint` readers (`rg 'TemplateID|GoHint'`); list all `ir.Query` readers outside `ir/flow`. This test documents the starting surface and later proves migration.
-- [ ] Decide package name (`contract` recommended; alternatives `unimodel`, `service`). Decide `QueryKind` string values (recommend `select_one/select_many/insert/update/delete/merge` — matches csplan's `select-single` normalized to underscores).
+- [x] Pin current goldens: `go test ./...` green (2026-09-21); `testdata/goldens` + `testdata/batch/expected` + `testdata/goldens/cs` are the baseline.
+- [x] Add read-only audit test `internal/contract/audit_test.go` — documents the migration surface (ir imports per backend, `TemplateID`/`GoHint` shim readers, `contract` parity coverage). It asserts direction (shims only in `ir`, new code uses `gen`/`namer`/`contract`), never exact counts.
+- [x] Decide package name (`contract`) and `QueryKind` values (`select_one/select_many/insert/update/delete/merge`).
 - Acceptance: audit test green, baseline archived.
 
 ### Phase 1 — Purify `ir` + unify SQL (1–2 days, golden-neutral)
 
-- [ ] Add `ir.CanonicalCType`, `sqltext.CanonicalSQL(q *ir.Query) (string, []string)` with table-driven tests (INTO-strip, `: name` collapse, `;` trim, `:mi:ss` format-literal guard from `csplan/plan.go:151`).
-- [ ] Migrate `csplan.cleanSQL`, `pyplan.emitSQL/bindsOf/bindOrder` to `sqltext.CanonicalSQL`. Delete duplicates. Goldens must be byte-identical.
-- [ ] Move `goHint` → `gen/gotype.go`, `TemplateID()` → `gen/txvariant.go`; leave deprecated shims in `ir` with `// Deprecated:` comments. Update all in-repo callers to new homes; `ir` no longer referenced for Go names in new code.
-- [ ] Resolve `Condition.Predicate` (sync-or-drop, see §3.2). Add `ir` JSON round-trip test.
-- Acceptance: `go test ./...` green with zero golden diffs; `rg 'GoHint|TemplateID' internal/ir` shows only deprecated shims.
+- [x] Add `ir.CanonicalCType`, `sqltext.CanonicalSQL`/`ExecutableBinds` with table-driven tests (INTO-strip, `: name` collapse, `;` trim, `:mi:ss` format-literal guard).
+- [x] Migrate `csplan.cleanSQL`, `pyplan.emitSQL`/`bindsOf`/`bindOrder` to `sqltext.CanonicalSQL`/`ExecutableBinds`. Duplicates deleted (wrappers kept). Goldens byte-identical.
+- [x] Move `goHint` → `gen/gotype.go` (`GoTypeFor`), `TemplateID()` → `gen/txvariant.go` (`TemplateFor`); deprecated shims in `ir` with `// Deprecated:` comments. New code uses the new homes.
+- [ ] Resolve `Condition.Predicate` (sync-or-drop, see §3.2). Still RESERVED/divergent (`ir/types.go:222-227`) — deferred: `flow` re-parses `Expr` with define substitution; syncing needs a parity test first. Add `ir` JSON round-trip test when resolving.
+- Acceptance: `go test ./...` green with zero golden diffs; `rg 'GoHint|TemplateID' internal/ir` shows only deprecated shims. (Holds today.)
 
 ### Phase 2 — Introduce `internal/contract` + unified builder (3–5 days, the core)
 
-- [ ] Create `contract/contract.go` (types above), `contract/build.go` (`Build(ir.File, flow.Tree, MappingView, source)`), `contract/contract_test.go` (golden JSON for 2–3 corpus fixtures: single-row SELECT, cursor/multi, DML+tx, tpcall arm, scenario-sliced file).
-- [ ] Unify endpoint resolution once: condition/conditionRef/scenarioRef, `queriesInSpan` fallback, dedup via `UniqueQueries`, scenario tx-vote OR, `Skipped` + arm-coverage `Warnings` (merge the three warning implementations; keep message format closest to Go's, adapt others with explicit golden updates).
-- [ ] Unify FML→request/response derivation: `FmlGet→request`, non-err `FmlAdd→response`, err-field/err-value (`IsErrField/IsErrValue`) →errors, `Dropped` excluded, `Code` correlated. This logic is currently smeared across `gen`/`flow/discover`; make `contract` its one home with tests.
-- [ ] Add `MappingView` adapters for `plan.Mapping` and `csplan.Mapping` (no YAML changes yet).
-- Acceptance: `contract` goldens pinned; existing e2e goldens untouched (contract is additive, nothing consumes it yet).
+- [x] Create `contract/contract.go` (types above) + `contract/contract_test.go` (synthetic single-row/cursor/DML/tpcall arms, JSON determinism). `Build(BuildOptions)` arranges caller-resolved `EndpointInput`s — additive, e2e goldens untouched.
+- [x] Unify FML→request/response derivation in `contract` (`contractFromOps`: `FmlGet→request`, non-err `FmlAdd→response`, err carriers →errors, `Dropped` excluded, `Code` correlated) with tests. `gen.contractFields` still has its own copy — converge in Phase 4.
+- [x] Add `contract/mapping.go` `MappingView` + adapters for `plan.Mapping` and `csplan.Mapping` (no YAML changes; additive). Endpoint-resolution bodies (`condition/conditionRef/scenarioRef/scenarioFilter`, `queriesInSpan` fallback, dedup, tx votes, `Skipped` + arm-coverage `Warnings`) still live per-plan — unify in Phase 4 behind this interface (warning wording needs an approved golden pass).
+- Acceptance: `contract` goldens pinned; existing e2e goldens untouched. (Holds today.)
 
 ### Phase 3 — Namers + neutral arm view (2–3 days)
 
-- [ ] Extend `common/naming.go` (Pascal/Snake/UpperSnake/shared prefix-strip), add `internal/namer/{namer,go,py,cs}.go` with type maps + tests (every CType × nullable × array × language).
-- [ ] Generalize `flow.Resolver` → neutral `CallFor/RowFor` (+ aliases), add `flow.ArmView` builder + tests. Reimplement `RenderSpan` on top of `ArmView` with a Go formatter so Go goldens don't move.
-- [ ] Reimplement `pyplan.CodeView` and `csgen` arm view on top of `ArmView` behind a flag; golden-compare old vs new, then cut over.
+- [x] Extend `common/naming.go` (`Pascal`/`UpperSnake`/`Snake`/`StripHungarianPrefix` promoted from `csplan`), add `internal/namer/{namer,go,py,cs}.go` with type maps + tests (every CType × language).
+- [x] Add neutral `flow.ArmView` (`flow/armview.go`: `ArmView(tree, from, to) []ViewLine` with `query|fml_op|tpcall|return|dropped|code|placeholder` kinds carrying query/field/call identities, plus the `CallResolver` (`CallFor`/`RowFor`) interface generalizing the Go-named `Resolver`). `RenderSpan`, `pyplan.CodeView`, and the `csgen` arm view keep their current renderers (golden-neutral); new seam code consumes `ArmView`, backends cut over in Phase 4.
+- [ ] Reimplement `RenderSpan`/`CodeView`/csgen arm view on top of `ArmView` behind a flag; golden-compare old vs new, then cut over.
 - Acceptance: Go/Python/C# goldens byte-identical through the compatibility layer; namer unit tests green.
 
 ### Phase 4 — Rewire backends as projections (3–5 days, incremental per language)
 
 Order: C# (smallest surface) → Python → Go (largest, most goldens).
-- [ ] `csplan.buildQueryPlan` delegates to `contract.QueryUnit` + `CsNamer` (params/props/SQL). `csgen` template data constructors take `contract.*`.
+- [x] Naming delegates (golden-neutral, 2026-09-21): `csplan.pascalOf` → `common.Pascal`, `csplan.propNameOf` → `common.UpperSnake`, `csplan.DefaultQueryName` → `CsNamer.Method` over the contract unit; `pyplan.verbOf` → `contract.QueryKindOf` + shared verb; `gen` row field `Name`/`Type` → `GoNamer.Prop`/`FieldType`. Parity tests pin each delegation.
+- [ ] `csplan.buildQueryPlan` delegates params/props/SQL to `contract.QueryUnitFor` + `CsNamer` (binds: `ExecutableBinds` vs raw `q.Binds` needs a golden-reviewed cutover — INTO-leak fixtures change). `csgen` template data constructors take `contract.*`.
 - [ ] `pyplan.Build` delegates binds/SQL/rowshape to `contract`; `pygen` data constructors take `contract.*`.
-- [ ] `gen` row/contract fields (`rowFields:gen.go:235`, `contractFields:279`, `fieldFromFML:156`, `ModelFile:306`, `DBMethod:511`, `dbParams:614`) delegate to `contract` + `GoNamer`.
-- [ ] Enforce: no new `ir.Query` imports in `gen/pygen/csgen` (add `goimports`-style test failing on `ir.` outside `contract/flow/ir` + adapters).
-- Acceptance: full suite green; golden diffs only where explicitly approved (e.g. warning wording unification); audit test from Phase 0 now shows the shrunken surface.
+- [ ] `gen` row/contract fields (`rowFields:gen.go:246`, `contractFields:290`, `fieldFromFML:156`, `ModelFile:317`, `DBMethod`, `dbParams`) delegate fully to `contract` + `GoNamer` (names done; derivation + `queriesInSpan`/dedup still per-plan).
+- [ ] Enforce: audit test (`contract/audit_test.go`) documents the surface; flip it to fail on new `ir.Query` imports in `gen/pygen/csgen` once derivation delegates (today it records, not gates — many readers remain).
+- Acceptance: full suite green; golden diffs only where explicitly approved (e.g. warning wording unification); audit test shows the shrunken surface.
 
 ### Phase 5 — Multi-template + multi-language proof (2 days)
 
-- [ ] Demonstrate the payoff: add a **second Go template set** (e.g. `gorm` or `pgx` variant behind `templates.Provider` overlay + `profile`) consuming the same `contract.Service` with zero parse changes. Golden-pin one fixture under both sets.
-- [ ] Add `docs/adding-a-language.md` (5-step recipe: implement `Namer`, project `contract` → template data, add `templates/*.tmpl`, wire `cmd`, add golden fixture). Skeleton `internal/<lang>gen` checklist.
-- [ ] Remove deprecated `ir` shims (`GoHint`, `TemplateID()`), delete old derivation copies (`csplan.cleanSQL`, `pyplan.bindOrder`, per-plan endpoint-resolution copies). Update `docs/engine-wiring-audit.md` Tier-2 notes that referenced the old seams.
+- [ ] Demonstrate the payoff: add a **second Go template set** (e.g. `gorm` or `pgx` variant behind `templates.Provider` overlay + `profile`) consuming the same `contract.Service` with zero parse changes. Golden-pin one fixture under both sets. (Not started — `gen.Options.WithGorm` is a store-handle flag, not a contract-driven set.)
+- [x] Add `docs/adding-a-language.md` (5-step recipe). Done early; validated against `contract` + `namer` + parity tests.
+- [ ] Remove deprecated `ir` shims (`GoHint`, `TemplateID()`), delete old derivation copies (per-plan endpoint-resolution copies; `csplan.cleanSQL`/`pyplan.bindOrder` already delegate via wrappers — delete wrappers then). BLOCKED: IR goldens (`testdata/goldens/**/*.ir.json`) still pin `template_id`/`go_hint` — removal needs an approved golden migration (strip keys + `ir` round-trip test), not a silent delete. Update `docs/engine-wiring-audit.md` Tier-2 notes then.
 - Acceptance: second Go set renders from same contract; deprecated shims gone; `rg 'TemplateID|GoHint' internal/ir` empty.
 
 ### Phase 6 — Mapping & config unification (optional, 2–3 days — do after 1–5)
 
-- [ ] Unify user-facing mapping: today's `configs/*.mapping.yaml` + `mappings/*.yaml` match `plan.Mapping` only; `csplan.Mapping{namespace/component/apiVersion/requestDTO}` is a second dialect. Introduce a shared `service.mapping.yaml` (`service/endpoints[{name, condition|conditionRef|scenarioRef, route}]/dbMethods`) with per-target sections (`go:{...}`, `cs:{...}`, `py:{...}`) for names the namers need. Keep old files working via adapter for one release.
+- [x] Scaffold: `contract/mapping.go` `MappingView` (`Endpoints()` + `DBPin()`) with adapters for `plan.Mapping` and `csplan.Mapping`. No YAML changes; old files work unchanged. Full unification (shared `service.mapping.yaml` with per-target `go/cs/py` sections) still pending.
+- [ ] Unify user-facing mapping: shared `service.mapping.yaml` (`service/endpoints[{name, condition|conditionRef|scenarioRef|scenarioFilter, route}]/dbMethods`) with per-target sections for names the namers need. Keep old files working via adapter for one release.
 - [ ] `discover` emits the unified draft (`-target go|cs|py` becomes a projection, not a separate derivation — fixes the `DefaultMethodNames` vs `DefaultQueryName` drift risk).
 
 ## 5. File-by-file change sketch

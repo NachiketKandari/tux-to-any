@@ -3,6 +3,7 @@ package csplan
 import (
 	"testing"
 
+	"tux-to-any/internal/common"
 	"tux-to-any/internal/contract"
 	"tux-to-any/internal/ir"
 	"tux-to-any/internal/namer"
@@ -30,8 +31,9 @@ func TestContractProjectionParity(t *testing.T) {
 		t.Errorf("SQL drift: plan %q vs contract %q", qp.SQL, u.SQL)
 	}
 	cs := namer.CsNamer{}
-	if want := cs.Method(u); qp.Name != want && qp.Name != "GetDEMOTQuery" {
-		// Unpinned fallback must equal the namer derivation.
+	// Unpinned fallback equals the namer derivation by construction
+	// (DefaultQueryName delegates to CsNamer — Phase 4).
+	if want := cs.Method(u); qp.Name != want {
 		t.Errorf("method drift: plan %q vs namer %q", qp.Name, want)
 	}
 	if len(qp.Params) != len(u.Params) {
@@ -44,5 +46,33 @@ func TestContractProjectionParity(t *testing.T) {
 		if want := cs.Prop(u.RowFields[i].HostVar); p.Name != want {
 			t.Errorf("rowprop %d: plan %q vs namer %q", i, p.Name, want)
 		}
+	}
+}
+
+// TestNamingDelegation pins the Phase 4 naming cutover: the plan's helpers
+// are the shared rules (common.Pascal/UpperSnake, CsNamer.Method over the
+// contract kind), so the draft pins and the unpinned fallback agree by
+// construction across every query type.
+func TestNamingDelegation(t *testing.T) {
+	for _, bind := range []string{"sql_cst_pan_no", ":vc_acct", "sql_mar_form_no", "sql_17dim_val", "ST_GST.D_CGST_AMT"} {
+		if got := pascalOf(bind); got != common.Pascal(bind) {
+			t.Errorf("pascalOf(%q) = %q, want common.Pascal %q", bind, got, common.Pascal(bind))
+		}
+		if got := propNameOf(bind); got != common.UpperSnake(bind) {
+			t.Errorf("propNameOf(%q) = %q, want common.UpperSnake %q", bind, got, common.UpperSnake(bind))
+		}
+	}
+	cs := namer.CsNamer{}
+	for _, qt := range []ir.QueryType{ir.QuerySelectSingle, ir.QuerySelectMulti, ir.QueryInsert, ir.QueryUpdate, ir.QueryDelete, ir.QueryMerge} {
+		q := &ir.Query{ID: "q1", Type: qt, Tables: []string{"CST_Txn"}}
+		want := cs.Method(contract.QueryUnit{Kind: contract.QueryKindOf(qt), Tables: q.Tables})
+		if got := DefaultQueryName(q, qt.IsDML()); got != want {
+			t.Errorf("DefaultQueryName(%s) = %q, want namer %q", qt, got, want)
+		}
+	}
+	// Empty-table guard: both spell the Row fallback.
+	q := &ir.Query{ID: "q1", Type: ir.QuerySelectSingle}
+	if got, want := DefaultQueryName(q, false), cs.Method(contract.QueryUnit{Kind: contract.QuerySelectOne}); got != want {
+		t.Errorf("DefaultQueryName(empty) = %q, want %q", got, want)
 	}
 }

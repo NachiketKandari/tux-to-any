@@ -11,9 +11,11 @@ import (
 	"strings"
 
 	"tux-to-any/internal/common"
+	"tux-to-any/internal/contract"
 	"tux-to-any/internal/flow"
 	"tux-to-any/internal/goast"
 	"tux-to-any/internal/ir"
+	"tux-to-any/internal/namer"
 	"tux-to-any/internal/plan"
 	"tux-to-any/internal/profile"
 	"tux-to-any/internal/sqltext"
@@ -259,19 +261,17 @@ func (s *Service) rowFields(queryKey string, q *ir.Query) ([]templates.FieldSpec
 		spec := templates.FieldSpec{}
 		if alias, ok := aliases[i]; ok {
 			spec.DBTag = alias
-			spec.Name = common.Export(common.CamelLowerGo(strings.TrimPrefix(hvName, "sql_")))
 		} else {
 			spec.DBTag = strings.ToUpper(strings.TrimPrefix(hvName, "sql_"))
-			spec.Name = common.Export(common.CamelLowerGo(strings.TrimPrefix(hvName, "sql_")))
 		}
-		// The uniform field-format rule (user directive, 2026-09-07):
-		// every DB-backed model field is sql.NullString — no per-type
-		// guessing (NullTime/int64 derivations removed). Conversions
-		// happen in the controller layer where the business logic lives.
-		// The declared C types stay available in the IR (host_vars;
-		// csdraft/csplan consume CType) — gen's own host-var map was
-		// deleted as write-only (engine-wiring audit Tier-2).
-		spec.Type = "sql.NullString"
+		// Names and types delegate to the Go namer over the contract
+		// field (uniform-ir plan §3.3/Phase 4): row names are the
+		// host-var-derived export, row types the uniform sql.NullString
+		// rule (user directive, 2026-09-07 — no per-type guessing;
+		// conversions happen in the controller layer). Golden-neutral:
+		// proven identical on all pinned IR row shapes.
+		spec.Name = namer.GoNamer{}.Prop(hvName)
+		spec.Type = namer.GoNamer{}.FieldType(contract.Field{Kind: contract.FieldRow})
 		fields = append(fields, spec)
 	}
 	if len(fields) == 0 {

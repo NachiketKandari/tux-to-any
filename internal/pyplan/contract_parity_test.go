@@ -2,10 +2,12 @@ package pyplan
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"tux-to-any/internal/contract"
 	"tux-to-any/internal/ir"
+	"tux-to-any/internal/namer"
 )
 
 // TestContractProjectionParity proves the Python projection derives from the
@@ -24,5 +26,18 @@ func TestContractProjectionParity(t *testing.T) {
 	}
 	if got := bindsOf(q); !reflect.DeepEqual(got, u.Binds) {
 		t.Errorf("binds drift: bindsOf %v vs contract %v", got, u.Binds)
+	}
+}
+
+// TestVerbDelegation pins the Phase 4 verb cutover: verbOf routes through
+// the contract kind, so the plan verb and the PyNamer method verb agree on
+// every query type.
+func TestVerbDelegation(t *testing.T) {
+	py := namer.PyNamer{}
+	for _, qt := range []ir.QueryType{ir.QuerySelectSingle, ir.QuerySelectMulti, ir.QueryInsert, ir.QueryUpdate, ir.QueryDelete, ir.QueryMerge} {
+		u := contract.QueryUnit{Kind: contract.QueryKindOf(qt), Tables: []string{"demo_t"}}
+		if !strings.HasPrefix(py.Method(u), verbOf(qt)) {
+			t.Errorf("verbOf(%s) = %q, namer method = %q", qt, verbOf(qt), py.Method(u))
+		}
 	}
 }

@@ -2,14 +2,15 @@ package csplan
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 
 	"tux-to-any/internal/common"
+	"tux-to-any/internal/contract"
 	"tux-to-any/internal/flow"
 	"tux-to-any/internal/ir"
+	"tux-to-any/internal/namer"
 	"tux-to-any/internal/plan"
 	"tux-to-any/internal/pred"
 	"tux-to-any/internal/sqltext"
@@ -505,44 +506,16 @@ func cleanSQL(sql string) string {
 	return sqltext.CanonicalSQL(sql)
 }
 
-// prefixRe strips the Pro*C type/hungarian prefixes the corpus carries
-// (sql_, vc_, v_, c_, l_, d_, i_, f_) from a host var before naming.
-var prefixRe = regexp.MustCompile(`^(sql_|vc_|v_|c_|l_|d_|i_|f_)+`)
-
-// propNameOf derives a DTO property name from a row-shape host var:
-// prefixes stripped, snake segments upper-snake joined (sql_mar_form_no →
-// MAR_FORM_NO). A name C# cannot declare (a leading digit — sql_17dim_val)
-// takes the underscore escape (_17DIM_VAL): the derivation stays
-// deterministic and 1:1 with the source.
-func propNameOf(bind string) string {
-	name := prefixRe.ReplaceAllString(strings.TrimPrefix(bind, ":"), "")
-	name = strings.ReplaceAll(name, ".", "_")
-	name = strings.ToUpper(name)
-	if name != "" && name[0] >= '0' && name[0] <= '9' {
-		name = "_" + name
-	}
-	return name
-}
+// propNameOf derives a DTO property name from a row-shape host var.
+// It delegates to common.UpperSnake (uniform-ir plan §3.3/Phase 4: one
+// shared rule promoted from here, so the plan and CsNamer cannot drift).
+func propNameOf(bind string) string { return common.UpperSnake(bind) }
 
 // pascalOf derives a parameter name from a host var when the mapping
 // leaves it unset (sql_cst_pan_no → CstPanNo).
-func pascalOf(bind string) string {
-	name := prefixRe.ReplaceAllString(strings.TrimPrefix(bind, ":"), "")
-	parts := strings.Split(name, "_")
-	var sb strings.Builder
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		sb.WriteString(strings.ToUpper(part[:1]))
-		sb.WriteString(part[1:])
-	}
-	out := sb.String()
-	if out == "" {
-		return "Param"
-	}
-	return out
-}
+// It delegates to common.Pascal (uniform-ir plan §3.3/Phase 4: one shared
+// rule promoted from here, so the plan and CsNamer cannot drift).
+func pascalOf(bind string) string { return common.Pascal(bind) }
 
 // SuggestRequestProp is the draft-time view of pascalOf: the request
 // property the discover -target cs drafts suggest for a bind host var —
@@ -619,23 +592,14 @@ func buildGuards(scen *flow.Scenario, cond *ir.Condition, m *Mapping) []Guard {
 // <Verb><Table>Query (GetCstMblAccopnRqstQuery / Update…Query). Exported
 // because the discover -target cs drafts pin exactly these names — the
 // draft's dbMethods and the plan's unpinned fallback cannot drift.
+// It delegates to CsNamer over the contract unit (uniform-ir plan
+// §3.3/Phase 4): the verb comes from the contract kind, the table from the
+// shared Pascal rule.
 func DefaultQueryName(q *ir.Query, dml bool) string {
-	verb := "Get"
-	switch q.Type {
-	case ir.QueryInsert:
-		verb = "Insert"
-	case ir.QueryUpdate:
-		verb = "Update"
-	case ir.QueryDelete:
-		verb = "Delete"
-	case ir.QueryMerge:
-		verb = "Merge"
-	}
-	table := "Row"
-	if len(q.Tables) > 0 && q.Tables[0] != "" {
-		table = pascalOf(q.Tables[0])
-	}
-	return verb + table + "Query"
+	return namer.CsNamer{}.Method(contract.QueryUnit{
+		Kind:   contract.QueryKindOf(q.Type),
+		Tables: q.Tables,
+	})
 }
 
 // QueryNamesInOrder assigns every query its default const name walking the
