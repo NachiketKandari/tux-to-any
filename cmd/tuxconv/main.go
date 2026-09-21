@@ -59,6 +59,7 @@ func main() {
 		"convertbatchpy": runBatchpy,
 		"analyze":        runAnalyze,
 		"gentest":        runGentest,
+		"flow":           runFlow,
 		"retrystats":     runRetryStats,
 		"templates":      runTemplates,
 	}
@@ -207,6 +208,9 @@ Available Commands:
                analyze folder "a.pc, b.pc" / a b c, or a .txt file list)
   gentest      Generate db/controller/handler Go tests for a converted service
                tree (-check-only reports the gap; -no-llm template-deterministic)
+  flow         Inspect per-function flow trees (coverage, idiom hints, -go
+               draft) and optionally emit scenario artifacts (-scenarios);
+               read-only, no staging, no LLM
   retrystats   Compare the retry behaviour of one or two audit runs (attempts,
                outcomes, tokens per unit) — the retry methodology A/B read-out:
                retrystats conversion_logs/audit/<runA> [<runB>]

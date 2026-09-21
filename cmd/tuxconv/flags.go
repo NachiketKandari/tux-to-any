@@ -23,4 +23,5 @@ var commandFlags = map[string][]string{
 	"gentest":        {"layers", "base", "config", "templates"},
 	"ainames":        {"mapping", "config"},
 	"templates":      {"out", "config", "dir"},
+	"flow":           {"out", "scenarios-dir", "config"},
 }

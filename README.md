@@ -137,6 +137,7 @@ go run ./cmd/tuxconv convertbatchpy <file|dir> [-no-llm] [-shape auto|repo] [-dm
 go run ./cmd/tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir] [-config path] [-templates dir]
 go run ./cmd/tuxconv analyze <file|dir> [-csv out.csv] [-weights csv] [-pattern mf_]
 go run ./cmd/tuxconv gentest <converted tree> [-check-only] [-no-llm] [-layers db,controller,handler] [-base dir] [-config path] [-templates dir]
+go run ./cmd/tuxconv flow <file|dir> [-go] [-scenarios] [-scenarios-dir dir] [-out report.json]   # read-only flow trees: coverage, hints, draft
 go run ./cmd/tuxconv templates list|dump|verify [-dir <override dir>] [-out <export dir>] [-config path] [-force]
 go run ./cmd/tuxconv retrystats <audit-run-dir> [<audit-run-dir-B>]   # retry methodology A/B read-out
 go run ./cmd/tuxconv version
