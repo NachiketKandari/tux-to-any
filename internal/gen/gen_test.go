@@ -18,7 +18,7 @@ import (
 // rebuild a Service (e.g. WithGorm) without re-extracting.
 func genNavFixture(t *testing.T) (*Service, *plan.Plan, []*ir.File) {
 	t.Helper()
-	files, err := ir.ExtractDir("../../testdata/nav")
+	files, err := ir.ExtractDir("../../testdata/fixtures/nav")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -39,7 +39,7 @@ func navMapping() *Mapping {
 
 func navOptions(t *testing.T) Options {
 	t.Helper()
-	files, err := ir.ExtractDir("../../testdata/nav")
+	files, err := ir.ExtractDir("../../testdata/fixtures/nav")
 	if err != nil {
 		t.Fatal(err)
 	}

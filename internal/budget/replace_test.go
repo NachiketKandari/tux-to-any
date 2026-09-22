@@ -124,7 +124,7 @@ func TestReplaceQueriesErrors(t *testing.T) {
 // same method, and the cursor-heavy branch view shrinks >60% (architecture.md
 // Phase 4 gate).
 func TestBudgetGateNavGolden(t *testing.T) {
-	const navPath = "../../testdata/nav/SVC_DEMO_LIST.pc"
+	const navPath = "../../testdata/fixtures/nav/SVC_DEMO_LIST.pc"
 	f, err := ir.ExtractFile(navPath)
 	if err != nil {
 		t.Fatal(err)

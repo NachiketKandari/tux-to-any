@@ -11,7 +11,7 @@ import (
 )
 
 // fnLibSrc is a fn-library fixture: one helper fn with one SQL query and
-// the legacy status-return contract — the testdata/nav/fn_demo_lib.pc
+// the legacy status-return contract — the testdata/fixtures/nav/fn_demo_lib.pc
 // shape (synthetic; same layout line for line).
 const fnLibSrc = `int fn_is_demo_active(char* c_ServiceName, char* c_mtch_accnt, char* c_is_active_flg, char* c_err_msg)
 {

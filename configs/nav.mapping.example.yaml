@@ -9,8 +9,8 @@
 # You rarely write this file by hand: `tuxgo convert <target>` without a
 # mapping scans the code and drafts one into mappings/ (AI- or deterministic-
 # suggested names) — review the draft and re-run. This example maps the
-# synthetic testdata/nav fixture, so
-#   `go run ./cmd/tuxgo convert testdata/nav -mapping configs/nav.mapping.example.yaml`
+# synthetic testdata/fixtures/nav fixture, so
+#   `go run ./cmd/tuxgo convert testdata/fixtures/nav -mapping configs/nav.mapping.example.yaml`
 # runs as-is.
 
 # Dir-mode only (a directory holding several Tuxedo entries): the bare entry

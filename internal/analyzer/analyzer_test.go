@@ -10,7 +10,7 @@ import (
 )
 
 func TestAnalyzeNavFixture(t *testing.T) {
-	pcPath := filepath.Join("..", "..", "testdata", "nav", "SVC_DEMO_LIST.pc")
+	pcPath := filepath.Join("..", "..", "testdata", "fixtures", "nav", "SVC_DEMO_LIST.pc")
 	rep, err := AnalyzeFile(pcPath, DefaultOptions())
 	if err != nil {
 		t.Fatalf("AnalyzeFile failed: %v", err)
@@ -51,7 +51,7 @@ func TestAnalyzeNavFixture(t *testing.T) {
 }
 
 func TestAnalyzeDirResolvesExternalFns(t *testing.T) {
-	dirPath := filepath.Join("..", "..", "testdata", "nav")
+	dirPath := filepath.Join("..", "..", "testdata", "fixtures", "nav")
 	reports, err := AnalyzeDir(dirPath, DefaultOptions())
 	if err != nil {
 		t.Fatalf("AnalyzeDir failed: %v", err)
@@ -183,7 +183,7 @@ func TestAnalyzeMergeFixture(t *testing.T) {
 }
 
 func TestAnalyzeFnDemoFixture(t *testing.T) {
-	pcPath := filepath.Join("..", "..", "testdata", "nav", "fn_demo_lib.pc")
+	pcPath := filepath.Join("..", "..", "testdata", "fixtures", "nav", "fn_demo_lib.pc")
 	rep, err := AnalyzeFile(pcPath, DefaultOptions())
 	if err != nil {
 		t.Fatalf("AnalyzeFile failed: %v", err)
@@ -214,7 +214,7 @@ func TestAnalyzeFnDemoFixture(t *testing.T) {
 }
 
 func TestAnalyzeDirAndCSV(t *testing.T) {
-	dirPath := filepath.Join("..", "..", "testdata", "nav")
+	dirPath := filepath.Join("..", "..", "testdata", "fixtures", "nav")
 	reports, err := AnalyzeDir(dirPath, DefaultOptions())
 	if err != nil {
 		t.Fatalf("AnalyzeDir failed: %v", err)
@@ -345,7 +345,7 @@ func TestAnalyzeDirAndCSV(t *testing.T) {
 }
 
 func TestLoadOptionsCSVAndRescore(t *testing.T) {
-	dirPath := filepath.Join("..", "..", "testdata", "nav")
+	dirPath := filepath.Join("..", "..", "testdata", "fixtures", "nav")
 
 	// 1. Baseline: write the standard CSV to disk.
 	reports, err := AnalyzeDir(dirPath, DefaultOptions())

@@ -53,7 +53,7 @@ func (c contractClient) Stream(ctx context.Context, req llm.ChatRequest, onDelta
 
 func convertFixture(t *testing.T) (Options, *llm.FakeServer) {
 	t.Helper()
-	files, err := ir.ExtractDir("../../testdata/nav")
+	files, err := ir.ExtractDir("../../testdata/fixtures/nav")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestStubSynthesisLandsPureHelper(t *testing.T) {
 // host-declaration-backed signature (long→int64, int→*int for &i_out,
 // char[]→string).
 func TestStubEvidenceInference(t *testing.T) {
-	files, err := ir.ExtractDir("../../testdata/nav")
+	files, err := ir.ExtractDir("../../testdata/fixtures/nav")
 	if err != nil {
 		t.Fatal(err)
 	}

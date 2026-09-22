@@ -53,7 +53,8 @@ production monolith from the local corpus parses with **zero** error nodes
 - `testdata/fixtures` — the synthetic demo fixtures (nav, merge, pf,
   stripped, cs, adversarial),
   [`testdata/goldens`](testdata/goldens) — pinned IR JSON exercised
-  byte-for-byte by the test suite. `testdata/nav`, `testdata/stripped`,
+  byte-for-byte by the test suite. `testdata/fixtures/nav`,
+  `testdata/stripped`,
   `testdata/pf`, `testdata/merge`, `testdata/adversarial`, `testdata/batch`,
   and `testdata/gentest` are the same fixtures in the paths the conversion
   and generation tests consume.
