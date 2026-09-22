@@ -47,7 +47,8 @@ production monolith from the local corpus parses with **zero** error nodes
 - `internal/contract`, `internal/sqltext`, `internal/namer` — the shared
   per-language contract model, SQL canonicalizer/formatter, and
   language namers.
-- `cmd/xtux` — inspection CLI: `xtux scan <file>`, `xtux ir <file|dir>`
+- `cmd/xtux` — debug-only inspection CLI (`go run -tags tools ./cmd/xtux scan|ir …`;
+  excluded from default builds): `xtux scan <file>`, `xtux ir <file|dir>`
   (`-fragment` forces the fragment rubric).
 - `cmd/tuxconv` — the conversion pipeline CLI (below).
 - `testdata/fixtures` — the synthetic demo fixtures (nav, merge, pf,
@@ -112,9 +113,9 @@ merges).
 
 ```
 go test ./...                 # goldens + units + adversarial sweep (+corpus smoke when present)
-go run ./cmd/xtux scan <file> # scanner facts JSON
-go run ./cmd/xtux ir <file>   # IR JSON (file mode)
-go run ./cmd/xtux ir <dir>    # IR NDJSON (corpus mode: no fragmenting, cross-file resolution)
+go run -tags tools ./cmd/xtux scan <file> # scanner facts JSON (debug-only build tag)
+go run -tags tools ./cmd/xtux ir <file>   # IR JSON (file mode)
+go run -tags tools ./cmd/xtux ir <dir>    # IR NDJSON (corpus mode: no fragmenting, cross-file resolution)
 ```
 
 ## The tuxconv pipeline

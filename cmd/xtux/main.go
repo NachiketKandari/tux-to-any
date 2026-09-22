@@ -1,5 +1,12 @@
+//go:build tools
+
 // Command xtux inspects the experimental scanner/IR layer: it dumps
 // scanner facts or extracted IR as JSON for a file or directory.
+//
+// Debug-only: excluded from default builds (it links a second copy of the
+// tree-sitter runtime for local inspection; `tuxconv extract` covers the
+// same ground in the shipped binary). Build/run with:
+//   go run -tags tools ./cmd/xtux scan|ir <file|dir> [-fragment]
 package main
 
 import (

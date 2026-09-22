@@ -51,6 +51,14 @@ func main() {
 	started := time.Now()
 	log.Info("run started", "version", version, "command", rest[0], "args", rest[1:], "log_dir", logDir, "verbose", verbose)
 
+	// Artifact rotation (best-effort, never fatal): per-run logs/audit dirs
+	// accumulate on every invocation, so prune past the newest
+	// maxRetainedRuns before dispatch. Ledger/state/staged are resume
+	// state, never prune targets.
+	if n := pruneOldRuns(logDir, auditDir, maxRetainedRuns); n > 0 {
+		log.Info("artifact rotation pruned old runs", "removed", n, "keep", maxRetainedRuns)
+	}
+
 	commands := map[string]func(context.Context, []string) error{
 		"extract":        runExtract,
 		"plan":           runPlan,
