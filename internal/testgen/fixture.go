@@ -116,8 +116,17 @@ func (a *AssumedFixtureSource) ZeroExpr(scalar string) string {
 	switch scalar {
 	case "string":
 		return `""`
-	case "float64":
+	case "bool":
+		return "false"
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64",
+		"float32", "float64":
 		return "0"
+	case "sql.NullString", "sql.NullInt64", "sql.NullInt32",
+		"sql.NullBool", "sql.NullFloat64", "sql.NullTime":
+		return scalar + "{}"
+	case "time.Time":
+		return "time.Time{}"
 	default:
 		return "0"
 	}

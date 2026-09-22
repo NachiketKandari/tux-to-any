@@ -216,9 +216,12 @@ func renderDBMethod(u *unit) (string, error) {
 		// Scalar scan: the placeholder column name is not a scan-compatible
 		// value ("count" cannot convert to int64); the zero of the scan
 		// type is, and it matches the ZeroExpr expectation exactly.
-		if expectScalar == "string" {
+		switch expectScalar {
+		case "string":
 			row = []string{""}
-		} else {
+		case "bool":
+			row = []string{"false"}
+		default:
 			row = []string{"0"}
 		}
 	}

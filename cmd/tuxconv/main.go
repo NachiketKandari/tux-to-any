@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"math"
 	"os"
@@ -67,6 +69,11 @@ func main() {
 	switch {
 	case ok:
 		if err := run(ctx, rest[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				// -h/--help is a usage request, not a failure —
+				// every subcommand uses ContinueOnError FlagSets.
+				os.Exit(0)
+			}
 			log.Error(rest[0]+" failed", "error", err)
 			os.Exit(1)
 		}

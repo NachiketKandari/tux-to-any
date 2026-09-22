@@ -94,7 +94,7 @@ func runGentest(ctx context.Context, args []string) error {
 		if err := rep.WriteText(os.Stdout); err != nil {
 			return err
 		}
-		fmt.Println("check-only: nothing written")
+		fmt.Println("check-only: no test files written")
 		archiveGapReport(ctx, rep)
 		return nil
 	}

@@ -232,11 +232,18 @@ func Generate(ctx context.Context, tgt *testscan.Target, rep *testscan.Report, o
 // visibly here).
 func compileGate(res *Result) {
 	pkgs := map[string]string{} // package dir → module root
+	skipped := map[string]bool{}
 	for _, f := range res.Files {
 		dir := filepath.Dir(f)
-		root := moduleRootOf(dir)
-		if root == dir {
-			continue // no go.mod anywhere — not a module, skip silently
+		root, ok := moduleRootOf(dir)
+		if !ok {
+			// Outside any module the vet/compile gates cannot run —
+			// record the degrade visibly instead of skipping silently.
+			if !skipped[dir] {
+				skipped[dir] = true
+				res.Gates = append(res.Gates, "gate: skipped ("+dir+" is outside any Go module)")
+			}
+			continue
 		}
 		if _, ok := pkgs[dir]; !ok {
 			pkgs[dir] = root
@@ -248,6 +255,9 @@ func compileGate(res *Result) {
 			continue
 		}
 		pkg := "./" + filepath.ToSlash(rel)
+		if rel == "." {
+			pkg = "."
+		}
 		res.Gates = append(res.Gates, gateOne(root, "go", "vet", pkg)...)
 		res.Gates = append(res.Gates, gateOne(root, "go", "test", "-count=1", "-run", "^$", pkg)...)
 	}
@@ -575,7 +585,10 @@ func buildServiceCtxs(rep *testscan.Report, prov templates.Provider) []*serviceC
 			continue
 		}
 		seen[sr.Dir] = true
-		sc := &serviceCtx{name: sr.Name, dir: sr.Dir, moduleRoot: moduleRootOf(sr.Dir), tpl: prov}
+		sc := &serviceCtx{name: sr.Name, dir: sr.Dir, tpl: prov}
+		if root, ok := moduleRootOf(sr.Dir); ok {
+			sc.moduleRoot = root
+		}
 		sc.module = moduleName(sc.moduleRoot, sr.Dir)
 		sc.models = extractModels(sr.Dir)
 		sc.ctrlIface = extractCtrlIface(sr.Dir)
@@ -601,24 +614,29 @@ func (sc *serviceCtx) factsFor(l testscan.Layer) *layerFacts {
 }
 
 // moduleRootOf walks up from dir for the nearest go.mod via the shared
-// validate.ResolveModuleRoot; testgen's policy degrades to dir itself when
-// none exists (staged trees may sit outside any module).
-func moduleRootOf(dir string) string {
+// validate.ResolveModuleRoot; ok=false when the dir sits outside any module
+// (staged trees may sit outside any module). A package AT the module root
+// (go.mod in dir itself) resolves fine — only a walk failure skips.
+func moduleRootOf(dir string) (root string, ok bool) {
 	root, err := validate.ResolveModuleRoot(dir)
 	if err != nil {
-		return dir
+		return "", false
 	}
-	return root
+	return root, true
 }
 
 // moduleName resolves the target module: the go.mod module line, else the
-// prefix of any source import path above /pkg/.
+// prefix of any source import path above /pkg/. An empty root (outside any
+// module) skips the go.mod read — Join("", "go.mod") would otherwise read
+// "go.mod" relative to the working directory, a cwd-dependent accident.
 func moduleName(root, dir string) string {
-	if b, err := os.ReadFile(filepath.Join(root, "go.mod")); err == nil {
-		for _, line := range strings.Split(string(b), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "module ") {
-				return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+	if root != "" {
+		if b, err := os.ReadFile(filepath.Join(root, "go.mod")); err == nil {
+			for _, line := range strings.Split(string(b), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "module ") {
+					return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+				}
 			}
 		}
 	}
