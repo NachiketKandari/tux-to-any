@@ -470,13 +470,16 @@ func outNames(sc *serviceCtx, layer testscan.Layer, dir string) (file, suite str
 	return stem + "_test.go", base + noun + tail
 }
 
-// outPathFor computes the staged output path: module-root-relative when the
-// service tree sits in a module, else service-relative. Both operands are
+// outPathFor computes the output path for one layer test file. An empty
+// baseDir means in-place: the file lands in the same folder as the converted
+// code that was scanned (dir itself). Otherwise the path mirrors the
+// module-root-relative layout under baseDir (staged-first): module trees
+// stay relocatable while the layer structure is preserved. Both operands are
 // made absolute first — sc.moduleRoot is absolute (validate.ResolveModuleRoot)
 // while dir may be relative (A3.3: keep Rel well-formed either way).
 func outPathFor(baseDir string, sc *serviceCtx, dir, outFile string) (string, error) {
 	if baseDir == "" {
-		return "", fmt.Errorf("gentest: no output base directory (paths.staged or -base required)")
+		return filepath.Join(dir, outFile), nil
 	}
 	absDir := dir
 	if abs, aerr := filepath.Abs(dir); aerr == nil {

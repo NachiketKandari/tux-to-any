@@ -197,7 +197,9 @@ func renderDBMethod(u *unit) (string, error) {
 			SuiteName: u.suite,
 			StoreVar:  strings.ToLower(sc.name) + "Store",
 			Name:      f.Name,
+			Query:     f.Query,
 			Regex:     dbExecRegex(f),
+			Shape:     f.Shape,
 			CallArgs:  dbCallArgs(sc, f),
 			IsDML:     true,
 			IsTx:      f.IsTx,
@@ -220,16 +222,27 @@ func renderDBMethod(u *unit) (string, error) {
 			row = []string{"0"}
 		}
 	}
+	// Single-row and scalar reads tolerate sql.ErrNoRows (the converted
+	// GetContext methods return the zero value with a nil error); multi-row
+	// SelectContext reads do not need the case (an empty slice is success).
+	// Tx reads propagate every error to the flow, so they never carry it.
+	noRows := (f.Shape == "scalar" || f.Shape == "single") && !f.IsTx
+	noRowsExpr := sc.fixtures.ZeroExpr(expectScalar)
+	if f.Shape == "single" && f.RowType != "" {
+		noRowsExpr = "&" + f.RowType + "{}"
+	}
 	prov := u.sc.provider()
 	return prov.Render(templates.TestDBMethod, templates.TestDBMethodData{
 		SuiteName:  u.suite,
 		StoreVar:   strings.ToLower(sc.name) + "Store",
 		Name:       f.Name,
+		Query:      f.Query,
 		Regex:      dbRegex(f),
+		Shape:      f.Shape,
 		Cols:       cols,
 		Row:        row,
-		NoRows:     f.Shape == "scalar" && !f.IsTx,
-		NoRowsExpr: sc.fixtures.ZeroExpr(expectScalar),
+		NoRows:     noRows,
+		NoRowsExpr: noRowsExpr,
 		ExpectType: dbExpectType(f),
 		ExpectExpr: dbExpectExpr(sc, f),
 		CallArgs:   dbCallArgs(sc, f),

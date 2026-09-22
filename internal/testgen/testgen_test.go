@@ -365,7 +365,9 @@ func TestGenerateNoLLM(t *testing.T) {
 	for _, want := range []string{
 		"type NavStoreGenSuite struct {",
 		"func (suite *NavStoreGenSuite) TestGetNavDetails() {",
-		`ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+DEMO_COMPANY\\s*,\\s*DEMO_PRICE(\\s+where\\s+(.+))?$")`,
+		"query := `SELECT",
+		"FROM DEMO_COMPANY",
+		"ExpectQuery(regexp.QuoteMeta(query))",
 		`sqlmock.NewRows([]string{"COMP_CD", "COMP_NAME"})`,
 		`GetNavDetails(suite.ctx, "compcd")`,
 		"func TestNavStoreGenSuite(t *testing.T) {",

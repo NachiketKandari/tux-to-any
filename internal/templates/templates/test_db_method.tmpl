@@ -1,4 +1,8 @@
 func (suite *{{.SuiteName}}) Test{{.Name}}() {
+{{- if .Query}}
+	// The store's own SQL literal, reused in every expectation below.
+	query := `{{.Query}}`
+{{- end}}
 {{- if .IsDML}}
 	testCases := []struct {
 		desc           string
@@ -39,11 +43,11 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 			// Mocking and Setting Expected Result
 			if testCase.mockError != "" {
 				suite.sqlMock.
-					ExpectExec("{{.Regex}}").
+					ExpectExec({{if .Query}}regexp.QuoteMeta(query){{else}}"{{.Regex}}"{{end}}).
 					WillReturnError(errors.New(testCase.mockError))
 			} else {
 				suite.sqlMock.
-					ExpectExec("{{.Regex}}").
+					ExpectExec({{if .Query}}regexp.QuoteMeta(query){{else}}"{{.Regex}}"{{end}}).
 					WillReturnResult(sqlmock.NewResult(1, testCase.rowsAffected))
 			}
 
@@ -88,11 +92,11 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 			// Mocking and Setting Expected Result
 			if testCase.mockInput != nil {
 				suite.sqlMock.
-					ExpectQuery("{{.Regex}}").
+					ExpectQuery({{if .Query}}regexp.QuoteMeta(query){{else}}"{{.Regex}}"{{end}}).
 					WillReturnRows(testCase.mockInput)
 			} else {
 				suite.sqlMock.
-					ExpectQuery("{{.Regex}}").
+					ExpectQuery({{if .Query}}regexp.QuoteMeta(query){{else}}"{{.Regex}}"{{end}}).
 					WillReturnError(errors.New("ORA Error"))
 			}
 
@@ -143,11 +147,11 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 			// Mocking and Setting Expected Result
 			if testCase.mockInput != nil {
 				suite.sqlMock.
-					ExpectQuery("{{.Regex}}").
+					ExpectQuery({{if .Query}}regexp.QuoteMeta(query){{else}}"{{.Regex}}"{{end}}).
 					WillReturnRows(testCase.mockInput)
 			} else {
 				suite.sqlMock.
-					ExpectQuery("{{.Regex}}").
+					ExpectQuery({{if .Query}}regexp.QuoteMeta(query){{else}}"{{.Regex}}"{{end}}).
 					WillReturnError(errors.New("ORA Error"))
 			}
 

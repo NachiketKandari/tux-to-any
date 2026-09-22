@@ -7,6 +7,7 @@ import (
 	"demo-be/pkg/services/demo/models"
 	"demo-be/pkg/utils"
 	"errors"
+	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -44,6 +45,10 @@ func (suite *DemoStoreSuite) SetupSuite() {
 }
 
 func (suite *DemoStoreSuite) TestGetOrderDetails() {
+	// The store's own SQL literal, reused in every expectation below.
+	query := `SELECT DEMO_ORDER_COMP_CD AS "COMP_CD", DEMO_ORDER_CO_NAME AS "COMP_NAME"
+	          FROM DEMO_ORDER, DEMO_COMPANY
+	          WHERE DEMO_ORDER_CO_ID = :1`
 	testCases := []struct {
 		desc           string
 		mockInput      *sqlmock.Rows
@@ -68,11 +73,11 @@ func (suite *DemoStoreSuite) TestGetOrderDetails() {
 			// Mocking and Setting Expected Result
 			if testCase.mockInput != nil {
 				suite.sqlMock.
-					ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+DEMO_ORDER\\s*,\\s*DEMO_COMPANY(\\s+where\\s+(.+))?$").
+					ExpectQuery(regexp.QuoteMeta(query)).
 					WillReturnRows(testCase.mockInput)
 			} else {
 				suite.sqlMock.
-					ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+DEMO_ORDER\\s*,\\s*DEMO_COMPANY(\\s+where\\s+(.+))?$").
+					ExpectQuery(regexp.QuoteMeta(query)).
 					WillReturnError(errors.New("ORA Error"))
 			}
 
@@ -91,6 +96,8 @@ func (suite *DemoStoreSuite) TestGetOrderDetails() {
 }
 
 func (suite *DemoStoreSuite) TestGetOrderCount() {
+	// The store's own SQL literal, reused in every expectation below.
+	query := `SELECT COUNT(*) AS "count" FROM DEMO_ORDER_MAP WHERE DEMO_MATCH_ACC = :1`
 	testCases := []struct {
 		desc           string
 		mockInput      *sqlmock.Rows
@@ -121,11 +128,11 @@ func (suite *DemoStoreSuite) TestGetOrderCount() {
 			// Mocking and Setting Expected Result
 			if testCase.mockInput != nil {
 				suite.sqlMock.
-					ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+DEMO_ORDER_MAP(\\s+where\\s+(.+))?$").
+					ExpectQuery(regexp.QuoteMeta(query)).
 					WillReturnRows(testCase.mockInput)
 			} else {
 				suite.sqlMock.
-					ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+DEMO_ORDER_MAP(\\s+where\\s+(.+))?$").
+					ExpectQuery(regexp.QuoteMeta(query)).
 					WillReturnError(errors.New("ORA Error"))
 			}
 

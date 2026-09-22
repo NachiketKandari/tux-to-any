@@ -412,14 +412,18 @@ func TestGenerateDBTxVariants(t *testing.T) {
 		"func (suite *TxsvcStoreSuite) TestGetRiskProfile() {",
 		"func (suite *TxsvcStoreSuite) TestListRiskProfiles() {",
 		"func (suite *TxsvcStoreSuite) TestCountRiskProfiles() {",
-		`ExpectExec("(?i)^insert\\s+into\\s+URF_USR_RISK_PROF`,
-		`ExpectExec("(?i)^update\\s+IBF_INFO_BOOKMARK_FORMS`,
-		`ExpectExec("(?i)^delete\\s+from\\s+RPQA_RP_QUESTION_ANS`,
-		`ExpectExec("(?i)^merge\\s+into\\s+DEMO_ACCOUNTS`,
-		`ExpectExec("(?i)^update\\s+T`,
-		`ExpectExec("(?i)^delete\\s+from\\s+T`,
-		`ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+RPAM_RP_ANSWER_MASTER`,
-		`ExpectQuery("(?i)^select\\s+(.+)\\s+from\\s+URF_USR_RISK_PROF`,
+		// Every rendered block declares the store's own SQL literal and
+		// reuses it in the expectation (exact match, correct for every
+		// query kind: SELECT / INSERT / UPDATE / DELETE / MERGE).
+		"query := `",
+		"ExpectExec(regexp.QuoteMeta(query))",
+		"ExpectQuery(regexp.QuoteMeta(query))",
+		"INSERT INTO URF_USR_RISK_PROF",
+		"UPDATE IBF_INFO_BOOKMARK_FORMS",
+		"DELETE FROM RPQA_RP_QUESTION_ANS",
+		"MERGE INTO DEMO_ACCOUNTS",
+		"FROM RPAM_RP_ANSWER_MASTER",
+		"FROM URF_USR_RISK_PROF",
 		// The no-literal scalar read keeps the permissive anchor.
 		`ExpectQuery("(?i)^")`,
 		`suite.sqlMock.ExpectBegin()`,

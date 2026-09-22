@@ -300,10 +300,12 @@ type TestDBMethodData struct {
 	SuiteName  string   // NavStoreSuite
 	StoreVar   string   // navStore
 	Name       string   // GetNavDetails
-	Regex      string   // ExpectQuery/ExpectExec regex over the table list
+	Query      string   // store SQL literal (backtick-free); empty = use Regex fallback
+	Regex      string   // fallback ExpectQuery/ExpectExec regex (no literal in body)
+	Shape      string   // multi | single | scalar | dml
 	Cols       []string // mock row columns (db tags)
 	Row        []string // Success row values (assumed fixture source)
-	NoRows     bool     // scalar GetContext: extra Success-NoRows case
+	NoRows     bool     // single/scalar GetContext: extra Success-NoRows case
 	NoRowsExpr string   // expectedOutput literal for the NoRows case
 	ExpectType string   // []*models.NavDetails / int64
 	ExpectExpr string   // Success expectedOutput literal

@@ -11,6 +11,7 @@ import (
 	"tux-to-any/internal/telemetry"
 	"tux-to-any/internal/testgen"
 	"tux-to-any/internal/testscan"
+	"tux-to-any/internal/validate"
 )
 
 // gentestLayers enumerates the service layers gentest can target; the
@@ -28,7 +29,8 @@ func runGentest(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("gentest", flag.ContinueOnError)
 	layers := fs.String("layers", "", "Comma-separated subset of db,controller,handler (default: all layers found in the target)")
 	checkOnly := fs.Bool("check-only", false, "Report the test gap (functions without tests) and exit without writing")
-	baseDir := fs.String("base", "", "Output base directory override (default: paths.staged — staged-first, the target tree is never written implicitly)")
+	baseDir := fs.String("base", "", "Output base directory override (default: the converted tree's own module root, so tests land in the same folder as the converted code; explicit -base stages elsewhere)")
+	inPlace := fs.Bool("in-place", false, "Write each test file into the same folder as the converted code it covers (ignores -base and paths.staged)")
 	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: skip the LLM gap-fill seam (overrides run.llm)")
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
 	templatesDir := fs.String("templates", "", "Directory of <template_id>.tmpl overrides (flag > templates.dir config; missing ids keep the embedded set)")
@@ -104,12 +106,24 @@ func runGentest(ctx context.Context, args []string) error {
 		fmt.Println("  scan warning:", wn)
 	}
 
-	// Staged-first output: -base wins, else paths.staged.
+	// Same-folder-first output: -in-place writes next to the converted
+	// code, -base stages elsewhere, otherwise the converted tree's own
+	// module root is the base — outPathFor then resolves each test file
+	// into the same folder as the converted layer it covers. Trees
+	// outside any module fall back to paths.staged (never implicit CWD).
 	base := *baseDir
-	if base == "" {
+	if *inPlace {
+		base = ""
+	}
+	if base == "" && !*inPlace {
+		if root, rerr := validate.ResolveModuleRoot(target); rerr == nil {
+			base = root
+		}
+	}
+	if base == "" && !*inPlace {
 		base = cfg.Paths.Staged
 	}
-	if base == "" {
+	if base == "" && !*inPlace {
 		base = config.DefaultStagedDir
 	}
 
