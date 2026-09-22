@@ -19,6 +19,7 @@ import (
 
 	"tux-to-any/internal/config"
 	"tux-to-any/internal/cschk"
+	"tux-to-any/internal/csdraft"
 	"tux-to-any/internal/csgen"
 	"tux-to-any/internal/csplan"
 	"tux-to-any/internal/ir"
@@ -28,12 +29,12 @@ import (
 func runConvertcs(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("convertcs", flag.ContinueOnError)
 	outDir := fs.String("out", "", "Output root for the generated component tree (default: convertcs.out from config, else conversion_logs/_staged)")
-	mappingFlag := fs.String("mapping", "", "convertcs mapping YAML (namespace/component/endpoints — required)")
+	mappingFlag := fs.String("mapping", "", "convertcs mapping YAML, or a directory of per-service yamls (each with source: <entry file>); empty drafts-and-stops like convertgo (default: convertcs.mapping from config, else the mappings/ convention)")
 	noLLM := fs.Bool("no-llm", false, "deterministic-only run (service bodies keep tuxgo:TODO seams; overrides run.llm)")
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
 	templatesDir := fs.String("templates", "", "Directory of <template_id>.tmpl overrides (flag > templates.dir config; missing ids keep the embedded set)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir] [-config path] [-templates dir]")
+		fmt.Fprintln(os.Stderr, "usage: tuxconv convertcs <file|dir> [-mapping <yaml|dir>] [-no-llm] [-out dir] [-config path] [-templates dir]")
 		fs.PrintDefaults()
 	}
 	flagArgs, positional := reorderArgs(args)
@@ -53,17 +54,18 @@ func runConvertcs(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// Flag > config > default precedence (C1).
+	// Flag > config > default precedence (C1), mirroring convertgo:
+	// -mapping wins, else convertcs.mapping, else the mappings/ convention
+	// when it holds a cs draft. Nothing found → draft-and-stop: scan the
+	// target, write <stem>.cs.mapping.yaml drafts, and stop so the user's
+	// review is a free re-run (the tool never invents endpoints).
 	target, err := resolveConvertcsInput(positional, cfg)
 	if err != nil {
 		return err
 	}
-	mappingPath := *mappingFlag
+	mappingPath := mappingForCs(*mappingFlag, cfg)
 	if mappingPath == "" {
-		mappingPath = cfg.Convertcs.Mapping
-	}
-	if strings.TrimSpace(mappingPath) == "" {
-		return fmt.Errorf("convertcs: -mapping <yaml> is required — the tool never invents endpoints")
+		return draftAndStopCs(ctx, target, cfg)
 	}
 	noLLMEnabled := *noLLM || cfg.Convertcs.NoLLM
 
@@ -73,6 +75,23 @@ func runConvertcs(ctx context.Context, args []string) error {
 	}
 	path := target
 	if fi.IsDir() {
+		// A directory mapping for a single-entry target: pick the yaml
+		// whose source:/stem matches the entry (the mappings/ convention).
+		// Nothing matches — including a convention dir holding only foreign
+		// (Go) drafts — and the run drafts-and-stops instead.
+		if st, serr := os.Stat(mappingPath); serr == nil && st.IsDir() {
+			entryBase, derr := convertcsDirEntry(target, mappingPath)
+			if derr != nil {
+				return derr
+			}
+			mappingPath, err = mappingForCsEntry(mappingPath, entryBase)
+			if err != nil {
+				return err
+			}
+			if mappingPath == "" {
+				return draftAndStopCs(ctx, target, cfg)
+			}
+		}
 		path, err = resolveDirSource(target, mappingPath)
 		if err != nil {
 			return err
@@ -195,6 +214,154 @@ func runConvertcs(ctx context.Context, args []string) error {
 	if deviations+structural > 0 {
 		return fmt.Errorf("convertcs: %d gate issue(s) — review the log above", deviations+structural)
 	}
+	return nil
+}
+
+// mappingForCs resolves the convertcs endpoint mapping: the -mapping flag
+// wins, else convertcs.mapping from the yaml, else the mappings/ convention
+// when that directory holds at least one cs draft
+// (<stem>.cs.mapping.yaml). "" = nothing found (the caller then
+// drafts-and-stops). Go drafts never satisfy it — a convention dir holding
+// only Go mappings drafts-and-stops too.
+func mappingForCs(flagValue string, cfg *config.Config) string {
+	if strings.TrimSpace(flagValue) != "" {
+		return flagValue
+	}
+	if strings.TrimSpace(cfg.Convertcs.Mapping) != "" {
+		return cfg.Convertcs.Mapping
+	}
+	if fi, err := os.Stat(defaultMappingsDir); err == nil && fi.IsDir() && hasCsMappingYamls(defaultMappingsDir) {
+		return defaultMappingsDir
+	}
+	return ""
+}
+
+// hasCsMappingYamls reports whether dir holds at least one cs mapping draft:
+// <stem>.cs.mapping.yaml (or .yml), or any yaml whose stem ends in .cs.
+func hasCsMappingYamls(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		lower := strings.ToLower(name)
+		switch filepath.Ext(lower) {
+		case ".yaml", ".yml":
+		default:
+			continue
+		}
+		stem := strings.TrimSuffix(name, filepath.Ext(name))
+		if strings.HasSuffix(strings.ToLower(stem), ".cs.mapping") || strings.HasSuffix(strings.ToLower(stem), ".cs") {
+			return true
+		}
+	}
+	return false
+}
+
+// mappingForCsEntry picks one cs mapping yaml out of a directory for a
+// single-entry convert: a mapping whose source: names the entry file wins,
+// else the one whose stem matches the entry stem (tolerating the
+// .cs.mapping.yaml double extension the draft convention uses). Matching is
+// lenient — only the source field is read, so Go drafts in the shared
+// convention dir never poison the run — and only the winner is validated
+// (by the caller's LoadMapping). Zero matches returns "" so the caller
+// drafts-and-stops; two matches refuse to guess.
+func mappingForCsEntry(dir, entryBase string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("convertcs: read mapping dir %s: %w", dir, err)
+	}
+	var bySource, byStem []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(e.Name())) {
+		case ".yaml", ".yml":
+		default:
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		src, serr := csplan.MappingSourceOf(path)
+		if serr != nil {
+			return "", serr
+		}
+		if src != "" && strings.EqualFold(filepath.Base(src), entryBase) {
+			bySource = append(bySource, path)
+		}
+		// Stem match tolerates both conventions:
+		// SVC_X.cs.mapping.yaml ↔ SVC_X.pc and SVC_X.mapping.yaml ↔ SVC_X.pc.
+		nameStem := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+		nameStem = strings.TrimSuffix(nameStem, ".mapping")
+		nameStem = strings.TrimSuffix(nameStem, ".cs")
+		if nameStem == stemOf(entryBase) {
+			// Only cs-suffixed drafts count for stem matches, so a Go
+			// draft for the same service never wins a convertcs run.
+			rawStem := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+			if strings.HasSuffix(strings.ToLower(rawStem), ".cs.mapping") || strings.HasSuffix(strings.ToLower(rawStem), ".cs") {
+				byStem = append(byStem, path)
+			}
+		}
+	}
+	switch {
+	case len(bySource) == 1:
+		return bySource[0], nil
+	case len(bySource) > 1:
+		return "", fmt.Errorf("convertcs: mappings %s and %s both declare source %s — pass -mapping <file> explicitly", bySource[0], bySource[1], entryBase)
+	case len(byStem) == 1:
+		return byStem[0], nil
+	case len(byStem) > 1:
+		return "", fmt.Errorf("convertcs: %s holds several mappings for %s — pass -mapping <file> explicitly", dir, entryBase)
+	default:
+		return "", nil
+	}
+}
+
+// convertcsDirEntry finds the single entry .pc/.pcf file under a directory
+// target so a directory mapping can be matched to it. Multiple entries
+// refuse to guess — pass -mapping <file> explicitly (one component per
+// convertcs run).
+func convertcsDirEntry(dir, mappingPath string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("convertcs: read dir %s: %w", dir, err)
+	}
+	var pcs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(e.Name())) {
+		case ".pc", ".pcf":
+			pcs = append(pcs, e.Name())
+		}
+	}
+	if len(pcs) == 1 {
+		return pcs[0], nil
+	}
+	if len(pcs) == 0 {
+		return "", fmt.Errorf("convertcs: no .pc/.pcf files found in %s", dir)
+	}
+	return "", fmt.Errorf("convertcs: %s holds %d entry files — pass -mapping <file> for one component (mapping dir %s cannot disambiguate)", dir, len(pcs), mappingPath)
+}
+
+// draftAndStopCs is convertcs's no-mapping fallback (draft, then stop): the
+// target is scanned for dispatch-arm endpoints and editable cs mapping
+// drafts land in mappings/ (deterministic — no AI pass), and the run exits
+// before generating anything, so the user's review is a free re-run
+// (no tree cleanup, no half-converted state).
+func draftAndStopCs(ctx context.Context, target string, cfg *config.Config) error {
+	n, err := discoverCsCore(ctx, target, discoverOutDir(""), false, cfg,
+		csdraft.Options{Namespace: cfg.Convertcs.Namespace, Area: cfg.Convertcs.Area})
+	if err != nil {
+		return err
+	}
+	telemetry.Log(ctx).Info("convertcs: no mapping found — drafts written, conversion deferred to the re-run",
+		"target", target, "drafts", n)
 	return nil
 }
 

@@ -186,8 +186,10 @@ Available Commands:
                (SQL constants + repository/DAL + service with process_daily_batch;
                pychk syntax gate + SQL fidelity + retention report)
   convertcs    Convert a .pc/.pcf file into the .NET Core (C#) component tree
-               (Controller / DTO / NamedQueries / Repository / Service; -mapping
-               yaml required, -no-llm keeps tuxgo:TODO service seams)
+               (Controller / DTO / NamedQueries / Repository / Service;
+                without a mapping it first scans the target and writes
+                editable <stem>.cs.mapping.yaml drafts to mappings/ and
+                stops — review, then re-run; -no-llm keeps tuxgo:TODO seams)
   discover     Endpoint scan-then-tag: write a mapping draft per entry to
                mappings/ (default; -out overrides, -stdout prints).
                -target cs drafts the .NET Core mapping schema

@@ -63,6 +63,25 @@ type Mapping struct {
 
 var csIdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// MappingSourceOf reads only a mapping's source field — the lenient matcher
+// for convention directories, where unrelated drafts (other targets, older
+// formats) must never poison a run. Parse errors still surface; a draft
+// without a source returns "". Validation stays with LoadMapping, which
+// only the matched winner goes through.
+func MappingSourceOf(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("csplan: read mapping %s: %w", path, err)
+	}
+	var m struct {
+		Source string `yaml:"source"`
+	}
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return "", fmt.Errorf("csplan: parse mapping %s: %w", path, err)
+	}
+	return m.Source, nil
+}
+
 // LoadMapping reads and validates a convertcs mapping YAML file. Strict
 // fields: a typo is an error, never a silent default.
 func LoadMapping(path string) (*Mapping, error) {
