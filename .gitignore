@@ -17,7 +17,7 @@ duel/
 /cmd/duel/
 
 # OS noise
-.DS_Store
+**/.DS_Store
 # local agent state
 .kilo/
 # local-only corpus + working config
