@@ -18,6 +18,11 @@ duel/
 
 # OS noise
 **/.DS_Store
+
+# Next.js viewer (web/): deps + build output never committed
+web/node_modules/
+web/.next/
+web/out/
 # local agent state
 .kilo/
 # local-only corpus + working config
