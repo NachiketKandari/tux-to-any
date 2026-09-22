@@ -82,8 +82,12 @@ func (a *AssumedFixtureSource) ArgValue(name, typ string) string {
 		return fmt.Sprintf("%q", placeholder(name))
 	case "time.Time":
 		return "time.Now()"
-	case "int", "int64", "float64":
+	case "bool":
+		return "false"
+	case "int", "int32", "int64", "float32", "float64":
 		return "0"
+	case "sql.NullString", "sql.NullInt64", "sql.NullTime":
+		return typ + "{}"
 	default:
 		return "nil"
 	}

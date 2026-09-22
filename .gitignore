@@ -28,5 +28,8 @@ batchExamples/
 examples/
 # locally regenerated scenario goldens (derived from the corpus when present)
 testdata/scen/
+# gentest run artifacts — mockgen regenerates mocks into the fixture tree
+testdata/gentest/**/mock_*.go
+testdata/gentest/**/*_mock.go
 .tuxgo.yaml
 .tuxgo.yaml.*

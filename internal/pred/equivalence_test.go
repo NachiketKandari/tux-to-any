@@ -17,7 +17,7 @@ func TestEquivalentAcceptShapes(t *testing.T) {
 		{"and nested flatten", "a && (b && c)", "c && b && a"},
 		{"or commutative", "a || b || c", "c || a || b"},
 		{"not inner", "!(a_flag == 'F')", "!(aFlag == \"F\")"},
-		{"call renamed args", "fn_is_d2u_active(ls_match_acc.arr, &c_d2u_active_flg) == -1", "fnIsD2uActive(lsMatchAcc, &cD2uActiveFlg) == -1"},
+		{"call renamed args", "fn_is_user_active(ls_match_acc.arr, &c_d2u_active_flg) == -1", "fnIsUserActive(lsMatchAcc, &cD2uActiveFlg) == -1"},
 		{"char string", "c_flag == 'F'", "c_flag == \"F\""},
 		{"null nil", "x != NULL", "x != nil"},
 		{"cmp symmetric", "c_flag == 'F'", "\"F\" == c_flag"},
@@ -45,7 +45,7 @@ func TestEquivalentRejectShapes(t *testing.T) {
 		{"different op", "cnt > 0", "cnt >= 0"},
 		{"or vs and", "a == 'F' || b == 'F'", "a == 'F' && b == 'F'"},
 		{"call missing arg", "fn(a, b) == 1", "fn(a) == 1"},
-		{"call renamed name", "fn_is_d2u_active(x) == 1", "otherFn(x) == 1"},
+		{"call renamed name", "fn_is_user_active(x) == 1", "otherFn(x) == 1"},
 	}
 	for _, tc := range cases {
 		a, b := ParseCode(tc.a), ParseCode(tc.b)

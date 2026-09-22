@@ -175,12 +175,16 @@ test target.
   never written. A layer that already has test files gets a
   `<stem>_gentest_test.go` twin with `…Gen` suite names, so existing suites
   are never touched; `New*` and wiring constructors skip by design.
-- Deterministic templates cover db stores (sqlmock `ExpectQuery` regexes
-  are case-insensitive, whitespace-tolerant and WHERE-optional, so
-  lowercase `select … from dual` queries match, with typed scalar
-  placeholders), handlers (gin suite tests against a gomock'd controller,
-  the response type resolved from the controller *interface declaration*
-  when controller bodies are the LLM seam), and passthrough controllers.
+- Deterministic templates cover db stores — SELECT shapes through
+  `ExpectQuery`, INSERT/UPDATE/DELETE/MERGE through `ExpectExec`, plain or
+  tx-variant (`ExpectBegin` + `Beginx` with the tx handle threaded into the
+  call) — with sqlmock regexes that are case-insensitive, whitespace-tolerant
+  and WHERE-optional, so lowercase `select … from dual` queries match, with
+  typed scalar placeholders; a query whose literal lives outside the method
+  still renders with a permissive anchor. Handlers (gin suite tests against a
+  gomock'd controller, the response type resolved from the controller
+  *interface declaration* when controller bodies are the LLM seam) and
+  passthrough controllers are deterministic too.
   Field-mapping controller tests ride the LLM seam (parse + shape gated,
   budget-bounded — see the modes table above); `-no-llm` marks them
   `llm-required` and writes nothing for them.

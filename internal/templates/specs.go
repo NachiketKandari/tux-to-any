@@ -290,18 +290,27 @@ type TestDBFileData struct {
 // (SQLError / [Success-NoRows] / Success) over one store call. Braced
 // literals arrive pre-rendered (ExpectExpr/NoRowsExpr) so templates never
 // fight text/template's {{ parsing.
+//
+// Tx/DML variants (PRD §4.2.3 decision 27): IsDML switches the block to the
+// Exec contract (ExpectExec + sqlmock.NewResult, error-only signature);
+// IsTx adds the Beginx tx handle (ExpectBegin + `tx, _ := suite.sqlDB.Beginx()`
+// + tx as the second call arg). The non-tx SELECT shape (both false) is the
+// reference GT-2 shape and must stay byte-stable.
 type TestDBMethodData struct {
 	SuiteName  string   // NavStoreSuite
 	StoreVar   string   // navStore
 	Name       string   // GetNavDetails
-	Regex      string   // ExpectQuery regex over the FROM table list
+	Regex      string   // ExpectQuery/ExpectExec regex over the table list
 	Cols       []string // mock row columns (db tags)
 	Row        []string // Success row values (assumed fixture source)
 	NoRows     bool     // scalar GetContext: extra Success-NoRows case
 	NoRowsExpr string   // expectedOutput literal for the NoRows case
 	ExpectType string   // []*models.NavDetails / int64
 	ExpectExpr string   // Success expectedOutput literal
-	CallArgs   []string // rendered store-call args after ctx
+	CallArgs   []string // rendered store-call args after ctx (tx excluded)
+	IsDML      bool     // Exec contract: error-only, ExpectExec + NewResult
+	IsTx       bool     // tx handle: ExpectBegin + Beginx + tx second arg
+	DeleteTx   bool     // DELETE-tx tolerates zero rows (no RowsAffected check)
 }
 
 // TestControllerFileData renders a controller test file

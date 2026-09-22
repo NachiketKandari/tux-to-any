@@ -26,15 +26,18 @@ type Param struct {
 
 // dbFact is one store method's extracted shape.
 type dbFact struct {
-	Name    string
-	CtxName string
-	Params  []Param
-	Query   string
-	Tables  []string // FROM list in source order
-	Shape   string   // multi | single | scalar | dml
-	RowType string   // models.NavDetails (as written)
-	Scalar  string   // int64 / string / float64
-	Args    []string // call args after the query arg, rendered verbatim
+	Name       string
+	CtxName    string
+	Params     []Param
+	Query      string
+	Tables     []string // FROM list in source order (DML: target table)
+	Shape      string   // multi | single | scalar | dml
+	RowType    string   // models.NavDetails (as written)
+	Scalar     string   // int64 / string / float64
+	Args       []string // call args after the query arg, rendered verbatim
+	IsTx       bool     // takes tx *sqlx.Tx (tx-variant: runs on tx, not g.db)
+	Recv       string   // sqlx receiver: "g.db" | "tx" (as written)
+	ReturnType string   // first non-error result type (tx scalar reads)
 }
 
 // storeCall is one dependency call inside a controller body.
@@ -296,8 +299,12 @@ func tagValue(tag, key string) string {
 }
 
 // extractDBFact recognizes the store-method conventions: ctx first param, a
-// backtick query literal, one sqlx call (SelectContext/GetContext/
-// ExecContext), row/scalar type from the scan target's var decl.
+// backtick query literal (assigned, var or const), one sqlx call
+// (SelectContext/GetContext/ExecContext and their aliases on g.db or tx),
+// row/scalar type from the scan target's declaration. Tx-variant methods
+// (tx *sqlx.Tx second param, tx.ExecContext / tx.GetContext receiver) set
+// IsTx — the db test layer renders them with the Beginx handle instead of
+// skipping them as unsupported.
 func extractDBFact(fd *ast.FuncDecl, fset *token.FileSet) *dbFact {
 	f := &dbFact{Name: fd.Name.Name}
 	if fd.Type.Params != nil && fd.Type.Params.NumFields() > 0 {
@@ -306,8 +313,25 @@ func extractDBFact(fd *ast.FuncDecl, fset *token.FileSet) *dbFact {
 		}
 	}
 	for _, p := range fd.Type.Params.List {
+		typ := renderExpr(p.Type, fset)
 		for _, n := range p.Names {
-			f.Params = append(f.Params, Param{Name: n.Name, Type: renderExpr(p.Type, fset)})
+			f.Params = append(f.Params, Param{Name: n.Name, Type: typ})
+			if typ == "*sqlx.Tx" || typ == "sqlx.Tx" || (n.Name == "tx" && strings.Contains(typ, "Tx")) {
+				f.IsTx = true
+			}
+		}
+	}
+	// ReturnType is the first non-error result (tx scalar reads scan into
+	// sql.Null* but return the extracted Go type — e.g. GetMarks scans
+	// sql.NullString, returns string).
+	if fd.Type.Results != nil {
+		for _, r := range fd.Type.Results.List {
+			t := renderExpr(r.Type, fset)
+			if t == "error" {
+				continue
+			}
+			f.ReturnType = t
+			break
 		}
 	}
 	var queryLit string
@@ -323,10 +347,29 @@ func extractDBFact(fd *ast.FuncDecl, fset *token.FileSet) *dbFact {
 					}
 				}
 			}
+		case *ast.GenDecl:
+			// `var query = `…`` / `const query = `…`` package or local
+			// declarations carry the literal outside an assignment.
+			if x.Tok != token.VAR && x.Tok != token.CONST {
+				return true
+			}
+			for _, spec := range x.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, v := range vs.Values {
+					if lit, ok := v.(*ast.BasicLit); ok && lit.Kind == token.STRING && strings.HasPrefix(lit.Value, "`") {
+						q, err := strconv.Unquote(lit.Value)
+						if err == nil {
+							queryLit = q
+						}
+					}
+				}
+			}
 		case *ast.CallExpr:
 			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
-				switch sel.Sel.Name {
-				case "SelectContext", "GetContext", "ExecContext":
+				if dbCallShape(sel.Sel.Name) != "" {
 					call = x
 				}
 			}
@@ -337,14 +380,11 @@ func extractDBFact(fd *ast.FuncDecl, fset *token.FileSet) *dbFact {
 		return nil
 	}
 	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-		switch sel.Sel.Name {
-		case "SelectContext":
-			f.Shape = "multi"
-		case "GetContext":
-			f.Shape = "scan" // single-struct or scalar, resolved below
-		case "ExecContext":
-			f.Shape = "dml"
+		f.Recv = renderExpr(sel.X, fset)
+		if f.Recv == "tx" {
+			f.IsTx = true
 		}
+		f.Shape = dbCallShape(sel.Sel.Name)
 	}
 	for i, a := range call.Args {
 		if i < 2 {
@@ -360,82 +400,232 @@ func extractDBFact(fd *ast.FuncDecl, fset *token.FileSet) *dbFact {
 		f.Tables = tablesOf(queryLit)
 	}
 	if f.Shape == "multi" || f.Shape == "scan" {
+		target := ""
 		if len(call.Args) > 1 {
 			if star, ok := call.Args[1].(*ast.UnaryExpr); ok {
 				if id, ok := star.X.(*ast.Ident); ok {
-					f.RowType, f.Scalar = scanTargetType(fd, id.Name, fset)
-					if f.Shape == "scan" {
-						if f.Scalar != "" {
-							f.Shape = "scalar"
-						} else if f.RowType != "" {
-							f.Shape = "single"
-						}
-					}
+					target = id.Name
 				}
+			}
+		}
+		if target == "" {
+			// QueryRowx/QueryRow shapes pass the query where the scan
+			// target sits on Select/Get — the destination is the Scan arg.
+			target = scanVarOf(fd)
+		}
+		f.RowType, f.Scalar = scanTargetType(fd, target, fset)
+		if f.Shape == "scan" {
+			if f.Scalar != "" {
+				f.Shape = "scalar"
+			} else if f.RowType != "" {
+				f.Shape = "single"
 			}
 		}
 	}
 	return f
 }
 
-// scanTargetType finds the var decl for the scan target inside the method
-// body: `var x []*models.T`, `var x models.T`, or `var x int64`.
-func scanTargetType(fd *ast.FuncDecl, varName string, fset *token.FileSet) (rowType, scalar string) {
+// dbCallShape maps a sqlx / database-sql call name onto the db block shape
+// it renders through: multi (Select), single/scalar (Get/QueryRow, resolved
+// by the scan target) and dml (Exec/NamedExec). "" = not a query call.
+func dbCallShape(name string) string {
+	switch name {
+	case "SelectContext", "Select":
+		return "multi"
+	case "GetContext", "Get", "QueryRowxContext", "QueryRowx", "QueryRowContext", "QueryRow":
+		return "scan"
+	case "ExecContext", "Exec", "NamedExecContext", "NamedExec":
+		return "dml"
+	}
+	return ""
+}
+
+// scanVarOf finds the destination of a row Scan call (`row.Scan(&x)`) — the
+// QueryRowx/QueryRow shapes carry no scan-target argument.
+func scanVarOf(fd *ast.FuncDecl) string {
+	var name string
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
-		d, ok := n.(*ast.DeclStmt)
-		if !ok {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
 			return true
 		}
-		gd, ok := d.Decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.VAR || len(gd.Specs) == 0 {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Scan" {
 			return true
 		}
-		vs, ok := gd.Specs[0].(*ast.ValueSpec)
-		if !ok || len(vs.Names) == 0 || vs.Names[0].Name != varName || vs.Type == nil {
-			return true
+		if un, ok := call.Args[0].(*ast.UnaryExpr); ok {
+			if id, ok := un.X.(*ast.Ident); ok {
+				name = id.Name
+			}
 		}
-		t := renderExpr(vs.Type, fset)
-		switch {
-		case strings.HasPrefix(t, "[]*"):
-			rowType = strings.TrimPrefix(t, "[]*")
-		case strings.HasPrefix(t, "models."):
-			rowType = t
-		default:
-			scalar = t
-		}
-		return false
+		return true
 	})
+	return name
+}
+
+// scanTargetType finds how the scan target variable is declared inside the
+// method body: `var x []*models.T`, `var x models.T`, `var x int64`,
+// `x := []*models.T{}`, `x := models.T{}`, `x := &models.T{}`, or
+// `x := make([]*models.T, 0)`. Unresolvable declarations leave both results
+// empty — the build gate skips the method instead of composing a block with
+// an empty type name.
+func scanTargetType(fd *ast.FuncDecl, varName string, fset *token.FileSet) (rowType, scalar string) {
+	if varName == "" {
+		return "", ""
+	}
+	var typ string
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if typ != "" {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.DeclStmt:
+			gd, ok := x.Decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR || len(gd.Specs) == 0 {
+				return true
+			}
+			vs, ok := gd.Specs[0].(*ast.ValueSpec)
+			if !ok || vs.Type == nil {
+				return true
+			}
+			for _, name := range vs.Names {
+				if name.Name == varName {
+					typ = renderExpr(vs.Type, fset)
+				}
+			}
+		case *ast.AssignStmt:
+			for i, lhs := range x.Lhs {
+				id, ok := lhs.(*ast.Ident)
+				if !ok || id.Name != varName || i >= len(x.Rhs) {
+					continue
+				}
+				if t := declaredTypeOf(x.Rhs[i], fset); t != "" {
+					typ = t
+				}
+			}
+		}
+		return true
+	})
+	switch {
+	case strings.HasPrefix(typ, "[]*"):
+		if inner := strings.TrimPrefix(typ, "[]*"); structishType(inner) {
+			rowType = inner
+		} else {
+			scalar = typ
+		}
+	case strings.HasPrefix(typ, "[]"):
+		if inner := strings.TrimPrefix(typ, "[]"); structishType(inner) {
+			rowType = inner
+		} else {
+			scalar = typ
+		}
+	case strings.HasPrefix(typ, "*"):
+		if inner := strings.TrimPrefix(typ, "*"); structishType(inner) {
+			rowType = inner
+		} else {
+			scalar = typ
+		}
+	case structishType(typ):
+		rowType = typ
+	case typ != "":
+		scalar = typ
+	}
 	return rowType, scalar
 }
 
+// structishType reports whether a declared type names a struct (exported or
+// package-qualified) rather than a builtin scalar — `models.T`, `DateInfo`
+// vs `int64`, `string`, `[]byte`, `sql.NullString`, `time.Time`.
+func structishType(t string) bool {
+	if t == "" {
+		return false
+	}
+	if strings.HasPrefix(t, "sql.") || strings.HasPrefix(t, "time.") {
+		return false
+	}
+	if strings.Contains(t, ".") {
+		return true
+	}
+	r := rune(t[0])
+	return r >= 'A' && r <= 'Z'
+}
+
+// declaredTypeOf renders the static type of a scan-target initializer:
+// composite literals (with or without the address-of) and make() calls.
+func declaredTypeOf(e ast.Expr, fset *token.FileSet) string {
+	switch x := e.(type) {
+	case *ast.CompositeLit:
+		return renderExpr(x.Type, fset)
+	case *ast.UnaryExpr:
+		if t := declaredTypeOf(x.X, fset); t != "" {
+			return "*" + t
+		}
+	case *ast.CallExpr:
+		if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "make" && len(x.Args) > 0 {
+			return renderExpr(x.Args[0], fset)
+		}
+	}
+	return ""
+}
+
 // tablesOf extracts the FROM table list from a SQL query (source order,
-// aliases dropped).
+// aliases dropped). DML statements carry no FROM: INSERT INTO / UPDATE /
+// DELETE FROM / MERGE INTO yield their single target table so the Exec
+// regex still anchors on it. The DML target wins over any FROM inside a
+// subquery (MERGE ... USING (SELECT ... FROM DUAL) targets the MERGE table,
+// not DUAL).
 func tablesOf(query string) []string {
-	up := strings.ToUpper(query)
-	i := strings.Index(up, " FROM ")
-	if i < 0 {
-		return nil
-	}
-	rest := query[i+len(" FROM "):]
-	end := len(rest)
-	for _, kw := range []string{"\nWHERE", " WHERE", "\nORDER", " ORDER", "\nGROUP", " GROUP", "\nJOIN", " JOIN", "\nHAVING", " HAVING"} {
-		if j := strings.Index(strings.ToUpper(rest), kw); j >= 0 && j < end {
-			end = j
+	up := strings.ToUpper(strings.TrimSpace(query))
+	for _, verb := range []string{"INSERT", "UPDATE", "DELETE", "MERGE"} {
+		if strings.HasPrefix(up, verb) {
+			for _, prefix := range []string{"INSERT INTO ", "MERGE INTO ", "DELETE FROM ", "UPDATE "} {
+				if idx := strings.Index(up, prefix); idx >= 0 {
+					rest := strings.TrimSpace(query[idx+len(prefix):])
+					if rest == "" {
+						return nil
+					}
+					// Table is the first token; cut at "(" for paren-glued
+					// targets (INSERT INTO T(col,...)) then strip punctuation.
+					tok := strings.Fields(rest)[0]
+					if i := strings.Index(tok, "("); i >= 0 {
+						tok = tok[:i]
+					}
+					tok = strings.Trim(tok, "(),;")
+					if tok != "" {
+						return []string{tok}
+					}
+				}
+			}
+			return nil
 		}
 	}
-	segment := rest[:end]
-	var out []string
-	for _, t := range strings.Split(segment, ",") {
-		t = strings.TrimSpace(t)
-		if t == "" {
-			continue
+	up2 := strings.ToUpper(query)
+	i := strings.Index(up2, " FROM ")
+	if i >= 0 {
+		rest := query[i+len(" FROM "):]
+		end := len(rest)
+		for _, kw := range []string{"\nWHERE", " WHERE", "\nORDER", " ORDER", "\nGROUP", " GROUP", "\nJOIN", " JOIN", "\nHAVING", " HAVING"} {
+			if j := strings.Index(strings.ToUpper(rest), kw); j >= 0 && j < end {
+				end = j
+			}
 		}
-		if sp := strings.Fields(t); len(sp) > 0 {
-			t = sp[0]
+		segment := rest[:end]
+		var out []string
+		for _, t := range strings.Split(segment, ",") {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			if sp := strings.Fields(t); len(sp) > 0 {
+				t = sp[0]
+			}
+			out = append(out, t)
 		}
-		out = append(out, t)
+		if len(out) > 0 {
+			return out
+		}
 	}
-	return out
+	return nil
 }
 
 // extractCtrlFact recognizes controller endpoints: (ctx context.Context,

@@ -298,10 +298,10 @@ func buildUnit(sc *serviceCtx, layer testscan.Layer, dir, outFile, suite string,
 	case testscan.LayerDB:
 		f := lf.DB[fn.Name]
 		if f == nil {
-			return skip(StatusUnsupported, "no db query shape recognized (tx/DML blocks land with a later pass)")
+			return skip(StatusUnsupported, "no sqlx query call recognized (want SelectContext/GetContext/ExecContext, plain or tx)")
 		}
-		if f.Shape == "dml" || f.Query == "" {
-			return skip(StatusUnsupported, "DML/tx-variant db blocks land with a later pass")
+		if issue := dbFactIssue(sc, f); issue != "" {
+			return skip(StatusUnsupported, issue)
 		}
 		u.db = f
 	case testscan.LayerController:
@@ -334,6 +334,49 @@ func buildUnit(sc *serviceCtx, layer testscan.Layer, dir, outFile, suite string,
 		return skip(StatusUnsupported, "layer not testable")
 	}
 	return u
+}
+
+// dbFactIssue reports why one db fact cannot render a valid block ("" =
+// renderable). Reads need their resolved row/scan type and a models struct
+// carrying db tags (the mock row and the expected literal both derive from
+// them): composing a block with an empty type name would only fail later at
+// the parse gate, so the method is skipped with a reason here instead.
+func dbFactIssue(sc *serviceCtx, f *dbFact) string {
+	switch f.Shape {
+	case "multi", "single":
+		if f.RowType == "" {
+			return "db row type not recognized (want a scan target declared []*models.T / *models.T / models.T)"
+		}
+		if len(dbCols(sc, f)) == 0 {
+			return "db row type " + structBase(f.RowType) + " has no db-tagged fields (cannot synthesize the mock row)"
+		}
+	case "scalar":
+		if !scalarishType(f.Scalar) {
+			return "db scalar scan type not recognized (want int64/string/sql.Null* scanned into a var)"
+		}
+	case "dml":
+		// Exec contract needs no scan target; the query literal is optional
+		// (regex falls back to a permissive anchor).
+	default:
+		return "db query shape not recognized"
+	}
+	return ""
+}
+
+// scalarishType reports whether a scan-target type is a scalar database/sql
+// can Scan into (or a Null* wrapper) — a slice or struct here means the
+// declaration was misread and the block would be invalid.
+func scalarishType(t string) bool {
+	switch t {
+	case "string", "bool",
+		"int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64",
+		"float32", "float64",
+		"sql.NullString", "sql.NullInt64", "sql.NullInt32", "sql.NullBool", "sql.NullFloat64", "sql.NullTime",
+		"time.Time":
+		return true
+	}
+	return false
 }
 
 // renderUnit renders one function's test block on a worker: deterministic

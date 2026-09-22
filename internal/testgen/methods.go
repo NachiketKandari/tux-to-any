@@ -45,8 +45,17 @@ func structBase(t string) string {
 // source's casing and line breaks (`select ... from dual` with no WHERE is
 // legal) — so the mock matches what the store actually executes instead of
 // failing the SQLError case and cascading stale expectations through the
-// suite. Backslashes are doubled for the generated Go string literal.
+// suite. Backslashes are doubled for the generated Go string literal. A
+// query with no resolvable table (literal built elsewhere) anchors on the
+// statement's first word, else matches permissively — a test that still
+// exercises the method is better than a regex that never matches.
 func dbRegex(f *dbFact) string {
+	if len(f.Tables) == 0 {
+		if f.Query == "" {
+			return `(?i)^`
+		}
+		return `(?i)^` + strings.ToLower(firstWord(f.Query)) + `\\s+`
+	}
 	tables := make([]string, len(f.Tables))
 	for i, t := range f.Tables {
 		tables[i] = regexp.QuoteMeta(t)
@@ -54,7 +63,55 @@ func dbRegex(f *dbFact) string {
 	return `(?i)^select\\s+(.+)\\s+from\\s+` + strings.Join(tables, `\\s*,\\s*`) + `(\\s+where\\s+(.+))?$`
 }
 
-// dbExpectType renders the expectedOutput Go type.
+// dbExecRegex builds the ExpectExec regex over the DML target table. Like
+// dbRegex it is case-insensitive and whitespace-tolerant; the verb anchors
+// the statement (INSERT INTO / UPDATE / DELETE FROM / MERGE INTO) so the
+// mock matches the tx-variant ExecContext bodies (decision 27). A query
+// with no literal renders a permissive regex — the call site still runs
+// through the Exec contract.
+func dbExecRegex(f *dbFact) string {
+	table := `(.+)`
+	if len(f.Tables) > 0 && f.Tables[0] != "" {
+		table = regexp.QuoteMeta(f.Tables[0])
+	}
+	up := strings.ToUpper(strings.TrimSpace(f.Query))
+	switch {
+	case strings.HasPrefix(up, "INSERT"):
+		return `(?i)^insert\\s+into\\s+` + table + `(\\s+.+)?$`
+	case strings.HasPrefix(up, "UPDATE"):
+		return `(?i)^update\\s+` + table + `(\\s+set\\s+(.+))?$`
+	case strings.HasPrefix(up, "DELETE"):
+		return `(?i)^delete\\s+from\\s+` + table + `(\\s+where\\s+(.+))?$`
+	case strings.HasPrefix(up, "MERGE"):
+		return `(?i)^merge\\s+into\\s+` + table + `(\\s+.+)?$`
+	case f.Query == "":
+		return `(?i)^`
+	default:
+		return `(?i)^` + strings.ToLower(firstWord(f.Query)) + `\\s+(.+)$`
+	}
+}
+
+func firstWord(s string) string {
+	if f := strings.Fields(s); len(f) > 0 {
+		return regexp.QuoteMeta(f[0])
+	}
+	return `(.+)`
+}
+
+// isDeleteTx reports whether the fact is the DELETE-tx variant: the only
+// DML shape that tolerates zero rows (DeleteQnA convention — result
+// discarded, no RowsAffected check). Every other DML shape returns
+// sql.ErrNoRows when RowsAffected == 0.
+func isDeleteTx(f *dbFact) bool {
+	if !f.IsTx || f.Shape != "dml" {
+		return false
+	}
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(f.Query)), "DELETE")
+}
+
+// dbExpectType renders the expectedOutput Go type. Tx scalar reads scan
+// into sql.Null* but return the extracted Go type (GetMarks: NullString var,
+// string return) — the return type wins when the scan type is a Null*.
 func dbExpectType(f *dbFact) string {
 	switch f.Shape {
 	case "multi":
@@ -62,6 +119,9 @@ func dbExpectType(f *dbFact) string {
 	case "single":
 		return "*" + f.RowType
 	default:
+		if f.IsTx && strings.HasPrefix(f.Scalar, "sql.Null") && f.ReturnType != "" {
+			return f.ReturnType
+		}
 		return f.Scalar
 	}
 }
@@ -91,7 +151,9 @@ func rowLiteral(sc *serviceCtx, rowType string) string {
 	}
 }
 
-// dbExpectExpr renders the Success expectedOutput literal.
+// dbExpectExpr renders the Success expectedOutput literal. Tx scalar reads
+// return the extracted type, not the Null* scan var — the fixture zero of
+// the return type matches what the method returns (GetMarks: "").
 func dbExpectExpr(sc *serviceCtx, f *dbFact) string {
 	switch f.Shape {
 	case "multi":
@@ -99,15 +161,23 @@ func dbExpectExpr(sc *serviceCtx, f *dbFact) string {
 	case "single":
 		return rowLiteral(sc, "*"+f.RowType)
 	default:
+		if f.IsTx && strings.HasPrefix(f.Scalar, "sql.Null") && f.ReturnType != "" {
+			return sc.fixtures.ZeroExpr(f.ReturnType)
+		}
 		return sc.fixtures.ZeroExpr(f.Scalar)
 	}
 }
 
-// dbCallArgs renders the bind literals after ctx, by param type.
+// dbCallArgs renders the bind literals after ctx, by param type. The tx
+// handle (*sqlx.Tx) is excluded — the test supplies it via Beginx, not a
+// fixture value.
 func dbCallArgs(sc *serviceCtx, f *dbFact) []string {
 	var out []string
 	for _, p := range f.Params {
 		if p.Type == "context.Context" {
+			continue
+		}
+		if p.Type == "*sqlx.Tx" || p.Type == "sqlx.Tx" || p.Name == "tx" {
 			continue
 		}
 		out = append(out, sc.fixtures.ArgValue(p.Name, p.Type))
@@ -115,17 +185,36 @@ func dbCallArgs(sc *serviceCtx, f *dbFact) []string {
 	return out
 }
 
-// renderDBMethod renders one db suite method block.
+// renderDBMethod renders one db suite method block: SELECT shapes through
+// the query contract, DML shapes (plain + tx-variant) through the Exec
+// contract, tx shapes with the Beginx handle.
 func renderDBMethod(u *unit) (string, error) {
 	sc := u.sc
 	f := u.db
+	if f.Shape == "dml" {
+		prov := u.sc.provider()
+		return prov.Render(templates.TestDBMethod, templates.TestDBMethodData{
+			SuiteName: u.suite,
+			StoreVar:  strings.ToLower(sc.name) + "Store",
+			Name:      f.Name,
+			Regex:     dbExecRegex(f),
+			CallArgs:  dbCallArgs(sc, f),
+			IsDML:     true,
+			IsTx:      f.IsTx,
+			DeleteTx:  isDeleteTx(f),
+		})
+	}
 	cols := dbCols(sc, f)
 	row := sc.fixtures.RowValues(cols)
+	expectScalar := f.Scalar
+	if f.IsTx && strings.HasPrefix(f.Scalar, "sql.Null") && f.ReturnType != "" {
+		expectScalar = f.ReturnType
+	}
 	if f.RowType == "" {
 		// Scalar scan: the placeholder column name is not a scan-compatible
 		// value ("count" cannot convert to int64); the zero of the scan
 		// type is, and it matches the ZeroExpr expectation exactly.
-		if f.Scalar == "string" {
+		if expectScalar == "string" {
 			row = []string{""}
 		} else {
 			row = []string{"0"}
@@ -139,11 +228,13 @@ func renderDBMethod(u *unit) (string, error) {
 		Regex:      dbRegex(f),
 		Cols:       cols,
 		Row:        row,
-		NoRows:     f.Shape == "scalar",
-		NoRowsExpr: sc.fixtures.ZeroExpr(f.Scalar),
+		NoRows:     f.Shape == "scalar" && !f.IsTx,
+		NoRowsExpr: sc.fixtures.ZeroExpr(expectScalar),
 		ExpectType: dbExpectType(f),
 		ExpectExpr: dbExpectExpr(sc, f),
 		CallArgs:   dbCallArgs(sc, f),
+		IsDML:      false,
+		IsTx:       f.IsTx,
 	})
 }
 
