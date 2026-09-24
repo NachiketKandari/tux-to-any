@@ -15,7 +15,8 @@ export interface JobState {
   scenarios?: ScenarioBundle;
   drafts?: { path: string; content: string }[];
   mappingPath?: string;
-  converted?: { target: string; root: string; files: string[]; summary: string };
+  mappingLLM?: boolean;
+  converted?: { target: string; root: string; files: string[]; summary: string; llm?: boolean };
   gentestGap?: string;
   gentestFiles?: string[];
 }

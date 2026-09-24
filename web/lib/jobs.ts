@@ -17,6 +17,8 @@ export interface ConvertedTree {
   root: string;
   files: string[];
   summary: string;
+  /** Whether the run used the LLM seam (false = deterministic -no-llm). */
+  llm?: boolean;
 }
 
 export interface FlowCoverage {
@@ -77,6 +79,8 @@ export interface Job {
   scenarios?: ScenarioBundle;
   drafts?: DraftFile[];
   mappingPath?: string;
+  /** Whether the mapping draft used the LLM naming seam. */
+  mappingLLM?: boolean;
   converted?: ConvertedTree;
   gentestGap?: string;
   gentestFiles?: string[];

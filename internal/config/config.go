@@ -77,6 +77,7 @@ func Default() *Config {
 		Concurrency: Concurrency{Workers: 1},
 		ValidateCfg: ValidateCfg{MaxRetries: 3, Compile: "auto"},
 		DB:          DB{WithGorm: false},
+		Database:    DefaultDatabase(),
 		Buffers:     DefaultBuffers(),
 		Paths:       DefaultPaths(),
 		Batchpy:     DefaultBatchpy(),
@@ -139,6 +140,7 @@ type Config struct {
 	Concurrency Concurrency `yaml:"concurrency"`
 	ValidateCfg ValidateCfg `yaml:"validate"`
 	DB          DB          `yaml:"db"`
+	Database    Database    `yaml:"database"`
 	Convert     Convert     `yaml:"convert"`
 	Buffers     Buffers     `yaml:"buffers"`
 	Paths       Paths       `yaml:"paths"`
@@ -399,6 +401,35 @@ type DB struct {
 	// sqlx (the nav-example variant: NewXStore(oracle, db)). Default false —
 	// the plain sqlx-only store (NewXStore(db)) is the standard shape.
 	WithGorm bool `yaml:"withGorm"`
+}
+
+// Database carries the optional live-Oracle access settings (internal/db).
+// Empty (default) = offline: the pipeline runs fully deterministic without
+// any DSN, and `tuxconv dbcheck` reports disabled. Set dsn (local-dev
+// literal, never commit) or the env var named by dsnEnv to enable live
+// verification. The DSN value is never logged.
+type Database struct {
+	// Driver is the database/sql driver name: "oracle" (go-ora, pure Go)
+	// or "godror" (cgo + Oracle client libs). Default "oracle".
+	Driver string `yaml:"driver"`
+	// DSN is the literal data source name (local-dev fallback only).
+	DSN string `yaml:"dsn"`
+	// DSNEnv names the env var holding the DSN (env wins over literal).
+	DSNEnv string `yaml:"dsnEnv"`
+	// MaxOpenConns / MaxIdleConns size the pool (0 = driver default).
+	MaxOpenConns int `yaml:"maxOpenConns"`
+	MaxIdleConns int `yaml:"maxIdleConns"`
+	// ConnMaxLifetime caps connection reuse ("5m", "0s" = unlimited).
+	ConnMaxLifetime Duration `yaml:"connMaxLifetime"`
+}
+
+// DefaultDatabase returns the disabled-by-default Oracle access settings.
+func DefaultDatabase() Database {
+	return Database{
+		Driver: "oracle",
+		DSN:    "",
+		DSNEnv: "ORACLE_DSN",
+	}
 }
 
 // Convert carries the plan/convert commands' default inputs so repeat runs

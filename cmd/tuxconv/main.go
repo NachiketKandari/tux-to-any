@@ -72,6 +72,7 @@ func main() {
 		"flow":           runFlow,
 		"retrystats":     runRetryStats,
 		"templates":      runTemplates,
+		"dbcheck":        runDBCheck,
 	}
 	run, ok := commands[rest[0]]
 	switch {
@@ -234,6 +235,9 @@ Available Commands:
   templates    User template overlay: list (effective set + origins), dump
                (export the embedded set to a directory), verify (check an
                override dir for unknown ids / parse errors before a run)
+  dbcheck      Optional Oracle probe (internal/db, database/sql): reports
+               enabled/driver/source without connecting; -ping verifies.
+               No DSN = offline (exit 0) — conversion never needs the DB
   version      Print version information
 
 `)

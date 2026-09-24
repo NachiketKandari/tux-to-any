@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { FileTree, CodeView, FileTreeSkeleton, CodeViewSkeleton } from "@/components/files";
+import { LLMToggle } from "@/components/llm-toggle";
 import { CONVERT_TARGETS, type ConvertTarget } from "@/lib/targets";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,9 @@ export function ConvertPanel({
   onConvert,
   busy,
   hasMapping,
+  useLLM,
+  onUseLLM,
+  onGoMapping,
   converted,
   onOpenFile,
   onSaveFile,
@@ -35,7 +39,10 @@ export function ConvertPanel({
   onConvert: () => void;
   busy: boolean;
   hasMapping: boolean;
-  converted?: { target: string; files: string[]; summary: string };
+  useLLM: boolean;
+  onUseLLM: (v: boolean) => void;
+  onGoMapping?: () => void;
+  converted?: { target: string; files: string[]; summary: string; llm?: boolean };
   onOpenFile: (p: string) => void;
   onSaveFile: (path: string, content: string) => void;
   savingFile: boolean;
@@ -80,30 +87,60 @@ export function ConvertPanel({
           <div className="flex flex-wrap items-center gap-2">
             <CardTitle className="flex items-center gap-2 text-sm">
               <Hammer className="h-4 w-4" />
-              Convert — deterministic, gated
+              Step 2 — Convert: mapping first, then code
             </CardTitle>
             {busy ? (
               <Badge variant="secondary" className="flex items-center gap-1">
                 <Loader2 className="h-3 w-3 animate-spin" /> converting…
               </Badge>
             ) : (
-              converted && <Badge variant="secondary">{converted.files.length} files</Badge>
+              converted && (
+                <Badge variant="secondary">
+                  {converted.files.length} files{converted.llm ? " · llm" : " · deterministic"}
+                </Badge>
+              )
             )}
             {!hasMapping && (target === "go" || target === "cs") && (
-              <Badge variant="outline">no mapping yet — first run drafts it</Badge>
+              <Badge variant="outline">Step 1 required — draft & save a mapping first</Badge>
             )}
-            <Button size="sm" className="ml-auto" disabled={busy} onClick={onConvert}>
+            <Button
+              size="sm"
+              className="ml-auto"
+              disabled={busy || (!hasMapping && (target === "go" || target === "cs"))}
+              onClick={onConvert}
+              title={
+                !hasMapping && (target === "go" || target === "cs")
+                  ? "Complete Step 1 (mapping) first"
+                  : `Convert to ${target}`
+              }
+            >
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Hammer className="h-3.5 w-3.5" />}
               Convert to {target === "go" ? "Go" : target === "py" ? "Python" : "C#"}
             </Button>
           </div>
           <CardDescription>
-            Always <code className="font-mono">-no-llm</code> in the viewer — controller bodies render as
-            deterministic drafts with SQL-fidelity gates. Bring your own key for the LLM seam in the CLI.
-            Open a file to edit it in place; renames apply file-wide.
+            Mapping-first: Go/C# need a reviewed mapping from Step 1 (Python converts directly).
+            LLM off runs <code className="font-mono">-no-llm</code> — deterministic drafts with SQL-fidelity
+            gates, no key needed. LLM on uses the seam when a key resolves, otherwise falls back
+            deterministically. Open a file to edit it in place; renames apply file-wide.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-2">
+          <LLMToggle
+            id="convert-llm"
+            value={useLLM}
+            onChange={onUseLLM}
+            disabled={busy}
+            hint="off works with no key"
+          />
+          {!hasMapping && (target === "go" || target === "cs") && onGoMapping && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+              <span>No mapping yet — Step 1 drafts it. Save the draft, then convert.</span>
+              <Button size="sm" variant="outline" className="ml-auto" onClick={onGoMapping}>
+                Go to Mapping (Step 1)
+              </Button>
+            </div>
+          )}
           {converted && <pre className="mb-3 whitespace-pre-wrap font-mono text-xs text-muted-foreground">{converted.summary}</pre>}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[280px_1fr]">
             <ScrollArea className="max-h-[480px]">

@@ -24,4 +24,5 @@ var commandFlags = map[string][]string{
 	"ainames":        {"mapping", "config"},
 	"templates":      {"out", "config", "dir"},
 	"flow":           {"out", "scenarios-dir", "config"},
+	"dbcheck":        {"config"},
 }

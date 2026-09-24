@@ -20,11 +20,11 @@ export async function fetchJob(id: string): Promise<JobState> {
   return json(r);
 }
 
-export async function discover(jobId: string, target: "go" | "cs"): Promise<JobState> {
+export async function discover(jobId: string, target: "go" | "cs", useLLM = false): Promise<JobState> {
   const r = await fetch(`/api/jobs/${jobId}/discover`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ target }),
+    body: JSON.stringify({ target, useLLM }),
   });
   await json(r);
   return fetchJob(jobId);
@@ -56,23 +56,24 @@ export async function saveMapping(jobId: string, path: string, content: string):
 
 export async function convert(
   jobId: string,
-  target: "go" | "py" | "cs"
+  target: "go" | "py" | "cs",
+  useLLM = false
 ): Promise<{ job: JobState; note?: string; drafts?: unknown }> {
   const r = await fetch(`/api/jobs/${jobId}/convert`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ target }),
+    body: JSON.stringify({ target, useLLM }),
   });
   const data = await json<{ note?: string; drafts?: unknown }>(r);
   const job = await fetchJob(jobId);
   return { job, note: data.note, drafts: data.drafts };
 }
 
-export async function gentest(jobId: string, mode: "check" | "generate"): Promise<JobState> {
+export async function gentest(jobId: string, mode: "check" | "generate", useLLM = false): Promise<JobState> {
   const r = await fetch(`/api/jobs/${jobId}/gentest`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode }),
+    body: JSON.stringify({ mode, useLLM }),
   });
   await json(r);
   return fetchJob(jobId);
@@ -99,6 +100,11 @@ export async function fetchMetrics(): Promise<{
   count: number;
 }> {
   const r = await fetch("/api/metrics");
+  return json(r);
+}
+
+export async function fetchDbStatus(): Promise<{ enabled: boolean; driver: string; source: string; note: string }> {
+  const r = await fetch("/api/db-status");
   return json(r);
 }
 
