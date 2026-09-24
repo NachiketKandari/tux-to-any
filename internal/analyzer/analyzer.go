@@ -171,6 +171,17 @@ type Report struct {
 	MergeCount      int
 	HasTpCall       bool
 	TpCallCount     int
+	// TpSvcDeps groups the file's tpcall/tpacall sites by target service.
+	// Resolution (File/Score/Complexity) is filled by resolveTpDeps in
+	// directory mode; single-file reports keep the skeleton with
+	// Resolved=false. TpDepScore sums the resolved targets' own
+	// ComplexityScore (one level, no transitive roll-up) and TpTotalScore
+	// carries the file-plus-dependencies cost; the file's own
+	// ComplexityScore never absorbs it.
+	TpSvcDeps       []TpSvcDep
+	TpDepScore      int
+	TpUnresolved    int
+	TpTotalScore    int
 	FnLocalCount    int
 	FnExternalCount int
 	// LocalFns is the fn inventory computed per run. RESERVED as data —
@@ -289,6 +300,14 @@ func analyzeFacts(facts *scanner.SourceFacts, c corpus, opts Options) *Report {
 	}
 	reasonParts = append(reasonParts, fmt.Sprintf("%d tpcall (+%d)", facts.TpCallCount, facts.TpCallCount*opts.Marks.TpCall))
 	reasonParts = append(reasonParts, fmt.Sprintf("branching factor %d over %d branch headers (+%d)", branchFactor, branchCount, branchFactor*opts.Marks.Branch))
+	tpDeps := tpDepSkeletons(facts)
+	if len(tpDeps) > 0 {
+		svcs := make([]string, len(tpDeps))
+		for i, d := range tpDeps {
+			svcs[i] = d.Service
+		}
+		reasonParts = append(reasonParts, fmt.Sprintf("%d tp svc targets (%s)", len(tpDeps), strings.Join(svcs, ", ")))
+	}
 
 	return &Report{
 		File:            facts.Path,
@@ -303,6 +322,10 @@ func analyzeFacts(facts *scanner.SourceFacts, c corpus, opts Options) *Report {
 		MergeCount:      mergeCount,
 		HasTpCall:       hasTpCall,
 		TpCallCount:     facts.TpCallCount,
+		TpSvcDeps:       tpDeps,
+		TpDepScore:      0,
+		TpUnresolved:    len(tpDeps),
+		TpTotalScore:    score,
 		FnLocalCount:    localFnPrefCount,
 		FnExternalCount: len(externalFns),
 		LocalFns:        localFns,
@@ -366,6 +389,10 @@ func AnalyzeDir(dir string, opts Options) ([]*Report, error) {
 		reports = append(reports, analyzeFacts(facts, c, opts))
 	}
 
+	// Pass 3: resolve tpcall/tpacall target services to files in the tree
+	// and roll each target's own complexity into the caller's dep score.
+	resolveTpDeps(reports)
+
 	// Sort descending by complexity score, then ascending by filename
 	sort.Slice(reports, func(i, j int) bool {
 		if reports[i].ComplexityScore != reports[j].ComplexityScore {
@@ -397,6 +424,14 @@ func AnalyzeDir(dir string, opts Options) ([]*Report, error) {
 //     "LOW"))) so a spreadsheet recalculates when any marks cell — weights
 //     or tier thresholds — changes. Programmatic consumers recompute
 //     the score from the row instead (the formula string is not a number).
+//   - Trailing dependency columns (tp_svc_deps, tp_dep_score, tp_unresolved,
+//     tp_total_score) report each file's tpcall/tpacall target services:
+//     tp_svc_deps names every target as service=>file:score:TIER
+//     (service=>UNRESOLVED when the defining file is absent from the tree,
+//     ambiguous, or the call target is dynamic); tp_dep_score sums the
+//     resolved targets' own scores; tp_total_score is the
+//     =complexity_score+tp_dep_score formula. They are appended after every
+//     scored column so the existing formula letters never shift.
 //
 // Data rows are self-contained — score = num_queries*query +
 // branching_factor*branch + external_weight + tpcall_count*tpcall. Tools
@@ -432,6 +467,10 @@ func WriteCSV(w io.Writer, reports []*Report, marks Marks) error {
 		"complexity_score",
 		"complexity",
 		"reasons",
+		"tp_svc_deps",
+		"tp_dep_score",
+		"tp_unresolved",
+		"tp_total_score",
 	}
 
 	// Marks cells row (spreadsheet row 2, above the header): the mark that
@@ -469,6 +508,7 @@ func WriteCSV(w io.Writer, reports []*Report, marks Marks) error {
 	tCol := colLetters(idx["tpcall_count"])
 	wCol := colLetters(idx["external_weight"])
 	sCol := colLetters(idx["complexity_score"])
+	dCol := colLetters(idx["tp_dep_score"])
 
 	// Data rows start at spreadsheet row 4 (marks line 1, marks cells 2,
 	// header 3); the first data row is row 4.
@@ -487,6 +527,15 @@ func WriteCSV(w io.Writer, reports []*Report, marks Marks) error {
 			wCol, rowNo)
 		tierFormula := fmt.Sprintf("=IF(%s%d>=%s$2,\"HIGH\",IF(%s%d>=%s$2,\"MEDIUM\",\"LOW\"))",
 			sCol, rowNo, sCol, sCol, rowNo, colLetters(idx["complexity"]))
+		totalFormula := fmt.Sprintf("=%s%d+%s%d", sCol, rowNo, dCol, rowNo)
+		depCells := make([]string, 0, len(r.TpSvcDeps))
+		for _, d := range r.TpSvcDeps {
+			if d.Resolved {
+				depCells = append(depCells, fmt.Sprintf("%s=>%s:%d:%s", d.Service, d.File, d.Score, d.Complexity))
+			} else {
+				depCells = append(depCells, fmt.Sprintf("%s=>UNRESOLVED", d.Service))
+			}
+		}
 		row := []string{
 			r.File,
 			strconv.Itoa(r.NumLines),
@@ -507,6 +556,10 @@ func WriteCSV(w io.Writer, reports []*Report, marks Marks) error {
 			scoreFormula,
 			tierFormula,
 			r.Reasons,
+			strings.Join(depCells, ";"),
+			strconv.Itoa(r.TpDepScore),
+			strconv.Itoa(r.TpUnresolved),
+			totalFormula,
 		}
 		if err := writer.Write(row); err != nil {
 			return err
