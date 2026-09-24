@@ -519,6 +519,42 @@ func TestRenderTestDBFile(t *testing.T) {
 	if !strings.Contains(out, "\"database/sql\"") || !strings.Contains(out, testModelsPkg) {
 		t.Errorf("db test file needs sql/models imports\n---\n%s", out)
 	}
+	if strings.Contains(out, "\"regexp\"") {
+		t.Errorf("fallback-only db test file must not import regexp (no QuoteMeta use)\n---\n%s", out)
+	}
+}
+
+// TestRenderTestDBFileRegexpImport pins the QuoteMeta contract at file level:
+// a method carrying the store SQL literal reuses it via regexp.QuoteMeta,
+// so the file must import regexp.
+func TestRenderTestDBFileRegexpImport(t *testing.T) {
+	method := render(t, TestDBMethod, TestDBMethodData{
+		SuiteName: "NavStoreSuite", StoreVar: "navStore", Name: "GetNavDetails",
+		Query: "SELECT COMP_CD FROM DEMO_COMPANY WHERE COMP_CD = :1",
+		Regex: `(?i)^select\\s+(.+)\\s+from\\s+DEMO_COMPANY`,
+		Shape: "multi",
+		Cols:  []string{"COMP_CD"}, Row: []string{"compcd"},
+		ExpectType: "[]*models.NavDetails",
+		ExpectExpr: `[]*models.NavDetails{{CompCd: sql.NullString{String: "compcd", Valid: true}}}`,
+		CallArgs:   []string{`"compcd"`},
+	})
+	out := render(t, TestDBFile, TestDBFileData{
+		Package: "db", LoggerPkg: testLoggerPkg, ModelsPkg: testModelsPkg, UtilsPkg: testUtilsPkg,
+		SuiteName: "NavStoreSuite", StoreVar: "navStore", IfaceName: "NavStore",
+		CtorCall: "NewNavStore(nil, suite.sqlDB)", NeedsSQL: true, NeedsModels: true,
+		NeedsRegexp: true,
+		Methods:     []string{method},
+	})
+	parseTestFile(t, "nav_test.go", out)
+	for _, want := range []string{
+		"query := `SELECT COMP_CD FROM DEMO_COMPANY WHERE COMP_CD = :1`",
+		"ExpectQuery(regexp.QuoteMeta(query))",
+		"\"regexp\"",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("db test file missing %q\n---\n%s", want, out)
+		}
+	}
 }
 
 func TestRenderTestControllerFile(t *testing.T) {

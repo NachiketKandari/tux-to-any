@@ -524,6 +524,7 @@ func composeFile(sc *serviceCtx, layer testscan.Layer, outFile, suite string, me
 			CtorCall:       dbCtorCall(sc),
 			NeedsSQL:       strings.Contains(joined, "sql.Null") || strings.Contains(joined, "database/sql"),
 			NeedsModels:    strings.Contains(joined, "models."),
+			NeedsRegexp:    strings.Contains(joined, "regexp.QuoteMeta"),
 			Methods:        methods,
 		})
 	case testscan.LayerController:

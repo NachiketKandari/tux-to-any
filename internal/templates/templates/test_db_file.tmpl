@@ -6,7 +6,9 @@ import (
 	"database/sql"
 {{- end}}
 	"errors"
+{{- if .NeedsRegexp}}
 	"regexp"
+{{- end}}
 	"{{.LoggerPkg}}"
 {{- if .NeedsModels}}
 	"{{.ModelsPkg}}"

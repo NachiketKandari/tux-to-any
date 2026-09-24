@@ -283,6 +283,7 @@ type TestDBFileData struct {
 	CtorCall    string // NewNavStore(nil, suite.sqlDB) — pre-rendered
 	NeedsSQL    bool   // database/sql import (sql.Null* expected exprs)
 	NeedsModels bool   // models import (row-struct expected exprs)
+	NeedsRegexp bool   // regexp import (QuoteMeta expectations over the query var)
 	Methods     []string
 }
 
