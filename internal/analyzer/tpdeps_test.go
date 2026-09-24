@@ -301,10 +301,10 @@ func TestTpDepCSVColumns(t *testing.T) {
 		}
 		rows[rec[0]] = rec
 	}
-	tail := header[len(header)-4:]
-	for i, want := range []string{"tp_svc_deps", "tp_dep_score", "tp_unresolved", "tp_total_score"} {
+	tail := header[len(header)-6:]
+	for i, want := range []string{"tp_svc_deps", "tp_dep_score", "tp_unresolved", "fn_file_deps", "fn_dep_score", "tp_total_score"} {
 		if tail[i] != want {
-			t.Fatalf("trailing columns = %v, want [... tp_svc_deps tp_dep_score tp_unresolved tp_total_score]", tail)
+			t.Fatalf("trailing columns = %v, want [... tp_svc_deps tp_dep_score tp_unresolved fn_file_deps fn_dep_score tp_total_score]", tail)
 		}
 	}
 	col := map[string]int{}
@@ -330,8 +330,8 @@ func TestTpDepCSVColumns(t *testing.T) {
 		t.Errorf("tp_unresolved cell %q must equal 2", row[col["tp_unresolved"]])
 	}
 	total := row[col["tp_total_score"]]
-	if !strings.HasPrefix(total, "=") || !strings.Contains(total, "+") {
-		t.Errorf("tp_total_score must be a =own+dep formula, got %q", total)
+	if !strings.HasPrefix(total, "=") || strings.Count(total, "+") != 2 {
+		t.Errorf("tp_total_score must be a =own+tpdep+fndep formula, got %q", total)
 	}
 
 	// The extended schema must still feed the weights re-score flow.

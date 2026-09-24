@@ -17,15 +17,30 @@ const tpDynamicService = "(dynamic)"
 // TpSvcDep is one outbound Tuxedo service dependency of a file: every
 // tpcall/tpacall site grouped by target service name. Kind is "tpcall" when
 // every site is sync, "tpacall" when every site is async, else "both".
-// Resolution (File/Resolved/Score/Complexity) needs the scanned tree, so it
+// Depth is 1 for a direct call target, 2 for a target's target, and so on —
+// the closure is a breadth-first search, so Depth is the shortest call
+// distance. Resolution (File/Score/Complexity) needs the scanned tree, so it
 // is filled by resolveTpDeps in directory mode; single-file reports keep the
 // skeleton (Resolved=false) — the dependency is counted, never guessed.
 type TpSvcDep struct {
 	Service    string
 	Kind       string
 	Calls      int
+	Depth      int
 	File       string
 	Resolved   bool
+	Score      int
+	Complexity string
+}
+
+// FnFileDep is one external-function defining file used by a file: every
+// resolved external fn grouped by the file that defines it (one entry per
+// file — a shared helper file counts once no matter how many of its fns are
+// called). Like TpSvcDep it prices the real body behind the call instead of
+// the tier weight alone.
+type FnFileDep struct {
+	File       string
+	Fns        []string
 	Score      int
 	Complexity string
 }
@@ -141,51 +156,178 @@ func svcStem(path string) string {
 }
 
 // resolveTpDeps fills the resolution half of every report's TpSvcDeps
-// against the scanned tree: a service resolves to the one .pc/.pcf file
-// whose stem matches it (same one-match rule as the analyze selectors).
-// Zero or several matches stay unresolved — never a silent pick. Depths
-// stop at one level (no transitive roll-up): the target's own
-// ComplexityScore is added to TpDepScore, and TpTotalScore carries the
-// file-plus-dependencies cost the user asked to triage.
+// against the scanned tree, then walks the full transitive closure, then
+// rolls every resolved external fn's defining file into FnFileDeps.
+//
+// Service→file matching uses the one-match rule (zero or several matches
+// stay unresolved — never a silent pick). The closure is a breadth-first
+// search per root over service names: visited roots break cycles (A→B→A
+// terminates), a target resolving to the root's own file is skipped (a file
+// never inflates its own score), and Depth records the shortest call
+// distance. TpDepScore sums every uniquely reachable target's own
+// ComplexityScore; TpTotalScore adds the fn-file roll-up on top. Overall
+// cost is O(R·(V+E)) for R reports — linear scans with map indexes, no
+// nested walks.
 func resolveTpDeps(reports []*Report) {
-	byStem := map[string][]*Report{}
+	byFile := make(map[string]*Report, len(reports))
+	byStem := make(map[string][]*Report)
 	for _, r := range reports {
+		byFile[r.File] = r
 		byStem[svcStem(r.File)] = append(byStem[svcStem(r.File)], r)
 	}
-	for _, r := range reports {
-		if len(r.TpSvcDeps) == 0 {
-			continue
+	resolveDirect := func(d *TpSvcDep) {
+		if d.Service == tpDynamicService {
+			return
 		}
-		depScore := 0
-		unresolved := 0
-		var missing []string
+		matches := byStem[strings.ToLower(d.Service)]
+		if len(matches) != 1 {
+			return
+		}
+		d.File = matches[0].File
+		d.Resolved = true
+		d.Score = matches[0].ComplexityScore
+		d.Complexity = matches[0].Complexity
+	}
+	for _, r := range reports {
 		for i := range r.TpSvcDeps {
 			d := &r.TpSvcDeps[i]
-			if d.Service == tpDynamicService {
-				unresolved++
-				missing = append(missing, d.Service)
-				continue
-			}
-			matches := byStem[strings.ToLower(d.Service)]
-			if len(matches) != 1 {
-				unresolved++
-				missing = append(missing, d.Service)
-				continue
-			}
-			t := matches[0]
-			d.File = t.File
-			d.Resolved = true
-			d.Score = t.ComplexityScore
-			d.Complexity = t.Complexity
-			depScore += t.ComplexityScore
+			d.Depth = 1
+			resolveDirect(d)
 		}
-		r.TpDepScore = depScore
-		r.TpUnresolved = unresolved
-		r.TpTotalScore = r.ComplexityScore + depScore
-		r.Reasons += fmt.Sprintf("; tp svc dep score +%d", depScore)
-		if unresolved > 0 {
+	}
+	for _, r := range reports {
+		expandClosure(r, byFile, byStem)
+		rollFnFiles(r, byFile)
+		r.TpTotalScore = r.ComplexityScore + r.TpDepScore + r.FnDepScore
+		r.Reasons += fmt.Sprintf("; tp svc dep score +%d", r.TpDepScore)
+		if n := countDepth(r.TpSvcDeps, 2); n > 0 {
+			r.Reasons += fmt.Sprintf(" (%d transitive)", n)
+		}
+		if r.TpUnresolved > 0 {
+			var missing []string
+			for _, d := range r.TpSvcDeps {
+				if !d.Resolved {
+					missing = append(missing, d.Service)
+				}
+			}
 			sort.Strings(missing)
 			r.Reasons += fmt.Sprintf("; tp svc unresolved: %s", strings.Join(missing, ", "))
 		}
+		if len(r.FnFileDeps) > 0 {
+			r.Reasons += fmt.Sprintf("; fn file dep score +%d", r.FnDepScore)
+		}
 	}
+}
+
+// expandClosure breadth-first-searches the service graph from one report's
+// direct deps, appending reachable targets (resolved or not) with their
+// shortest Depth and folding the scores into TpDepScore/TpUnresolved.
+func expandClosure(r *Report, byFile map[string]*Report, byStem map[string][]*Report) {
+	seen := map[string]bool{svcStem(r.File): true}
+	type queueItem struct {
+		svc   string
+		depth int
+	}
+	var queue []queueItem
+	for _, d := range r.TpSvcDeps {
+		key := strings.ToLower(d.Service)
+		if !seen[key] {
+			seen[key] = true
+			queue = append(queue, queueItem{svc: d.Service, depth: 2})
+		}
+	}
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+		matches := byStem[strings.ToLower(item.svc)]
+		if len(matches) != 1 {
+			continue
+		}
+		next := matches[0]
+		for _, d := range next.TpSvcDeps {
+			key := strings.ToLower(d.Service)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			nd := d
+			nd.Depth = item.depth
+			if nd.File == r.File {
+				continue // never roll the root into itself
+			}
+			r.TpSvcDeps = append(r.TpSvcDeps, nd)
+			queue = append(queue, queueItem{svc: d.Service, depth: item.depth + 1})
+		}
+	}
+	// A service calling itself by name resolves to its own file — drop the
+	// entry so a file never inflates its own dep score.
+	kept := r.TpSvcDeps[:0]
+	for _, d := range r.TpSvcDeps {
+		if d.Resolved && d.File == r.File {
+			continue
+		}
+		kept = append(kept, d)
+	}
+	r.TpSvcDeps = kept
+	sort.Slice(r.TpSvcDeps, func(i, j int) bool {
+		if r.TpSvcDeps[i].Depth != r.TpSvcDeps[j].Depth {
+			return r.TpSvcDeps[i].Depth < r.TpSvcDeps[j].Depth
+		}
+		return r.TpSvcDeps[i].Service < r.TpSvcDeps[j].Service
+	})
+	depScore := 0
+	unresolved := 0
+	for _, d := range r.TpSvcDeps {
+		if d.Resolved {
+			depScore += d.Score
+		} else {
+			unresolved++
+		}
+	}
+	r.TpDepScore = depScore
+	r.TpUnresolved = unresolved
+}
+
+// rollFnFiles groups a report's resolved external fns by defining file and
+// sums one score per file into FnDepScore. The tier weight already in the
+// own score prices the call; this prices the body behind it.
+func rollFnFiles(r *Report, byFile map[string]*Report) {
+	byFileDep := map[string]*FnFileDep{}
+	for _, fn := range r.ExternalFns {
+		if !fn.Resolved || fn.DefinedIn == "" || fn.DefinedIn == r.File {
+			continue
+		}
+		t, ok := byFile[fn.DefinedIn]
+		if !ok {
+			continue
+		}
+		d, ok := byFileDep[fn.DefinedIn]
+		if !ok {
+			d = &FnFileDep{File: fn.DefinedIn, Score: t.ComplexityScore, Complexity: t.Complexity}
+			byFileDep[fn.DefinedIn] = d
+		}
+		d.Fns = append(d.Fns, fn.Name)
+	}
+	deps := make([]FnFileDep, 0, len(byFileDep))
+	for _, d := range byFileDep {
+		sort.Strings(d.Fns)
+		deps = append(deps, *d)
+	}
+	sort.Slice(deps, func(i, j int) bool { return deps[i].File < deps[j].File })
+	r.FnFileDeps = deps
+	score := 0
+	for _, d := range deps {
+		score += d.Score
+	}
+	r.FnDepScore = score
+}
+
+func countDepth(deps []TpSvcDep, min int) int {
+	n := 0
+	for _, d := range deps {
+		if d.Depth >= min {
+			n++
+		}
+	}
+	return n
 }
