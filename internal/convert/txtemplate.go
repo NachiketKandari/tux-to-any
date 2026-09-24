@@ -3,6 +3,8 @@ package convert
 import (
 	"regexp"
 	"strings"
+
+	"tux-to-any/internal/common"
 )
 
 // Transaction template replacement (deterministic view shaping): the legacy
@@ -178,9 +180,9 @@ func dropTxHandleLines(lines []string, handles map[string]bool) []string {
 	decl := make(map[string]*regexp.Regexp, len(handles))
 	for h := range handles {
 		q := regexp.QuoteMeta(h)
-		guard[h] = regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*if\s*\(\s*` + q + `\s*==\s*-1\s*\)`)
-		init[h] = regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*` + q + `\s*=\s*0\s*;`)
-		decl[h] = regexp.MustCompile(`^\s*(?:int|long|short)\s+` + q + `\s*;`)
+		guard[h] = common.CachedRegexp(`^\s*(?:/\*.*?\*/\s*)*if\s*\(\s*` + q + `\s*==\s*-1\s*\)`)
+		init[h] = common.CachedRegexp(`^\s*(?:/\*.*?\*/\s*)*` + q + `\s*=\s*0\s*;`)
+		decl[h] = common.CachedRegexp(`^\s*(?:int|long|short)\s+` + q + `\s*;`)
 	}
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]

@@ -981,8 +981,8 @@ func wrapTxBody(body string, calls map[string]budget.DBCall, receiver string) (s
 		// Thread tx after the context argument. Already-threaded sites
 		// (`Name(ctx, tx, ...`) are left byte-identical — RE2 has no
 		// lookahead, so the skip is an explicit following-text check.
-		pat := regexp.MustCompile(regexp.QuoteMeta(tc.recv + "." + tc.name + "(" + tc.ctx + ","))
-		txLead := regexp.MustCompile(`^\s*` + regexp.QuoteMeta(tc.tx) + `\s*,`)
+		pat := common.CachedRegexp(regexp.QuoteMeta(tc.recv + "." + tc.name + "(" + tc.ctx + ","))
+		txLead := common.CachedRegexp(`^\s*` + regexp.QuoteMeta(tc.tx) + `\s*,`)
 		var sb strings.Builder
 		prev := 0
 		for _, loc := range pat.FindAllStringIndex(rewritten, -1) {

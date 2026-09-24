@@ -43,13 +43,13 @@ func ScanBytes(src []byte, path string) (*SourceFacts, error) {
 		}
 		masked = padded
 	}
-	sess, err := newScanSession()
+	sess, err := getScanSession()
 	if err != nil {
 		return nil, err
 	}
 	tree, err := sess.parser.Parse(masked)
 	if err != nil {
-		sess.close(nil)
+		closeSession(sess)
 		return nil, err
 	}
 
@@ -61,7 +61,7 @@ func ScanBytes(src []byte, path string) (*SourceFacts, error) {
 	w.walk(tree.RootNode())
 	w.facts.ParseErrors = collectParseErrors(tree.RootNode())
 	tree.Close()
-	sess.close(nil)
+	putScanSession(sess)
 
 	if len(pr.directives) > 0 {
 		w.facts.Directives = append(w.facts.Directives, pr.directives...)

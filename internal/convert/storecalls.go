@@ -51,7 +51,7 @@ func assignStoreCalls(src, receiver string, shape map[string]string) (string, in
 	if recv == "" {
 		recv = "s.store"
 	}
-	callRe := regexp.MustCompile(`^(\s*)` + regexp.QuoteMeta(recv) + `\.([A-Za-z0-9_]+)\(`)
+	callRe := common.CachedRegexp(`^(\s*)` + regexp.QuoteMeta(recv) + `\.([A-Za-z0-9_]+)\(`)
 	used := map[string]int{}
 	lines := strings.Split(src, "\n")
 	changed := 0

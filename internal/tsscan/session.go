@@ -3,6 +3,7 @@ package tsscan
 import (
 	"context"
 	_ "embed"
+	"sync"
 
 	"github.com/zema1/wasitter"
 )
@@ -16,13 +17,20 @@ import (
 //go:embed grammars/wasitter-c.wasm
 var wasitterCWasm []byte
 
-// scanSession owns one wasitter runtime + parser pair. Each scan call gets a
-// fresh session: a wasitter runtime serializes guest execution, so sharing
-// one across parallel workers would turn per-file scans into a convoy.
+// scanSession owns one wasitter runtime + parser pair. Sessions are pooled
+// and reused across files: a wasitter runtime serializes guest execution,
+// so a pooled session must never be shared concurrently — each ScanBytes
+// call checks one out exclusively and returns it when done. Reuse is safe
+// because Parser.Parse carries no retained parse state (the prior tree is
+// closed before return); it only avoids re-instantiating the WASM module
+// per file, which dominates analyze time.
 type scanSession struct {
 	parser  *wasitter.Parser
 	runtime *wasitter.Runtime
 }
+
+// sessionPool holds idle sessions for reuse across ScanBytes calls.
+var sessionPool sync.Pool
 
 func newScanSession() (*scanSession, error) {
 	parser, runtime, err := wasitter.NewParserFromWASM(context.Background(), wasitterCWasm)
@@ -30,6 +38,36 @@ func newScanSession() (*scanSession, error) {
 		return nil, err
 	}
 	return &scanSession{parser: parser, runtime: runtime}, nil
+}
+
+// getScanSession returns an idle pooled session or constructs a fresh one.
+// The caller owns it exclusively until putScanSession (success) or
+// closeSession (parse-level failure that may have poisoned the runtime).
+func getScanSession() (*scanSession, error) {
+	if v := sessionPool.Get(); v != nil {
+		if s, ok := v.(*scanSession); ok && s != nil && s.parser != nil {
+			return s, nil
+		}
+	}
+	return newScanSession()
+}
+
+// putScanSession returns a healthy session to the pool for reuse.
+func putScanSession(s *scanSession) {
+	if s == nil || s.parser == nil || s.runtime == nil {
+		return
+	}
+	sessionPool.Put(s)
+}
+
+// closeSession discards a session that may be unusable (parse ABI error or
+// cancellation can leave the runtime closed per wasitter docs). It is not
+// returned to the pool.
+func closeSession(s *scanSession) {
+	if s == nil {
+		return
+	}
+	s.close(nil)
 }
 
 // close releases the tree (if any), then the parser, then the runtime.

@@ -9,6 +9,7 @@ package archtest
 import (
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -19,30 +20,52 @@ type deps map[string][]string
 
 func loadDeps(t *testing.T) deps {
 	t.Helper()
-	out, err := exec.Command("go", "list", "-f", "{{.ImportPath}}|{{join .Imports \",\"}}", "./...").CombinedOutput()
-	if err != nil {
-		t.Fatalf("go list: %v\n%s", err, out)
-	}
-	d := deps{}
-	for _, line := range strings.Split(string(out), "\n") {
-		if line == "" {
-			continue
+	return sharedDeps(t)
+}
+
+// sharedDeps runs `go list` once per test binary invocation and shares the
+// result across the layering tests. `go list` output cannot change mid-run
+// (no code is generated or moved during tests), so caching only avoids
+// re-execing the same command five times — assertions are unchanged.
+var sharedDepsOnce sync.Once
+var sharedDepsVal deps
+var sharedDepsOut []byte
+var sharedDepsErr error
+
+func sharedDeps(t *testing.T) deps {
+	t.Helper()
+	sharedDepsOnce.Do(func() {
+		out, err := exec.Command("go", "list", "-f", "{{.ImportPath}}|{{join .Imports \",\"}}", "./...").CombinedOutput()
+		sharedDepsOut = out
+		sharedDepsErr = err
+		if err != nil {
+			return
 		}
-		parts := strings.SplitN(line, "|", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		var internal []string
-		if parts[1] != "" {
-			for _, imp := range strings.Split(parts[1], ",") {
-				if strings.HasPrefix(imp, mod+"/internal/") {
-					internal = append(internal, imp)
+		d := deps{}
+		for _, line := range strings.Split(string(out), "\n") {
+			if line == "" {
+				continue
+			}
+			parts := strings.SplitN(line, "|", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			var internal []string
+			if parts[1] != "" {
+				for _, imp := range strings.Split(parts[1], ",") {
+					if strings.HasPrefix(imp, mod+"/internal/") {
+						internal = append(internal, imp)
+					}
 				}
 			}
+			d[parts[0]] = internal
 		}
-		d[parts[0]] = internal
+		sharedDepsVal = d
+	})
+	if sharedDepsErr != nil {
+		t.Fatalf("go list: %v\n%s", sharedDepsErr, sharedDepsOut)
 	}
-	return d
+	return sharedDepsVal
 }
 
 // internalPkg extracts "plan" from the module's internal import path.

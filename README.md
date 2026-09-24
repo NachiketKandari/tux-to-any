@@ -34,7 +34,9 @@ production monolith from the local corpus parses with **zero** error nodes
   statements, comments, unbalanced; additive: `Params`, `ParseErrors`,
   `Switches`). The parse runs on `internal/tsscan/grammars/wasitter-c.wasm`
   (vendored tree-sitter runtime + tree-sitter-c v0.24.2, sha256
-  `5044f382…286b2`) executed by pure-Go wazero — no cgo.
+  `5044f382…286b2`) executed by pure-Go wazero — no cgo. Parser sessions
+  are pooled and reused across files (one WASM instantiate per run, not
+  per file); output is identical to a fresh session per file.
 - `internal/pred` — the condition parser (C-precedence boolean trees,
   literal-only define substitution, Raw degrade).
 - `internal/ir` — the extraction fold: entry pick, branching factor,

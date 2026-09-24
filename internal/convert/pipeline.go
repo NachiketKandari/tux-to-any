@@ -1517,7 +1517,7 @@ func inlineLegacyConstants(src string, defines map[string]string) (string, int) 
 			continue
 		}
 		names = append(names, name)
-		res[name] = regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
+		res[name] = common.CachedRegexp(`\b` + regexp.QuoteMeta(name) + `\b`)
 	}
 	if len(names) == 0 {
 		return src, 0
@@ -1560,7 +1560,7 @@ func legacyErrorCodes(c *ir.Condition) []string {
 // storeCallRe extracts the store calls the rewritten view requires; the
 // receiver prefix is per-profile (P1: gonav's "s.store." is the reference).
 func storeCallRe(receiver string) *regexp.Regexp {
-	return regexp.MustCompile(regexp.QuoteMeta(receiver) + `([A-Za-z0-9_]+)\(`)
+	return common.CachedRegexp(regexp.QuoteMeta(receiver) + `([A-Za-z0-9_]+)\(`)
 }
 
 // helperCallRe matches a bare s.<Name>( selector call: the same-file
@@ -2056,7 +2056,7 @@ func stripRejectedBlock(src, name string) (string, bool) {
 // hasLiveMethod reports whether src declares a real method named name —
 // line-anchored, so commented rejected signatures never count.
 func hasLiveMethod(src, name string) bool {
-	re := regexp.MustCompile(`(?m)^func \([^)]*\) ` + regexp.QuoteMeta(name) + `\(`)
+	re := common.CachedRegexp(`(?m)^func \([^)]*\) ` + regexp.QuoteMeta(name) + `\(`)
 	return re.MatchString(src)
 }
 

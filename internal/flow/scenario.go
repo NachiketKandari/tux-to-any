@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"tux-to-any/internal/common"
 	"tux-to-any/internal/ir"
 	"tux-to-any/internal/pred"
 	scanner "tux-to-any/internal/tsscan"
@@ -2060,7 +2061,7 @@ func writeOf(text, varName string) (string, string) {
 	qm := regexp.QuoteMeta(base)
 	// `var =` assignments (Go's RE2 has no lookahead — the == / != forms
 	// are disambiguated by peeking the matched tail).
-	for _, loc := range regexp.MustCompile(`\b`+qm+`(\.arr)?\s*=`).FindAllStringIndex(stripped, -1) {
+	for _, loc := range common.CachedRegexp(`\b`+qm+`(\.arr)?\s*=`).FindAllStringIndex(stripped, -1) {
 		if loc[1] < len(stripped) && stripped[loc[1]] == '=' {
 			continue // == / != comparison, not a write
 		}
@@ -2070,13 +2071,13 @@ func writeOf(text, varName string) (string, string) {
 		}
 		return "assign", strings.TrimSpace(rhs)
 	}
-	if regexp.MustCompile(`(?i)\bINTO\s+:` + qm + `\b`).MatchString(stripped) {
+	if common.CachedRegexp(`(?i)\bINTO\s+:` + qm + `\b`).MatchString(stripped) {
 		return "into", ""
 	}
-	if m := regexp.MustCompile(`\bstrcpy\s*\(\s*` + qm + `[^,]*,\s*(.+?)\)\s*;?`).FindStringSubmatchIndex(stripped); m != nil {
+	if m := common.CachedRegexp(`\bstrcpy\s*\(\s*` + qm + `[^,]*,\s*(.+?)\)\s*;?`).FindStringSubmatchIndex(stripped); m != nil {
 		return "strcpy", strings.TrimSpace(text[m[2]:m[3]])
 	}
-	if regexp.MustCompile(`\bMEMSET\s*\(\s*` + qm + `\b`).MatchString(stripped) {
+	if common.CachedRegexp(`\bMEMSET\s*\(\s*` + qm + `\b`).MatchString(stripped) {
 		return "memset", ""
 	}
 	return "", ""

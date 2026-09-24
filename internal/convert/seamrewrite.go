@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"tux-to-any/internal/common"
 	"tux-to-any/internal/ir"
 )
 
@@ -140,7 +141,7 @@ func seamSsnTarget(line string) string {
 // block a neutralized session check leaves behind, starting at line start
 // (blank lines skipped). Returns the index just past the block.
 func deadSessionGuard(lines []string, start int, target string) (int, bool) {
-	re := regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*if\s*\(\s*` + regexp.QuoteMeta(target) + `\s*==\s*-1\s*\)`)
+	re := common.CachedRegexp(`^\s*(?:/\*.*?\*/\s*)*if\s*\(\s*` + regexp.QuoteMeta(target) + `\s*==\s*-1\s*\)`)
 	j := start
 	for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
 		j++
@@ -159,8 +160,8 @@ func deadSessionGuard(lines []string, start int, target string) (int, bool) {
 // [skipFrom, skipTo): plain declarations and `= 0` initializations are
 // bookkeeping, not reads.
 func identUsedElsewhere(lines []string, ident string, skipFrom, skipTo int) bool {
-	use := regexp.MustCompile(`\b` + regexp.QuoteMeta(ident) + `\b`)
-	bookkeeping := regexp.MustCompile(`^\s*(?:/\*.*?\*/\s*)*(?:(?:int|long|short|char|float|double|unsigned)\b[^=]*\b` +
+	use := common.CachedRegexp(`\b` + regexp.QuoteMeta(ident) + `\b`)
+	bookkeeping := common.CachedRegexp(`^\s*(?:/\*.*?\*/\s*)*(?:(?:int|long|short|char|float|double|unsigned)\b[^=]*\b` +
 		regexp.QuoteMeta(ident) + `\b|` + regexp.QuoteMeta(ident) + `\s*=\s*0\s*;)`)
 	for i, ln := range lines {
 		if i >= skipFrom && i < skipTo {
@@ -344,7 +345,8 @@ func stubCallRe(fnNames map[string]bool) *regexp.Regexp {
 		names = append(names, regexp.QuoteMeta(n))
 	}
 	sort.Strings(names)
-	return regexp.MustCompile(`\b(?:` + strings.Join(names, "|") + `)\s*\(`)
+	key := strings.Join(names, "|")
+	return common.CachedRegexp(`\b(?:` + key + `)\s*\(`)
 }
 
 // stripSessionArgLine scrubs one line: a statement-level
