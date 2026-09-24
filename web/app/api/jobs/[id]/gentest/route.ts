@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getJob, setJob, makeLogger } from "@/lib/jobs";
 import { listFilesRecursive, runTux } from "@/lib/tuxconv";
+import { recordMetric } from "@/lib/metrics";
 
 // POST /api/jobs/:id/gentest { mode: "check" | "generate" }
 // Runs against the converted Go tree (in-place for generate).
@@ -35,6 +36,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       if (job.converted) {
         job.converted.files = all.map((f) => f.slice(root.length + 1));
       }
+      await recordMetric({ kind: "gentest", job: job.name, target: "go", tests: job.gentestFiles.length, files: job.gentestFiles.length });
     }
     job.status = "done";
   } catch (e) {

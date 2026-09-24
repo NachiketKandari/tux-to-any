@@ -2,7 +2,9 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
-import { setJob, makeLogger, type Job, type FlowReport } from "@/lib/jobs";
+import { setJob, makeLogger, type Job } from "@/lib/jobs";
+import { coerceFlowReport } from "@/lib/flow";
+import { countQueries, recordMetric } from "@/lib/metrics";
 import { newJobDir, runTux, REPO_ROOT } from "@/lib/tuxconv";
 
 // POST /api/samples/load { path } — ingest a bundled fixture as a job.
@@ -37,7 +39,10 @@ export async function POST(req: Request) {
     try {
       const flowPath = join(dir, "flow.json");
       const fr = await runTux(dir, ["flow", sourcePath, "-out", flowPath], log);
-      if (fr.code === 0) job.flowReport = JSON.parse(await fs.readFile(flowPath, "utf8")) as FlowReport;
+      if (fr.code === 0) {
+        const raw = JSON.parse(await fs.readFile(flowPath, "utf8"));
+        job.flowReport = coerceFlowReport(raw, sourcePath);
+      }
     } catch {
       /* text fallback */
     }
@@ -48,6 +53,7 @@ export async function POST(req: Request) {
       /* optional */
     }
     job.status = "done";
+    await recordMetric({ kind: "parse", job: job.name, queries: countQueries(job.ir), note: "sample" });
   } catch (e) {
     job.status = "error";
     job.error = e instanceof Error ? e.message : "sample pipeline failed";

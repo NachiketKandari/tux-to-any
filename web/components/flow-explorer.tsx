@@ -23,6 +23,7 @@ export function FlowExplorer({ flowText, flowReport }: { flowText?: string; flow
               fn.coverage && fn.coverage.codeLines > 0
                 ? Math.round((fn.coverage.classified / fn.coverage.codeLines) * 100)
                 : 100;
+            const residue = fn.coverage?.residue ?? [];
             return (
               <Card key={fn.name}>
                 <CardHeader className="pb-2">
@@ -39,6 +40,7 @@ export function FlowExplorer({ flowText, flowReport }: { flowText?: string; flow
                     {fn.coverage ? (
                       <>
                         {fn.coverage.classified}/{fn.coverage.codeLines} classified ({pct}%)
+                        {fn.coverage.unknown > 0 && <> · {fn.coverage.unknown} unknown</>}
                       </>
                     ) : (
                       "no coverage data"
@@ -47,6 +49,13 @@ export function FlowExplorer({ flowText, flowReport }: { flowText?: string; flow
                 </CardHeader>
                 <CardContent className="space-y-2">
                   {fn.coverage && <Progress value={pct} />}
+                  {residue.length > 0 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Unclassified lines:{" "}
+                      <span className="font-mono">{residue.slice(0, 12).join(", ")}</span>
+                      {residue.length > 12 && <> +{residue.length - 12} more</>}
+                    </p>
+                  )}
                   {(fn.hints?.length ?? 0) > 0 ? (
                     <ul className="space-y-1">
                       {fn.hints!.slice(0, 5).map((h, i) => (
@@ -63,6 +72,11 @@ export function FlowExplorer({ flowText, flowReport }: { flowText?: string; flow
                     </ul>
                   ) : (
                     <p className="text-[11px] text-muted-foreground">No idiom hints — clean tree.</p>
+                  )}
+                  {(fn.hints?.length ?? 0) > 5 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      +{(fn.hints?.length ?? 0) - 5} more hints — see raw output below.
+                    </p>
                   )}
                 </CardContent>
               </Card>

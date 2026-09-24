@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { FileTree, CodeView } from "@/components/files";
+import { FileTree, CodeView, FileTreeSkeleton, CodeViewSkeleton } from "@/components/files";
 import { CONVERT_TARGETS, type ConvertTarget } from "@/lib/targets";
 import { cn } from "@/lib/utils";
 
@@ -24,8 +24,11 @@ export function ConvertPanel({
   hasMapping,
   converted,
   onOpenFile,
+  onSaveFile,
+  savingFile,
   selFile,
   fileContent,
+  loadingFile,
 }: {
   target: ConvertTarget;
   onTarget: (t: ConvertTarget) => void;
@@ -34,17 +37,22 @@ export function ConvertPanel({
   hasMapping: boolean;
   converted?: { target: string; files: string[]; summary: string };
   onOpenFile: (p: string) => void;
+  onSaveFile: (path: string, content: string) => void;
+  savingFile: boolean;
   selFile: string | null;
   fileContent: string;
+  loadingFile: boolean;
 }) {
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3" role="radiogroup" aria-label="Conversion target">
         {CONVERT_TARGETS.map((t) => {
           const active = target === t.id;
           return (
             <button
               key={t.id}
+              role="radio"
+              aria-checked={active}
               onClick={() => onTarget(t.id)}
               className={cn(
                 "rounded-xl border p-4 text-left transition-colors",
@@ -74,7 +82,13 @@ export function ConvertPanel({
               <Hammer className="h-4 w-4" />
               Convert — deterministic, gated
             </CardTitle>
-            {converted && <Badge variant="secondary">{converted.files.length} files</Badge>}
+            {busy ? (
+              <Badge variant="secondary" className="flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" /> converting…
+              </Badge>
+            ) : (
+              converted && <Badge variant="secondary">{converted.files.length} files</Badge>
+            )}
             {!hasMapping && (target === "go" || target === "cs") && (
               <Badge variant="outline">no mapping yet — first run drafts it</Badge>
             )}
@@ -86,17 +100,30 @@ export function ConvertPanel({
           <CardDescription>
             Always <code className="font-mono">-no-llm</code> in the viewer — controller bodies render as
             deterministic drafts with SQL-fidelity gates. Bring your own key for the LLM seam in the CLI.
+            Open a file to edit it in place; renames apply file-wide.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {converted && <pre className="mb-3 whitespace-pre-wrap font-mono text-xs text-muted-foreground">{converted.summary}</pre>}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[280px_1fr]">
             <ScrollArea className="max-h-[480px]">
-              <FileTree files={converted?.files ?? []} selected={selFile} onSelect={onOpenFile} />
+              {busy && !converted ? (
+                <FileTreeSkeleton />
+              ) : (
+                <FileTree files={converted?.files ?? []} selected={selFile} onSelect={onOpenFile} />
+              )}
             </ScrollArea>
             <ScrollArea className="max-h-[480px]">
-              {selFile ? (
-                <CodeView content={fileContent} path={selFile} />
+              {loadingFile ? (
+                <CodeViewSkeleton />
+              ) : selFile ? (
+                <CodeView
+                  content={fileContent}
+                  path={selFile}
+                  editable
+                  saving={savingFile}
+                  onSave={(next) => onSaveFile(selFile, next)}
+                />
               ) : (
                 <p className="p-3 text-xs text-muted-foreground">Select a file to view it.</p>
               )}

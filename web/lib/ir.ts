@@ -5,15 +5,26 @@ export function asArray(ir: Record<string, unknown> | undefined, keys: string[])
   // Direct hits first.
   for (const k of keys) {
     const v = ir[k];
-    if (Array.isArray(v)) return v as Record<string, unknown>[];
+    if (Array.isArray(v)) return normalizeRows(v);
   }
   // Case-insensitive fallback for robustness across CLI versions.
   const lower = new Map(Object.keys(ir).map((k) => [k.toLowerCase(), k]));
   for (const k of keys) {
     const hit = lower.get(k.toLowerCase());
-    if (hit && Array.isArray(ir[hit])) return ir[hit] as Record<string, unknown>[];
+    if (hit && Array.isArray(ir[hit])) return normalizeRows(ir[hit] as unknown[]);
   }
   return [];
+}
+
+/** Normalize table rows: the IR sometimes uses bare strings (e.g. functions:
+ * ["SVC_X"]) where the UI expects objects. Map primitives to {name} so generic
+ * tables never enumerate string indices ("0","1",...) as columns. */
+function normalizeRows(v: unknown[]): Record<string, unknown>[] {
+  return (v as unknown[]).map((o) => {
+    if (o !== null && typeof o === "object" && !Array.isArray(o)) return o as Record<string, unknown>;
+    if (typeof o === "string" || typeof o === "number" || typeof o === "boolean") return { name: String(o) };
+    return { value: JSON.stringify(o) };
+  });
 }
 
 export function str(v: unknown, fallback = "—"): string {

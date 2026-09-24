@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { relative } from "node:path";
 import { NextResponse } from "next/server";
 import { getJob, setJob } from "@/lib/jobs";
+import { recordMetric } from "@/lib/metrics";
 
 function inside(jobDir: string, p: string): boolean {
   const rel = relative(jobDir, p);
@@ -25,6 +26,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   await fs.writeFile(body.path, body.content);
   job.mappingPath = body.path;
   setJob(job);
+  await recordMetric({ kind: "mapping", job: job.name, note: body.path.split("/").pop() });
   const { dir: _d, sourcePath: _s, ...rest } = job;
   void _d;
   void _s;

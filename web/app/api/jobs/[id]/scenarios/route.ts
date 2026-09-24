@@ -3,6 +3,7 @@ import { join, basename } from "node:path";
 import { NextResponse } from "next/server";
 import { getJob, setJob, makeLogger } from "@/lib/jobs";
 import { runTux } from "@/lib/tuxconv";
+import { recordMetric } from "@/lib/metrics";
 
 const MAX_SCENARIO_BYTES = 120 * 1024;
 const MAX_ARTIFACTS = 40;
@@ -78,6 +79,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     };
     void basename;
     job.status = "done";
+    await recordMetric({ kind: "scenarios", job: job.name, scenarios: artifacts.length });
   } catch (e) {
     job.status = "error";
     job.error = e instanceof Error ? e.message : "scenarios failed";

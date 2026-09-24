@@ -2,6 +2,7 @@
 
 import { Database, FileCode2, ArrowRight, Container, Braces } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 export function SiteHeader({ jobName, status }: { jobName?: string; status?: string }) {
   return (
@@ -31,6 +32,7 @@ export function SiteHeader({ jobName, status }: { jobName?: string; status?: str
             </Badge>
           )}
           {status && <Badge variant={status === "error" ? "destructive" : "default"}>{status}</Badge>}
+          <ThemeToggle />
         </div>
       </div>
     </header>

@@ -2,52 +2,12 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
-import { setJob, makeLogger, type Job, type FlowReport } from "@/lib/jobs";
+import { setJob, makeLogger, type Job } from "@/lib/jobs";
+import { coerceFlowReport } from "@/lib/flow";
+import { countQueries, recordMetric } from "@/lib/metrics";
 import { newJobDir, runTux } from "@/lib/tuxconv";
 
 const MAX_UPLOAD = 5 * 1024 * 1024;
-
-function coerceFlowReport(raw: unknown, fallbackTarget: string): FlowReport | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const r = raw as { target?: string; files?: unknown };
-  if (!Array.isArray(r.files)) return undefined;
-  return {
-    target: typeof r.target === "string" ? r.target : fallbackTarget,
-    files: (r.files as Array<Record<string, unknown>>).map((f) => ({
-      path: String(f.path ?? ""),
-      functions: Array.isArray(f.functions)
-        ? (f.functions as Array<Record<string, unknown>>).map((fn) => {
-            const tree = (fn.Tree ?? fn.tree) as Record<string, unknown> | undefined;
-            const cov = (tree?.Coverage ?? tree?.coverage) as Record<string, unknown> | undefined;
-            const hints = (fn.Hints ?? fn.hints) as Array<Record<string, unknown>> | undefined;
-            return {
-              name: String(fn.Name ?? fn.name ?? "?"),
-              startLine: Number(tree?.StartLine ?? tree?.startLine ?? 0) || undefined,
-              endLine: Number(tree?.EndLine ?? tree?.endLine ?? 0) || undefined,
-              coverage: cov
-                ? {
-                    classified: Number(cov.Classified ?? cov.classified ?? 0),
-                    codeLines: Number(cov.CodeLines ?? cov.codeLines ?? 0),
-                    unknown: Number(cov.Unknown ?? cov.unknown ?? 0),
-                    residue: Array.isArray(cov.Residue ?? cov.residue)
-                      ? ((cov.Residue ?? cov.residue) as unknown[]).map(Number).slice(0, 50)
-                      : undefined,
-                  }
-                : undefined,
-              hints: Array.isArray(hints)
-                ? hints.slice(0, 100).map((h) => ({
-                    kind: String(h.Kind ?? h.kind ?? "hint"),
-                    line: Number(h.Line ?? h.line ?? 0),
-                    detail: String(h.Detail ?? h.detail ?? ""),
-                  }))
-                : undefined,
-              tree: tree ?? undefined,
-            };
-          })
-        : [],
-    })),
-  };
-}
 
 export async function POST(req: Request) {
   const form = await req.formData();
@@ -112,6 +72,7 @@ export async function POST(req: Request) {
     }
 
     job.status = "done";
+    await recordMetric({ kind: "parse", job: job.name, queries: countQueries(job.ir) });
   } catch (e) {
     job.status = "error";
     job.error = e instanceof Error ? e.message : "upload pipeline failed";

@@ -81,6 +81,11 @@ export function ScenarioExplorer({
 
   return (
     <div className="space-y-3">
+      {busy && (
+        <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground" aria-live="polite">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Rebuilding scenarios…
+        </div>
+      )}
       <Card>
         <CardHeader className="pb-2">
           <div className="flex flex-wrap items-center gap-2">

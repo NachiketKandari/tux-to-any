@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { NextResponse } from "next/server";
 import { getJob, setJob, makeLogger } from "@/lib/jobs";
 import { listFilesRecursive, runTux } from "@/lib/tuxconv";
+import { countQueries, recordMetric } from "@/lib/metrics";
 
 type Target = "go" | "py" | "cs";
 
@@ -69,6 +70,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const tail = r.stdout.trim().split("\n").slice(-3).join("\n");
     job.converted = { target, root, files: files.map((f) => f.slice(root.length + 1)), summary: tail };
     job.status = "done";
+    await recordMetric({
+      kind: "convert",
+      job: job.name,
+      target,
+      queries: countQueries(job.ir),
+      files: job.converted.files.length,
+    });
   } catch (e) {
     job.status = "error";
     job.error = e instanceof Error ? e.message : "convert failed";

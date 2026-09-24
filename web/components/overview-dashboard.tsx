@@ -5,6 +5,7 @@ import { GitBranch, Database, FunctionSquare, MessageSquareText, Gauge } from "l
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { asArray, countKind, entryOf } from "@/lib/ir";
+import { MasterTotalsBar } from "@/components/metrics-panel";
 import type { FlowReport } from "@/lib/jobs";
 
 const CHART_COLORS = [
@@ -16,12 +17,13 @@ const CHART_COLORS = [
 ];
 
 function Donut({ data }: { data: [string, number][] }) {
-  const total = data.reduce((a, [, v]) => a + v, 0) || 1;
+  const total = data.reduce((a, [, v]) => a + v, 0);
+  const denom = total || 1;
   let acc = 0;
   const segs = data.slice(0, 5).map(([k, v], i) => {
-    const from = (acc / total) * 100;
+    const from = (acc / denom) * 100;
     acc += v;
-    const to = (acc / total) * 100;
+    const to = (acc / denom) * 100;
     return { k, v, from, to, color: CHART_COLORS[i % CHART_COLORS.length] };
   });
   const R = 42;
@@ -96,7 +98,7 @@ function Bars({ data, label }: { data: [string, number][]; label: string }) {
   );
 }
 
-export function OverviewDashboard({ ir, flowReport }: { ir?: Record<string, unknown>; flowReport?: FlowReport }) {
+export function OverviewDashboard({ ir, flowReport, onGoMetrics }: { ir?: Record<string, unknown>; flowReport?: FlowReport; onGoMetrics?: () => void }) {
   const conditions = asArray(ir, ["conditions", "Conditions"]);
   const queries = asArray(ir, ["queries", "Queries", "queryUnits", "QueryUnits"]);
   const functions = asArray(ir, ["functions", "Functions"]);
@@ -133,6 +135,7 @@ export function OverviewDashboard({ ir, flowReport }: { ir?: Record<string, unkn
 
   return (
     <div className="space-y-4">
+      <MasterTotalsBar onView={onGoMetrics} />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         {kpis.map((k) => (
           <Card key={k.label}>

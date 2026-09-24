@@ -14,15 +14,26 @@ function FilteredTable({
   hint,
 }: {
   title: string;
-  items: Record<string, unknown>[];
+  items: unknown[];
   empty: string;
   hint?: string;
 }) {
   const [q, setQ] = React.useState("");
+  const rows_raw = React.useMemo(
+    () =>
+      (items as unknown[]).map((o) =>
+        o !== null && typeof o === "object" && !Array.isArray(o)
+          ? (o as Record<string, unknown>)
+          : typeof o === "string" || typeof o === "number" || typeof o === "boolean"
+            ? { name: String(o) }
+            : { value: JSON.stringify(o) }
+      ),
+    [items]
+  );
   const cols = React.useMemo(() => {
     const keys: string[] = [];
     const seen = new Set<string>();
-    for (const o of items.slice(0, 20)) {
+    for (const o of rows_raw.slice(0, 20)) {
       for (const [k, v] of Object.entries(o)) {
         if (seen.has(k)) continue;
         if (v === null || ["string", "number", "boolean"].includes(typeof v)) {
@@ -34,14 +45,14 @@ function FilteredTable({
       if (keys.length >= 6) break;
     }
     return keys.slice(0, 5);
-  }, [items]);
+  }, [rows_raw]);
 
   const rows = React.useMemo(() => {
     const needle = q.trim().toLowerCase();
-    const base = items.slice(0, 200);
+    const base = rows_raw.slice(0, 200);
     if (!needle) return base;
     return base.filter((o) => JSON.stringify(o).toLowerCase().includes(needle));
-  }, [items, q]);
+  }, [rows_raw, q]);
 
   return (
     <Card>
@@ -60,6 +71,10 @@ function FilteredTable({
       <CardContent>
         {rows.length === 0 ? (
           <p className="py-4 text-center text-xs text-muted-foreground">{items.length === 0 ? empty : "No rows match."}</p>
+        ) : cols.length === 0 ? (
+          <pre className="whitespace-pre-wrap p-3 font-mono text-[11px] text-muted-foreground">
+            {JSON.stringify(rows.slice(0, 10), null, 1).slice(0, 2000)}
+          </pre>
         ) : (
           <Table>
             <TableHeader>

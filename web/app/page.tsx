@@ -12,6 +12,7 @@ import {
   ScrollText,
   FileCode2,
   Loader2,
+  Activity,
 } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { PipelineSteps } from "@/components/pipeline-steps";
@@ -24,7 +25,9 @@ import { ScenarioExplorer } from "@/components/scenario-explorer";
 import { MappingEditor } from "@/components/mapping-editor";
 import { ConvertPanel } from "@/components/convert-panel";
 import { TestsPanel } from "@/components/tests-panel";
+import { MetricsPanel } from "@/components/metrics-panel";
 import { CodeView } from "@/components/files";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -41,10 +44,19 @@ import {
   convert,
   gentest,
   readConvertedFile,
+  saveConvertedFile,
 } from "@/lib/api-client";
 import type { ConvertTarget } from "@/lib/targets";
 
-type TabId = "overview" | "ir" | "flow" | "scenarios" | "mapping" | "convert" | "tests" | "logs" | "source";
+type TabId = "overview" | "ir" | "flow" | "scenarios" | "mapping" | "convert" | "tests" | "metrics" | "logs" | "source";
+
+/** Map the 10-tab model onto the 6-step pipeline strip: IR/Flow read as
+ *  Overview detail, Source/Logs/Metrics sit outside the linear flow. */
+function stepperStepForTab(tab: TabId): string {
+  if (tab === "ir" || tab === "flow") return "overview";
+  if (tab === "source" || tab === "logs" || tab === "metrics") return "upload";
+  return tab;
+}
 
 export default function Home() {
   const [jobId, setJobId] = React.useState<string | null>(null);
@@ -55,6 +67,8 @@ export default function Home() {
   const [target, setTarget] = React.useState<ConvertTarget>("go");
   const [selFile, setSelFile] = React.useState<string | null>(null);
   const [fileContent, setFileContent] = React.useState("");
+  const [loadingFile, setLoadingFile] = React.useState(false);
+  const [savingFile, setSavingFile] = React.useState(false);
 
   async function run<T>(fn: () => Promise<T>): Promise<T | null> {
     setBusy(true);
@@ -110,11 +124,11 @@ export default function Home() {
 
   async function handleSaveMapping(path: string, content: string) {
     if (!job) return;
-    await run(async () => {
+    const ok = await run(async () => {
       await saveMapping(job.id, path, content);
-      return null;
+      return true;
     });
-    setTab("convert");
+    if (ok) setTab("convert");
   }
 
   async function handleConvert() {
@@ -141,10 +155,26 @@ export default function Home() {
   async function openFile(p: string) {
     if (!job) return;
     setSelFile(p);
+    setLoadingFile(true);
     try {
       setFileContent(await readConvertedFile(job.id, p));
     } catch (e) {
       setFileContent(`// ${e instanceof Error ? e.message : "cannot read file"}`);
+    } finally {
+      setLoadingFile(false);
+    }
+  }
+
+  async function handleSaveFile(p: string, content: string) {
+    if (!job) return;
+    setSavingFile(true);
+    try {
+      await saveConvertedFile(job.id, p, content);
+      setFileContent(content);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "save failed");
+    } finally {
+      setSavingFile(false);
     }
   }
 
@@ -190,14 +220,44 @@ export default function Home() {
         </div>
 
         <div className="mb-4">
-          <PipelineSteps active={job ? tab : "upload"} done={done} onGo={(id) => setTab(id as TabId)} />
+          <PipelineSteps
+            active={job ? stepperStepForTab(tab) : "upload"}
+            done={done}
+            onGo={(id) => {
+              // The stepper only models the 6 pipeline stages; IR/Flow are
+              // sub-views of Overview and Source/Logs sit outside the flow.
+              // Never leave Tabs in a blank "upload" state.
+              if (id === "upload") setTab("overview");
+              else setTab(id as TabId);
+            }}
+          />
         </div>
 
         {!job ? (
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_380px]">
-            <Dropzone onFile={handleUpload} disabled={busy} />
-            <SamplesPanel busy={busy} onPick={handleSample} />
-          </div>
+          busy ? (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_380px]" aria-label="Loading job">
+              <Card>
+                <CardContent className="space-y-2 p-4">
+                  <Skeleton className="h-5 w-1/3" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-5/6" />
+                  <Skeleton className="h-32 w-full" />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="space-y-2 p-4">
+                  <Skeleton className="h-5 w-1/2" />
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_380px]">
+              <Dropzone onFile={handleUpload} disabled={busy} />
+              <SamplesPanel busy={busy} onPick={handleSample} />
+            </div>
+          )
         ) : (
           <Card className="mb-4">
             <CardContent className="flex flex-wrap items-center gap-2 p-4">
@@ -209,7 +269,12 @@ export default function Home() {
 
         {err && (
           <Alert variant="destructive" className="mb-4">
-            <AlertDescription>{err}</AlertDescription>
+            <AlertDescription className="flex flex-wrap items-center gap-2">
+              <span className="flex-1">{err}</span>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setErr("")}>
+                Dismiss
+              </Button>
+            </AlertDescription>
           </Alert>
         )}
 
@@ -227,15 +292,38 @@ export default function Home() {
               </TabsTrigger>
               <TabsTrigger value="scenarios">
                 <GitFork className="h-3.5 w-3.5" /> Scenarios
+                {(job.scenarios?.artifacts.length ?? 0) > 0 && (
+                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                    {job.scenarios?.artifacts.length}
+                  </Badge>
+                )}
               </TabsTrigger>
               <TabsTrigger value="mapping">
                 <PencilLine className="h-3.5 w-3.5" /> Mapping
+                {(job.drafts?.length ?? 0) > 0 && (
+                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                    {job.drafts?.length}
+                  </Badge>
+                )}
               </TabsTrigger>
               <TabsTrigger value="convert">
                 <Hammer className="h-3.5 w-3.5" /> Convert
+                {(job.converted?.files.length ?? 0) > 0 && (
+                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                    {job.converted?.files.length}
+                  </Badge>
+                )}
               </TabsTrigger>
               <TabsTrigger value="tests">
                 <FlaskConical className="h-3.5 w-3.5" /> Tests
+                {(job.gentestFiles?.length ?? 0) > 0 && (
+                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                    {job.gentestFiles?.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="metrics">
+                <Activity className="h-3.5 w-3.5" /> Metrics
               </TabsTrigger>
               <TabsTrigger value="source">
                 <FileCode2 className="h-3.5 w-3.5" /> Source
@@ -246,7 +334,7 @@ export default function Home() {
             </TabsList>
 
             <TabsContent value="overview">
-              <OverviewDashboard ir={job.ir} flowReport={job.flowReport} />
+              <OverviewDashboard ir={job.ir} flowReport={job.flowReport} onGoMetrics={() => setTab("metrics")} />
             </TabsContent>
 
             <TabsContent value="ir">
@@ -274,8 +362,11 @@ export default function Home() {
                 hasMapping={!!job.mappingPath}
                 converted={job.converted}
                 onOpenFile={openFile}
+                onSaveFile={handleSaveFile}
+                savingFile={savingFile}
                 selFile={selFile}
                 fileContent={fileContent}
+                loadingFile={loadingFile}
               />
             </TabsContent>
 
@@ -287,7 +378,12 @@ export default function Home() {
                 testFiles={job.gentestFiles}
                 onGap={() => handleGentest("check")}
                 onGenerate={() => handleGentest("generate")}
+                onGoConvert={() => setTab("convert")}
               />
+            </TabsContent>
+
+            <TabsContent value="metrics">
+              <MetricsPanel />
             </TabsContent>
 
             <TabsContent value="source">
@@ -321,7 +417,8 @@ export default function Home() {
 
         <footer className="mt-8 border-t pt-4 text-[11px] text-muted-foreground">
           Deterministic viewer — every run shells out to <code className="font-mono">tuxconv</code> with{" "}
-          <code className="font-mono">-no-llm</code>. Jobs are in-memory tmpdirs; re-upload after a restart.
+          <code className="font-mono">-no-llm</code>. Jobs are disposable tmpdirs; re-upload after a restart. Master
+          totals accumulate in <code className="font-mono">conversion_logs/web-metrics.jsonl</code>.
         </footer>
       </main>
     </div>

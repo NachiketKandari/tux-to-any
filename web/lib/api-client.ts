@@ -84,6 +84,24 @@ export async function readConvertedFile(jobId: string, path: string): Promise<st
   return d.content;
 }
 
+export async function saveConvertedFile(jobId: string, path: string, content: string): Promise<void> {
+  const r = await fetch(`/api/jobs/${jobId}/files`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+  await json(r);
+}
+
+export async function fetchMetrics(): Promise<{
+  totals: { services: number; queries: number; files: number; tests: number; mappings: number; scenarios: number; edits: number };
+  recent: { ts: string; kind: string; job: string; target?: string; queries?: number; files?: number; tests?: number; scenarios?: number; note?: string }[];
+  count: number;
+}> {
+  const r = await fetch("/api/metrics");
+  return json(r);
+}
+
 export async function loadSample(path: string): Promise<{ id: string }> {
   const r = await fetch("/api/samples/load", {
     method: "POST",
