@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { NextResponse } from "next/server";
 import { getJob, setJob, makeLogger } from "@/lib/jobs";
 import { runTux } from "@/lib/tuxconv";
+import { recordMetric } from "@/lib/metrics";
 
 // POST /api/jobs/:id/discover { target: "go" | "cs" }
 // Runs the scan-then-tag draft pass and returns the draft yamls.
@@ -38,6 +39,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     job.drafts = drafts;
     job.mappingPath = drafts[0].path;
     job.status = "done";
+    await recordMetric({ kind: "discover", job: job.name, target, files: drafts.length });
   } catch (e) {
     job.status = "error";
     job.error = e instanceof Error ? e.message : "discover failed";

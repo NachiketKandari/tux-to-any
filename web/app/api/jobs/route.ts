@@ -3,6 +3,8 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
 import { setJob, makeLogger, type Job } from "@/lib/jobs";
+import { coerceFlowReport } from "@/lib/flow";
+import { countQueries, recordMetric } from "@/lib/metrics";
 import { newJobDir, runTux } from "@/lib/tuxconv";
 
 const MAX_UPLOAD = 5 * 1024 * 1024;
@@ -48,7 +50,29 @@ export async function POST(req: Request) {
 
     const fl = await runTux(dir, ["flow", sourcePath], log);
     job.flowText = fl.stdout || "(no flow output)";
+
+    // Structured flow report for the visual explorer (coverage + hints).
+    // Best-effort: the text above is the fallback when this fails.
+    try {
+      const flowPath = join(dir, "flow.json");
+      const fr = await runTux(dir, ["flow", sourcePath, "-out", flowPath], log);
+      if (fr.code === 0) {
+        const raw = JSON.parse(await fs.readFile(flowPath, "utf8"));
+        job.flowReport = coerceFlowReport(raw, sourcePath);
+      }
+    } catch {
+      /* keep flowText-only */
+    }
+
+    try {
+      const src = await fs.readFile(sourcePath, "utf8");
+      job.sourcePreview = src.length > 24 * 1024 ? src.slice(0, 24 * 1024) + "\n…[truncated]" : src;
+    } catch {
+      /* preview is optional */
+    }
+
     job.status = "done";
+    await recordMetric({ kind: "parse", job: job.name, queries: countQueries(job.ir) });
   } catch (e) {
     job.status = "error";
     job.error = e instanceof Error ? e.message : "upload pipeline failed";

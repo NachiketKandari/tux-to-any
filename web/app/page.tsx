@@ -1,318 +1,426 @@
 "use client";
+
 import * as React from "react";
-import { FlaskConical, GitBranch, FileJson, ScrollText, Hammer, PencilLine, Loader2 } from "lucide-react";
+import {
+  LayoutDashboard,
+  FileJson,
+  GitBranch,
+  GitFork,
+  PencilLine,
+  Hammer,
+  FlaskConical,
+  ScrollText,
+  FileCode2,
+  Loader2,
+  Activity,
+} from "lucide-react";
+import { SiteHeader } from "@/components/site-header";
+import { PipelineSteps } from "@/components/pipeline-steps";
 import { Dropzone } from "@/components/dropzone";
-import { FileTree, CodeView } from "@/components/files";
+import { SamplesPanel } from "@/components/samples-panel";
+import { OverviewDashboard } from "@/components/overview-dashboard";
+import { IRExplorer } from "@/components/ir-explorer";
+import { FlowExplorer } from "@/components/flow-explorer";
+import { ScenarioExplorer } from "@/components/scenario-explorer";
+import { MappingEditor } from "@/components/mapping-editor";
+import { ConvertPanel } from "@/components/convert-panel";
+import { TestsPanel } from "@/components/tests-panel";
+import { MetricsPanel } from "@/components/metrics-panel";
+import { CodeView } from "@/components/files";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea, Select } from "@/components/ui/fields";
-import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { ScrollArea, Alert } from "@/components/ui/misc";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useJob } from "@/hooks/use-job";
+import {
+  uploadFile,
+  loadSample,
+  discover,
+  buildScenarios,
+  saveMapping,
+  convert,
+  gentest,
+  readConvertedFile,
+  saveConvertedFile,
+} from "@/lib/api-client";
+import type { ConvertTarget } from "@/lib/targets";
 
-interface JobState {
-  id: string;
-  name: string;
-  status: "ready" | "running" | "done" | "error";
-  error?: string;
-  ir?: Record<string, unknown>;
-  flowText?: string;
-  drafts?: { path: string; content: string }[];
-  mappingPath?: string;
-  converted?: { target: string; root: string; files: string[]; summary: string };
-  gentestGap?: string;
-  gentestFiles?: string[];
-}
+type TabId = "overview" | "ir" | "flow" | "scenarios" | "mapping" | "convert" | "tests" | "metrics" | "logs" | "source";
 
-function asArray(ir: Record<string, unknown> | undefined, keys: string[]): Record<string, unknown>[] {
-  if (!ir) return [];
-  for (const k of keys) {
-    const v = ir[k];
-    if (Array.isArray(v)) return v as Record<string, unknown>[];
-  }
-  return [];
-}
-
-function scalarRows(obj: Record<string, unknown>, maxCols = 6): [string, string][] {
-  return Object.entries(obj)
-    .filter(([, v]) => v === null || ["string", "number", "boolean"].includes(typeof v))
-    .slice(0, maxCols)
-    .map(([k, v]) => [k, String(v)]);
-}
-
-function DataTable({ items, empty }: { items: Record<string, unknown>[]; empty: string }) {
-  if (items.length === 0) return <p className="text-xs text-muted-foreground">{empty}</p>;
-  const cols = Array.from(new Set(items.flatMap((o) => scalarRows(o).map(([k]) => k)))).slice(0, 6);
-  return (
-    <Table>
-      <THead>
-        <TR>
-          {cols.map((c) => (
-            <TH key={c}>{c}</TH>
-          ))}
-        </TR>
-      </THead>
-      <TBody>
-        {items.slice(0, 100).map((o, i) => (
-          <TR key={i}>
-            {cols.map((c) => (
-              <TD key={c}>{o[c] === undefined || o[c] === null ? "—" : String(o[c])}</TD>
-            ))}
-          </TR>
-        ))}
-      </TBody>
-    </Table>
-  );
+/** Map the 10-tab model onto the 6-step pipeline strip: IR/Flow read as
+ *  Overview detail, Source/Logs/Metrics sit outside the linear flow. */
+function stepperStepForTab(tab: TabId): string {
+  if (tab === "ir" || tab === "flow") return "overview";
+  if (tab === "source" || tab === "logs" || tab === "metrics") return "upload";
+  return tab;
 }
 
 export default function Home() {
-  const [job, setJob] = React.useState<JobState | null>(null);
-  const [tab, setTab] = React.useState("ir");
+  const [jobId, setJobId] = React.useState<string | null>(null);
+  const { job, setJob, logs, resetLogs } = useJob(jobId);
+  const [tab, setTab] = React.useState<TabId>("overview");
   const [busy, setBusy] = React.useState(false);
-  const [target, setTarget] = React.useState("go");
-  const [draftIdx, setDraftIdx] = React.useState(0);
-  const [mappingText, setMappingText] = React.useState("");
+  const [err, setErr] = React.useState("");
+  const [target, setTarget] = React.useState<ConvertTarget>("go");
   const [selFile, setSelFile] = React.useState<string | null>(null);
   const [fileContent, setFileContent] = React.useState("");
-  const [logs, setLogs] = React.useState<string[]>([]);
-  const [err, setErr] = React.useState("");
+  const [loadingFile, setLoadingFile] = React.useState(false);
+  const [savingFile, setSavingFile] = React.useState(false);
 
-  const refresh = React.useCallback(async (id: string) => {
-    const r = await fetch(`/api/jobs/${id}`);
-    if (r.ok) setJob(await r.json());
-  }, []);
-
-  React.useEffect(() => {
-    if (!job || job.status !== "running") return;
-    const t = setInterval(() => refresh(job.id), 1500);
-    return () => clearInterval(t);
-  }, [job, refresh]);
-
-  React.useEffect(() => {
-    if (!job) return;
-    const t = setInterval(async () => {
-      const r = await fetch(`/api/jobs/${job.id}/logs?since=${logsRef.current}`);
-      if (r.ok) {
-        const d = await r.json();
-        if (d.lines?.length) setLogs((prev) => [...prev, ...d.lines]);
-        logsRef.current = d.next;
-      }
-    }, 1500);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job?.id]);
-  const logsRef = React.useRef(0);
-
-  async function upload(f: File) {
-    setBusy(true);
-    setErr("");
-    setLogs([]);
-    logsRef.current = 0;
-    try {
-      const fd = new FormData();
-      fd.append("file", f);
-      const r = await fetch("/api/jobs", { method: "POST", body: fd });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error ?? "upload failed");
-      await refresh(d.id);
-      setTab("ir");
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "upload failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function call(path: string, body?: unknown, method = "POST") {
-    if (!job) return null;
+  async function run<T>(fn: () => Promise<T>): Promise<T | null> {
     setBusy(true);
     setErr("");
     try {
-      const r = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error ?? "request failed");
-      await refresh(job.id);
-      return d;
+      return await fn();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "request failed");
       return null;
     } finally {
       setBusy(false);
+      if (jobId) {
+        const r = await fetch(`/api/jobs/${jobId}`);
+        if (r.ok) setJob(await r.json());
+      }
     }
+  }
+
+  async function handleUpload(f: File) {
+    resetLogs();
+    setSelFile(null);
+    const d = await run(() => uploadFile(f));
+    if (d) {
+      setJobId(d.id);
+      setTab("overview");
+    }
+  }
+
+  async function handleSample(path: string) {
+    resetLogs();
+    setSelFile(null);
+    const d = await run(() => loadSample(path));
+    if (d) {
+      setJobId(d.id);
+      setTab("overview");
+    }
+  }
+
+  async function handleDiscover(t: "go" | "cs") {
+    if (!job) return;
+    const j = await run(() => discover(job.id, t));
+    if (j) {
+      setJob(j);
+      setTab("mapping");
+    }
+  }
+
+  async function handleScenarios() {
+    if (!job) return;
+    const j = await run(() => buildScenarios(job.id));
+    if (j) setJob(j);
+  }
+
+  async function handleSaveMapping(path: string, content: string) {
+    if (!job) return;
+    const ok = await run(async () => {
+      await saveMapping(job.id, path, content);
+      return true;
+    });
+    if (ok) setTab("convert");
+  }
+
+  async function handleConvert() {
+    if (!job) return;
+    setSelFile(null);
+    setFileContent("");
+    const res = await run(() => convert(job.id, target));
+    if (res) {
+      setJob(res.job);
+      // Draft-and-stop (no mapping yet): take the user to the fresh draft.
+      if (!res.job.converted && (res.note || res.drafts)) {
+        setTab("mapping");
+        setErr("No mapping yet — review the draft in the Mapping tab, save, then convert again.");
+      }
+    }
+  }
+
+  async function handleGentest(mode: "check" | "generate") {
+    if (!job) return;
+    const j = await run(() => gentest(job.id, mode));
+    if (j) setJob(j);
   }
 
   async function openFile(p: string) {
     if (!job) return;
     setSelFile(p);
-    const r = await fetch(`/api/jobs/${job.id}/files?path=${encodeURIComponent(p)}`);
-    const d = await r.json();
-    setFileContent(r.ok ? d.content : `// ${d.error}`);
+    setLoadingFile(true);
+    try {
+      setFileContent(await readConvertedFile(job.id, p));
+    } catch (e) {
+      setFileContent(`// ${e instanceof Error ? e.message : "cannot read file"}`);
+    } finally {
+      setLoadingFile(false);
+    }
   }
 
-  const drafts = job?.drafts ?? [];
-  React.useEffect(() => {
-    setMappingText(drafts[draftIdx]?.content ?? "");
-  }, [drafts, draftIdx]);
+  async function handleSaveFile(p: string, content: string) {
+    if (!job) return;
+    setSavingFile(true);
+    try {
+      await saveConvertedFile(job.id, p, content);
+      setFileContent(content);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "save failed");
+    } finally {
+      setSavingFile(false);
+    }
+  }
 
-  const conditions = asArray(job?.ir, ["conditions", "Conditions"]);
-  const queries = asArray(job?.ir, ["queries", "Queries", "queryUnits", "QueryUnits"]);
-  const functions = asArray(job?.ir, ["functions", "Functions"]);
-  const fmlOps = asArray(job?.ir, ["fml_ops", "fmlOps"]);
-  const hostVars = asArray(job?.ir, ["host_vars", "hostVars"]);
+  const done = React.useMemo(() => {
+    const s = new Set<string>();
+    if (!job) return s;
+    s.add("upload");
+    if (job.ir) s.add("overview");
+    if (job.scenarios) s.add("scenarios");
+    if (job.drafts?.length || job.mappingPath) s.add("mapping");
+    if (job.converted) s.add("convert");
+    if (job.gentestGap) s.add("tests");
+    return s;
+  }, [job]);
 
   return (
-    <main className="container max-w-6xl py-8">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">tux-to-any viewer</h1>
-          <p className="text-sm text-muted-foreground">Drop a Pro*C file — watch it break down into IR, flow, mapping, code, tests.</p>
+    <div className="min-h-screen">
+      <SiteHeader jobName={job?.name} status={job?.status} />
+
+      <main className="container max-w-7xl py-6">
+        {/* Hero */}
+        <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Drop a Pro*C file — watch it become an API</h1>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              Tree-sitter parse → IR breakdown → dispatch-axis scenarios → mapping →{" "}
+              <span className="font-medium text-foreground">Tux → Go · Python · C#</span> → tests. Deterministic
+              in the browser; the LLM seam stays in the CLI.
+            </p>
+          </div>
+          {job && (
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="font-mono">
+                {job.name}
+              </Badge>
+              {busy && (
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> working…
+                </span>
+              )}
+            </div>
+          )}
         </div>
-        {job && <Badge variant="secondary">{job.status}</Badge>}
-      </div>
 
-      <Dropzone onFile={upload} disabled={busy} />
-      {err && (
-        <Alert className="mt-4 border-red-300 text-sm text-red-700">{err}</Alert>
-      )}
+        <div className="mb-4">
+          <PipelineSteps
+            active={job ? stepperStepForTab(tab) : "upload"}
+            done={done}
+            onGo={(id) => {
+              // The stepper only models the 6 pipeline stages; IR/Flow are
+              // sub-views of Overview and Source/Logs sit outside the flow.
+              // Never leave Tabs in a blank "upload" state.
+              if (id === "upload") setTab("overview");
+              else setTab(id as TabId);
+            }}
+          />
+        </div>
 
-      {job && (
-        <Card className="mt-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              {job.name}
-            </CardTitle>
-            <CardDescription>
-              entry <code>{String(job.ir?.entry ?? job.ir?.Entry ?? "?")}</code>
-              {" · "}{conditions.length} conditions · {queries.length} queries · {functions.length} functions
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Tabs value={tab} onValueChange={setTab}>
-              <TabsList>
-                <TabsTrigger value="ir"><span className="flex items-center gap-1"><FileJson className="h-3.5 w-3.5" />IR</span></TabsTrigger>
-                <TabsTrigger value="flow"><span className="flex items-center gap-1"><GitBranch className="h-3.5 w-3.5" />Flow</span></TabsTrigger>
-                <TabsTrigger value="mapping"><span className="flex items-center gap-1"><PencilLine className="h-3.5 w-3.5" />Mapping</span></TabsTrigger>
-                <TabsTrigger value="convert"><span className="flex items-center gap-1"><Hammer className="h-3.5 w-3.5" />Convert</span></TabsTrigger>
-                <TabsTrigger value="tests"><span className="flex items-center gap-1"><FlaskConical className="h-3.5 w-3.5" />Tests</span></TabsTrigger>
-                <TabsTrigger value="logs"><span className="flex items-center gap-1"><ScrollText className="h-3.5 w-3.5" />Logs</span></TabsTrigger>
-              </TabsList>
+        {!job ? (
+          busy ? (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_380px]" aria-label="Loading job">
+              <Card>
+                <CardContent className="space-y-2 p-4">
+                  <Skeleton className="h-5 w-1/3" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-5/6" />
+                  <Skeleton className="h-32 w-full" />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="space-y-2 p-4">
+                  <Skeleton className="h-5 w-1/2" />
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_380px]">
+              <Dropzone onFile={handleUpload} disabled={busy} />
+              <SamplesPanel busy={busy} onPick={handleSample} />
+            </div>
+          )
+        ) : (
+          <Card className="mb-4">
+            <CardContent className="flex flex-wrap items-center gap-2 p-4">
+              <Dropzone onFile={handleUpload} disabled={busy} compact />
+              <span className="text-xs text-muted-foreground">…or start over with a new file. Jobs are disposable tmpdirs.</span>
+            </CardContent>
+          </Card>
+        )}
 
-              <TabsContent value="ir">
-                <div className="space-y-4">
-                  <div>
-                    <h4 className="mb-2 text-sm font-semibold">Conditions ({conditions.length})</h4>
-                    <DataTable items={conditions} empty="No conditions extracted." />
-                  </div>
-                  <div>
-                    <h4 className="mb-2 text-sm font-semibold">Query units ({queries.length})</h4>
-                    <DataTable items={queries} empty="No query units extracted." />
-                  </div>
-                  <div>
-                    <h4 className="mb-2 text-sm font-semibold">Functions ({functions.length})</h4>
-                    <DataTable items={functions} empty="No functions inventoried." />
-                  </div>
-                  <div>
-                    <h4 className="mb-2 text-sm font-semibold">FML ops ({fmlOps.length})</h4>
-                    <DataTable items={fmlOps} empty="No FML ops recorded." />
-                  </div>
-                  <div>
-                    <h4 className="mb-2 text-sm font-semibold">Host vars ({hostVars.length})</h4>
-                    <DataTable items={hostVars} empty="No host vars recorded." />
-                  </div>
-                </div>
-              </TabsContent>
+        {err && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertDescription className="flex flex-wrap items-center gap-2">
+              <span className="flex-1">{err}</span>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setErr("")}>
+                Dismiss
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
 
-              <TabsContent value="flow">
-                <ScrollArea className="max-h-[480px]">
-                  <pre className="whitespace-pre-wrap p-3 font-mono text-xs">{job.flowText ?? "(upload a file first)"}</pre>
-                </ScrollArea>
-              </TabsContent>
-
-              <TabsContent value="mapping">
-                <div className="mb-3 flex flex-wrap items-center gap-2">
-                  <Button size="sm" variant="secondary" disabled={busy} onClick={() => call(`/api/jobs/${job.id}/discover`, { target: "go" })}>Draft Go mapping</Button>
-                  <Button size="sm" variant="secondary" disabled={busy} onClick={() => call(`/api/jobs/${job.id}/discover`, { target: "cs" })}>Draft C# mapping</Button>
-                  {drafts.length > 1 && (
-                    <Select value={String(draftIdx)} onChange={(e) => setDraftIdx(Number(e.target.value))}>
-                      {drafts.map((d, i) => (
-                        <option key={d.path} value={i}>{d.path.split("/").pop()}</option>
-                      ))}
-                    </Select>
-                  )}
-                  <Button
-                    size="sm"
-                    disabled={busy || !drafts[draftIdx]}
-                    onClick={async () => {
-                      const d = await call(`/api/jobs/${job.id}/mapping`, { path: drafts[draftIdx].path, content: mappingText }, "PUT");
-                      if (d) setTab("convert");
-                    }}
-                  >
-                    Save &amp; continue
-                  </Button>
-                </div>
-                {drafts.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No drafts yet — run one of the draft passes above, then review names/routes here.</p>
-                ) : (
-                  <Textarea rows={24} value={mappingText} onChange={(e) => setMappingText(e.target.value)} spellCheck={false} />
+        {job && (
+          <Tabs value={tab} onValueChange={(v) => setTab(v as TabId)}>
+            <TabsList className="flex h-auto flex-wrap justify-start gap-1">
+              <TabsTrigger value="overview">
+                <LayoutDashboard className="h-3.5 w-3.5" /> Overview
+              </TabsTrigger>
+              <TabsTrigger value="ir">
+                <FileJson className="h-3.5 w-3.5" /> IR
+              </TabsTrigger>
+              <TabsTrigger value="flow">
+                <GitBranch className="h-3.5 w-3.5" /> Flow
+              </TabsTrigger>
+              <TabsTrigger value="scenarios">
+                <GitFork className="h-3.5 w-3.5" /> Scenarios
+                {(job.scenarios?.artifacts.length ?? 0) > 0 && (
+                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                    {job.scenarios?.artifacts.length}
+                  </Badge>
                 )}
-              </TabsContent>
-
-              <TabsContent value="convert">
-                <div className="mb-3 flex flex-wrap items-center gap-2">
-                  <Select value={target} onChange={(e) => setTarget(e.target.value)}>
-                    <option value="go">Go services</option>
-                    <option value="py">Python batch</option>
-                    <option value="cs">C# components</option>
-                  </Select>
-                  <Button
-                    size="sm"
-                    disabled={busy}
-                    onClick={async () => {
-                      setSelFile(null);
-                      setFileContent("");
-                      await call(`/api/jobs/${job.id}/convert`, { target });
-                    }}
-                  >
-                    Convert{job.mappingPath ? "" : " (drafts first if unmapped)"}
-                  </Button>
-                  {job.converted && <Badge>{job.converted.files.length} files</Badge>}
-                </div>
-                {job.converted && <pre className="mb-3 whitespace-pre-wrap font-mono text-xs text-muted-foreground">{job.converted.summary}</pre>}
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-[240px_1fr]">
-                  <ScrollArea className="max-h-[480px]">
-                    <FileTree files={job.converted?.files ?? []} selected={selFile} onSelect={openFile} />
-                  </ScrollArea>
-                  <ScrollArea className="max-h-[480px]">
-                    {selFile ? <CodeView content={fileContent} /> : <p className="p-3 text-xs text-muted-foreground">Select a file to view it.</p>}
-                  </ScrollArea>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="tests">
-                <div className="mb-3 flex items-center gap-2">
-                  <Button size="sm" variant="secondary" disabled={busy || job.converted?.target !== "go"} onClick={() => call(`/api/jobs/${job.id}/gentest`, { mode: "check" })}>Gap report</Button>
-                  <Button size="sm" disabled={busy || job.converted?.target !== "go"} onClick={() => call(`/api/jobs/${job.id}/gentest`, { mode: "generate" })}>Generate tests</Button>
-                </div>
-                {job.converted?.target !== "go" && <p className="mb-2 text-xs text-muted-foreground">gentest targets converted Go trees — convert to Go first.</p>}
-                <ScrollArea className="max-h-[480px]">
-                  <pre className="whitespace-pre-wrap p-3 font-mono text-xs">{job.gentestGap ?? "(no report yet)"}</pre>
-                </ScrollArea>
+              </TabsTrigger>
+              <TabsTrigger value="mapping">
+                <PencilLine className="h-3.5 w-3.5" /> Mapping
+                {(job.drafts?.length ?? 0) > 0 && (
+                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                    {job.drafts?.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="convert">
+                <Hammer className="h-3.5 w-3.5" /> Convert
+                {(job.converted?.files.length ?? 0) > 0 && (
+                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                    {job.converted?.files.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="tests">
+                <FlaskConical className="h-3.5 w-3.5" /> Tests
                 {(job.gentestFiles?.length ?? 0) > 0 && (
-                  <p className="mt-2 text-xs text-muted-foreground">{job.gentestFiles!.length} test files — see the Convert tab tree.</p>
+                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                    {job.gentestFiles?.length}
+                  </Badge>
                 )}
-              </TabsContent>
+              </TabsTrigger>
+              <TabsTrigger value="metrics">
+                <Activity className="h-3.5 w-3.5" /> Metrics
+              </TabsTrigger>
+              <TabsTrigger value="source">
+                <FileCode2 className="h-3.5 w-3.5" /> Source
+              </TabsTrigger>
+              <TabsTrigger value="logs">
+                <ScrollText className="h-3.5 w-3.5" /> Logs
+              </TabsTrigger>
+            </TabsList>
 
-              <TabsContent value="logs">
-                <ScrollArea className="max-h-[480px]">
-                  <pre className="whitespace-pre-wrap p-3 font-mono text-xs">{logs.length ? logs.join("\n") : "(no log lines yet)"}</pre>
-                </ScrollArea>
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
-      )}
-    </main>
+            <TabsContent value="overview">
+              <OverviewDashboard ir={job.ir} flowReport={job.flowReport} onGoMetrics={() => setTab("metrics")} />
+            </TabsContent>
+
+            <TabsContent value="ir">
+              <IRExplorer ir={job.ir} />
+            </TabsContent>
+
+            <TabsContent value="flow">
+              <FlowExplorer flowText={job.flowText} flowReport={job.flowReport} />
+            </TabsContent>
+
+            <TabsContent value="scenarios">
+              <ScenarioExplorer jobId={job.id} bundle={job.scenarios} busy={busy} onBuild={handleScenarios} />
+            </TabsContent>
+
+            <TabsContent value="mapping">
+              <MappingEditor drafts={job.drafts ?? []} busy={busy} onDraft={handleDiscover} onSave={handleSaveMapping} />
+            </TabsContent>
+
+            <TabsContent value="convert">
+              <ConvertPanel
+                target={target}
+                onTarget={setTarget}
+                onConvert={handleConvert}
+                busy={busy}
+                hasMapping={!!job.mappingPath}
+                converted={job.converted}
+                onOpenFile={openFile}
+                onSaveFile={handleSaveFile}
+                savingFile={savingFile}
+                selFile={selFile}
+                fileContent={fileContent}
+                loadingFile={loadingFile}
+              />
+            </TabsContent>
+
+            <TabsContent value="tests">
+              <TestsPanel
+                busy={busy}
+                canRun={job.converted?.target === "go"}
+                gap={job.gentestGap}
+                testFiles={job.gentestFiles}
+                onGap={() => handleGentest("check")}
+                onGenerate={() => handleGentest("generate")}
+                onGoConvert={() => setTab("convert")}
+              />
+            </TabsContent>
+
+            <TabsContent value="metrics">
+              <MetricsPanel />
+            </TabsContent>
+
+            <TabsContent value="source">
+              <Card>
+                <CardContent className="p-0">
+                  <ScrollArea className="max-h-[560px] border-0">
+                    <CodeView content={job.sourcePreview ?? "(no preview)"} path={job.name} />
+                  </ScrollArea>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="logs">
+              <Card>
+                <CardContent className="p-0">
+                  <ScrollArea className="max-h-[480px] border-0">
+                    <pre className="whitespace-pre-wrap p-3 font-mono text-xs">
+                      {logs.length ? logs.join("\n") : "(no log lines yet)"}
+                    </pre>
+                  </ScrollArea>
+                  <div className="border-t p-2">
+                    <Button size="sm" variant="ghost" onClick={() => navigator.clipboard.writeText(logs.join("\n"))}>
+                      Copy logs
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        )}
+
+        <footer className="mt-8 border-t pt-4 text-[11px] text-muted-foreground">
+          Deterministic viewer — every run shells out to <code className="font-mono">tuxconv</code> with{" "}
+          <code className="font-mono">-no-llm</code>. Jobs are disposable tmpdirs; re-upload after a restart. Master
+          totals accumulate in <code className="font-mono">conversion_logs/web-metrics.jsonl</code>.
+        </footer>
+      </main>
+    </div>
   );
 }

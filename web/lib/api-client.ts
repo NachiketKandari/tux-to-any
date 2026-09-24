@@ -1,0 +1,120 @@
+// API client — single home for all browser → Next API calls.
+// Keeps components thin: they call these helpers, never raw fetch URLs.
+import type { JobState } from "@/hooks/use-job";
+
+async function json<T>(res: Response): Promise<T> {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? "request failed");
+  return data as T;
+}
+
+export async function uploadFile(file: File): Promise<{ id: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const r = await fetch("/api/jobs", { method: "POST", body: fd });
+  return json(r);
+}
+
+export async function fetchJob(id: string): Promise<JobState> {
+  const r = await fetch(`/api/jobs/${id}`);
+  return json(r);
+}
+
+export async function discover(jobId: string, target: "go" | "cs"): Promise<JobState> {
+  const r = await fetch(`/api/jobs/${jobId}/discover`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target }),
+  });
+  await json(r);
+  return fetchJob(jobId);
+}
+
+export async function buildScenarios(jobId: string): Promise<JobState> {
+  const r = await fetch(`/api/jobs/${jobId}/scenarios`, { method: "POST" });
+  await json(r);
+  return fetchJob(jobId);
+}
+
+export async function previewFilter(jobId: string, expr: string): Promise<{ output: string; code: number }> {
+  const r = await fetch(`/api/jobs/${jobId}/filter-preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expr }),
+  });
+  return json(r);
+}
+
+export async function saveMapping(jobId: string, path: string, content: string): Promise<void> {
+  const r = await fetch(`/api/jobs/${jobId}/mapping`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+  await json(r);
+}
+
+export async function convert(
+  jobId: string,
+  target: "go" | "py" | "cs"
+): Promise<{ job: JobState; note?: string; drafts?: unknown }> {
+  const r = await fetch(`/api/jobs/${jobId}/convert`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target }),
+  });
+  const data = await json<{ note?: string; drafts?: unknown }>(r);
+  const job = await fetchJob(jobId);
+  return { job, note: data.note, drafts: data.drafts };
+}
+
+export async function gentest(jobId: string, mode: "check" | "generate"): Promise<JobState> {
+  const r = await fetch(`/api/jobs/${jobId}/gentest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  await json(r);
+  return fetchJob(jobId);
+}
+
+export async function readConvertedFile(jobId: string, path: string): Promise<string> {
+  const r = await fetch(`/api/jobs/${jobId}/files?path=${encodeURIComponent(path)}`);
+  const d = await json<{ content: string }>(r);
+  return d.content;
+}
+
+export async function saveConvertedFile(jobId: string, path: string, content: string): Promise<void> {
+  const r = await fetch(`/api/jobs/${jobId}/files`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+  await json(r);
+}
+
+export async function fetchMetrics(): Promise<{
+  totals: { services: number; queries: number; files: number; tests: number; mappings: number; scenarios: number; edits: number };
+  recent: { ts: string; kind: string; job: string; target?: string; queries?: number; files?: number; tests?: number; scenarios?: number; note?: string }[];
+  count: number;
+}> {
+  const r = await fetch("/api/metrics");
+  return json(r);
+}
+
+export async function loadSample(path: string): Promise<{ id: string }> {
+  const r = await fetch("/api/samples/load", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  return json(r);
+}
+
+export async function listSamples(): Promise<
+  { path: string; label: string; detail: string; bytes: number; available: boolean }[]
+> {
+  const r = await fetch("/api/samples");
+  const d = await json<{ samples: { path: string; label: string; detail: string; bytes: number; available: boolean }[] }>(r);
+  return d.samples;
+}

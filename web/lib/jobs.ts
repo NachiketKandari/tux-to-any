@@ -19,6 +19,50 @@ export interface ConvertedTree {
   summary: string;
 }
 
+export interface FlowCoverage {
+  classified: number;
+  codeLines: number;
+  unknown: number;
+  residue?: number[];
+}
+
+export interface FlowHint {
+  kind: string;
+  line: number;
+  detail: string;
+}
+
+export interface FlowFunction {
+  name: string;
+  startLine?: number;
+  endLine?: number;
+  coverage?: FlowCoverage;
+  hints?: FlowHint[];
+  /** Raw tree node kept for the visual explorer (opaque, versioned by CLI). */
+  tree?: unknown;
+}
+
+export interface FlowReport {
+  target: string;
+  files: { path: string; functions: FlowFunction[] }[];
+}
+
+export interface ScenarioArtifact {
+  /** File name relative to the scenarios/ dir, e.g. SVC_X.trn_cd_A.pc */
+  name: string;
+  /** Rendered flattened source (may be large — capped at read time). */
+  content: string;
+}
+
+export interface ScenarioBundle {
+  axesText: string;
+  axesMd?: string;
+  sharedMd?: string;
+  sharedJson?: unknown;
+  artifacts: ScenarioArtifact[];
+  note?: string;
+}
+
 export interface Job {
   id: string;
   name: string;
@@ -28,6 +72,9 @@ export interface Job {
   error?: string;
   ir?: Record<string, unknown>;
   flowText?: string;
+  flowReport?: FlowReport;
+  sourcePreview?: string;
+  scenarios?: ScenarioBundle;
   drafts?: DraftFile[];
   mappingPath?: string;
   converted?: ConvertedTree;
@@ -78,7 +125,10 @@ export function setJob(job: Job): void {
 
 function persist(job: Job): void {
   try {
-    writeFileSync(snapshotPath(job.dir), JSON.stringify({ ...job, logs: job.logs.slice(-500) }));
+    writeFileSync(
+      snapshotPath(job.dir),
+      JSON.stringify({ ...job, logs: job.logs.slice(-500) })
+    );
   } catch {
     /* tmpdir gone — nothing to persist */
   }

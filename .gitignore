@@ -23,6 +23,7 @@ duel/
 web/node_modules/
 web/.next/
 web/out/
+web/tsconfig.tsbuildinfo
 # local agent state
 .kilo/
 # local-only corpus + working config
