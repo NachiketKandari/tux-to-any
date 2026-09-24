@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { relative } from "node:path";
 import { NextResponse } from "next/server";
-import { getJob } from "@/lib/jobs";
+import { getJob, setJob } from "@/lib/jobs";
 
 function inside(jobDir: string, p: string): boolean {
   const rel = relative(jobDir, p);
@@ -24,6 +24,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   }
   await fs.writeFile(body.path, body.content);
   job.mappingPath = body.path;
+  setJob(job);
   const { dir: _d, sourcePath: _s, ...rest } = job;
   void _d;
   void _s;
