@@ -6,16 +6,22 @@ import { countQueries, recordMetric } from "@/lib/metrics";
 
 type Target = "go" | "py" | "cs";
 
-// POST /api/jobs/:id/convert { target, mappingPath? }
-// mappingPath defaults to the job's reviewed draft. Go/CS without a mapping
-// run draft-and-stop and return the fresh drafts instead of a tree.
+// POST /api/jobs/:id/convert { target, mappingPath?, useLLM? }
+// Step 2 of the mapping-first flow: Go/CS require a reviewed mapping —
+// without one the run drafts-and-stops and returns the fresh drafts instead
+// of a tree (the UI guides this as Step 1 → Step 2).
+// useLLM=false (default) appends -no-llm → deterministic bodies with
+// SQL-fidelity gates; useLLM=true omits it → LLM seam when a key resolves,
+// deterministic fallback otherwise (no key required).
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const job = getJob(params.id);
   if (!job) return NextResponse.json({ error: "unknown job" }, { status: 404 });
   if (job.status === "running") return NextResponse.json({ error: "job is busy" }, { status: 409 });
-  const body = (await req.json().catch(() => ({}))) as { target?: Target; mappingPath?: string };
+  const body = (await req.json().catch(() => ({}))) as { target?: Target; mappingPath?: string; useLLM?: boolean };
   const target: Target = body.target === "py" || body.target === "cs" ? body.target : "go";
+  const useLLM = body.useLLM === true;
   const mapping = body.mappingPath ?? job.mappingPath;
+  const noLLMFlag = useLLM ? [] : ["-no-llm"];
 
   job.status = "running";
   job.error = undefined;
@@ -28,16 +34,17 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     let args: string[];
     if (target === "go") {
       root = join(job.dir, "go");
-      args = ["convertgo", job.sourcePath, "-no-llm", "-base", root];
+      args = ["convertgo", job.sourcePath, ...noLLMFlag, "-base", root];
       if (mapping) args.push("-mapping", mapping);
     } else if (target === "py") {
       root = join(job.dir, "py");
-      args = ["convertbatchpy", job.sourcePath, "-no-llm", "-out", root];
+      args = ["convertbatchpy", job.sourcePath, ...noLLMFlag, "-out", root];
     } else {
       root = join(job.dir, "cs");
-      args = ["convertcs", job.sourcePath, "-no-llm", "-out", root];
+      args = ["convertcs", job.sourcePath, ...noLLMFlag, "-out", root];
       if (mapping) args.push("-mapping", mapping);
     }
+    log(`$ convert target=${target} llm=${useLLM ? "on" : "off"} mapping=${mapping ?? "(none — draft-and-stop)"}`);
     const r = await runTux(job.dir, args, log);
     const files = await listFilesRecursive(root);
     if (files.length === 0) {
@@ -68,7 +75,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       });
     }
     const tail = r.stdout.trim().split("\n").slice(-3).join("\n");
-    job.converted = { target, root, files: files.map((f) => f.slice(root.length + 1)), summary: tail };
+    job.converted = { target, root, files: files.map((f) => f.slice(root.length + 1)), summary: tail, llm: useLLM };
     job.status = "done";
     await recordMetric({
       kind: "convert",

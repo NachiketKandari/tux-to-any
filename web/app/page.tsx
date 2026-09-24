@@ -45,6 +45,7 @@ import {
   gentest,
   readConvertedFile,
   saveConvertedFile,
+  fetchDbStatus,
 } from "@/lib/api-client";
 import type { ConvertTarget } from "@/lib/targets";
 
@@ -65,10 +66,17 @@ export default function Home() {
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState("");
   const [target, setTarget] = React.useState<ConvertTarget>("go");
+  const [useLLMMapping, setUseLLMMapping] = React.useState(false);
+  const [useLLMConvert, setUseLLMConvert] = React.useState(false);
+  const [dbStatus, setDbStatus] = React.useState<{ enabled: boolean; driver: string; source: string } | null>(null);
   const [selFile, setSelFile] = React.useState<string | null>(null);
   const [fileContent, setFileContent] = React.useState("");
   const [loadingFile, setLoadingFile] = React.useState(false);
   const [savingFile, setSavingFile] = React.useState(false);
+
+  React.useEffect(() => {
+    fetchDbStatus().then(setDbStatus).catch(() => setDbStatus(null));
+  }, []);
 
   async function run<T>(fn: () => Promise<T>): Promise<T | null> {
     setBusy(true);
@@ -109,7 +117,7 @@ export default function Home() {
 
   async function handleDiscover(t: "go" | "cs") {
     if (!job) return;
-    const j = await run(() => discover(job.id, t));
+    const j = await run(() => discover(job.id, t, useLLMMapping));
     if (j) {
       setJob(j);
       setTab("mapping");
@@ -133,12 +141,20 @@ export default function Home() {
 
   async function handleConvert() {
     if (!job) return;
+    // Mapping-first: Go/C# need a reviewed mapping (Step 1). Python converts
+    // directly. The backend keeps draft-and-stop as a safety net, but the UI
+    // enforces the order so conversion never silently drafts.
+    if ((target === "go" || target === "cs") && !job.mappingPath) {
+      setTab("mapping");
+      setErr("Step 1 first — draft a mapping, save it, then convert (Step 2).");
+      return;
+    }
     setSelFile(null);
     setFileContent("");
-    const res = await run(() => convert(job.id, target));
+    const res = await run(() => convert(job.id, target, useLLMConvert));
     if (res) {
       setJob(res.job);
-      // Draft-and-stop (no mapping yet): take the user to the fresh draft.
+      // Draft-and-stop safety net (e.g. mapping deleted mid-run).
       if (!res.job.converted && (res.note || res.drafts)) {
         setTab("mapping");
         setErr("No mapping yet — review the draft in the Mapping tab, save, then convert again.");
@@ -192,7 +208,13 @@ export default function Home() {
 
   return (
     <div className="min-h-screen">
-      <SiteHeader jobName={job?.name} status={job?.status} />
+      <SiteHeader
+        jobName={job?.name}
+        status={job?.status}
+        llmMapping={useLLMMapping}
+        llmConvert={useLLMConvert}
+        dbEnabled={dbStatus?.enabled ?? false}
+      />
 
       <main className="container max-w-7xl py-6">
         {/* Hero */}
@@ -200,9 +222,11 @@ export default function Home() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Drop a Pro*C file — watch it become an API</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Tree-sitter parse → IR breakdown → dispatch-axis scenarios → mapping →{" "}
-              <span className="font-medium text-foreground">Tux → Go · Python · C#</span> → tests. Deterministic
-              in the browser; the LLM seam stays in the CLI.
+              Tree-sitter parse → IR breakdown → dispatch-axis scenarios →{" "}
+              <span className="font-medium text-foreground">Step 1 mapping</span> →{" "}
+              <span className="font-medium text-foreground">Step 2 Tux → Go · Python · C#</span> → tests.
+              LLM off works with no keys; LLM on upgrades where a key resolves, otherwise falls back.
+              Oracle access is optional — offline by default.
             </p>
           </div>
           {job && (
@@ -350,7 +374,14 @@ export default function Home() {
             </TabsContent>
 
             <TabsContent value="mapping">
-              <MappingEditor drafts={job.drafts ?? []} busy={busy} onDraft={handleDiscover} onSave={handleSaveMapping} />
+              <MappingEditor
+                drafts={job.drafts ?? []}
+                busy={busy}
+                onDraft={handleDiscover}
+                onSave={handleSaveMapping}
+                useLLM={useLLMMapping}
+                onUseLLM={setUseLLMMapping}
+              />
             </TabsContent>
 
             <TabsContent value="convert">
@@ -360,6 +391,9 @@ export default function Home() {
                 onConvert={handleConvert}
                 busy={busy}
                 hasMapping={!!job.mappingPath}
+                useLLM={useLLMConvert}
+                onUseLLM={setUseLLMConvert}
+                onGoMapping={() => setTab("mapping")}
                 converted={job.converted}
                 onOpenFile={openFile}
                 onSaveFile={handleSaveFile}
@@ -416,9 +450,13 @@ export default function Home() {
         )}
 
         <footer className="mt-8 border-t pt-4 text-[11px] text-muted-foreground">
-          Deterministic viewer — every run shells out to <code className="font-mono">tuxconv</code> with{" "}
-          <code className="font-mono">-no-llm</code>. Jobs are disposable tmpdirs; re-upload after a restart. Master
-          totals accumulate in <code className="font-mono">conversion_logs/web-metrics.jsonl</code>.
+          Mapping-first flow — <span className="font-medium">Step 1</span> drafts & saves the mapping,{" "}
+          <span className="font-medium">Step 2</span> converts. Each step has its own LLM toggle (off ={" "}
+          <code className="font-mono">-no-llm</code>, no keys needed; on = LLM seam when a key resolves,
+          deterministic fallback otherwise). Oracle access is optional — offline unless a DSN is set
+          (<code className="font-mono">tuxconv dbcheck</code>). Jobs are disposable tmpdirs; re-upload
+          after a restart. Master totals accumulate in{" "}
+          <code className="font-mono">conversion_logs/web-metrics.jsonl</code>.
         </footer>
       </main>
     </div>

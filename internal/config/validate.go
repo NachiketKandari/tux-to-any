@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Validate enforces the schema invariants: exactly one default profile,
@@ -164,6 +165,18 @@ func (c *Config) Validate() error {
 	}
 	if b.ChunkSize < 1 {
 		return fmt.Errorf("batchpy.chunkSize must be >= 1, got %d", b.ChunkSize)
+	}
+	// database (optional live-Oracle access, internal/db): disabled by
+	// default (no DSN), which is valid — the pipeline runs offline. Only
+	// the pool knobs are validated; a missing DSN never fails the run.
+	if c.Database.MaxOpenConns < 0 {
+		return fmt.Errorf("database.maxOpenConns must not be negative, got %d", c.Database.MaxOpenConns)
+	}
+	if c.Database.MaxIdleConns < 0 {
+		return fmt.Errorf("database.maxIdleConns must not be negative, got %d", c.Database.MaxIdleConns)
+	}
+	if time.Duration(c.Database.ConnMaxLifetime) < 0 {
+		return fmt.Errorf("database.connMaxLifetime must not be negative")
 	}
 	return nil
 }

@@ -14,11 +14,21 @@ import (
 // audit recorder cover every service/file in a run — the budget is
 // immutable, the recorder mutex-guarded. Built once per command from the
 // run config; the LLM client stays per-purpose (resolveLLMClient) because
-// its disable log names the seam.
+// its disable log names the seam. The DB handle stays optional
+// (resolveDBHandle): nil/disabled offline, never fatal.
 type runWiring struct {
 	cfg    *config.Config
 	budget budget.Budget
 	audit  *audit.Recorder // nil when the archive folder is unavailable
+	db     dbHandle
+}
+
+// dbHandle is the minimal surface runWiring keeps from internal/db —
+// Enabled/Source only, so wiring never imports database/sql directly and
+// the DB stays a separate module.
+type dbHandle interface {
+	Enabled() bool
+	Source() string
 }
 
 // runBudget resolves the run's budget from the config: the static ceilings
@@ -36,12 +46,25 @@ func runBudget(r config.Run) budget.Budget {
 }
 
 // newWiring resolves the bundle. Audit degradation is visible (WARN), never
-// fatal — the audit trail is best-effort by contract (§4.7).
+// fatal — the audit trail is best-effort by contract (§4.7). The DB handle
+// resolves the same way: offline when no DSN is configured, never fatal —
+// conversion runs deterministic without live Oracle.
 func newWiring(ctx context.Context, cfg *config.Config) *runWiring {
 	log := telemetry.Log(ctx)
 	w := &runWiring{
 		cfg:    cfg,
 		budget: runBudget(cfg.Run),
+	}
+	if h, err := resolveDBHandle(ctx, cfg); err != nil {
+		log.Warn("database handle unavailable — continuing offline", "error", err)
+	} else {
+		w.db = h
+		if h != nil && h.Enabled() {
+			// The pool stays open for the run; call sites that need live
+			// verification use their own resolveDBHandle. Closing here
+			// would drop it — lifecycle belongs to the holder.
+			_ = h
+		}
 	}
 	rec, err := audit.New(auditDir, telemetry.RunIDFromContext(ctx))
 	if err != nil {

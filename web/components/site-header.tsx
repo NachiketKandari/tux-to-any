@@ -4,7 +4,19 @@ import { Database, FileCode2, ArrowRight, Container, Braces } from "lucide-react
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-export function SiteHeader({ jobName, status }: { jobName?: string; status?: string }) {
+export function SiteHeader({
+  jobName,
+  status,
+  llmMapping,
+  llmConvert,
+  dbEnabled,
+}: {
+  jobName?: string;
+  status?: string;
+  llmMapping?: boolean;
+  llmConvert?: boolean;
+  dbEnabled?: boolean;
+}) {
   return (
     <header className="sticky top-0 z-40 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-14 max-w-7xl items-center gap-3">
@@ -26,6 +38,15 @@ export function SiteHeader({ jobName, status }: { jobName?: string; status?: str
           <span>plan → code → tests</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <Badge variant="outline" title="Step 1 mapping LLM seam">
+            map LLM {llmMapping ? "on" : "off"}
+          </Badge>
+          <Badge variant="outline" title="Step 2 convert LLM seam">
+            convert LLM {llmConvert ? "on" : "off"}
+          </Badge>
+          <Badge variant={dbEnabled ? "default" : "secondary"} title="Oracle access (internal/db) — offline unless a DSN is set">
+            db {dbEnabled ? "on" : "off"}
+          </Badge>
           {jobName && (
             <Badge variant="secondary" className="max-w-[220px] truncate font-mono">
               {jobName}

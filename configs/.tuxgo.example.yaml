@@ -76,6 +76,20 @@ db:
   withGorm: false             # false (default): plain sqlx-only store — NewXStore(db *sqlx.DB).
                               # true: the nav-example variant — NewXStore(oracle *gorm.DB, db *sqlx.DB)
 
+database:                     # OPTIONAL live-Oracle access (internal/db, database/sql).
+  driver: oracle               # database/sql driver name: oracle (go-ora, pure Go) or
+                              # godror (cgo + Oracle client libs). The driver must be
+                              # registered by your build — this repo imports none, so an
+                              # unregistered name with a DSN fails loudly (typo guard).
+  dsn: ""                     # literal DSN fallback (local-dev only, never commit).
+  dsnEnv: ORACLE_DSN          # env var NAME holding the DSN (env wins over literal).
+                              # Empty DSN + unset env = offline (valid): conversion runs
+                              # deterministic, `tuxconv dbcheck` reports disabled.
+                              # The DSN value is never logged — only its source.
+  maxOpenConns: 0             # pool sizing (0 = driver default)
+  maxIdleConns: 0
+  connMaxLifetime: 0s         # e.g. 5m; 0s = unlimited
+
 buffers:                     # FML buffer-role registry (PF-4.1): variable names → roles.
   roles:                     # Matching is case-insensitive on the whole name or its last
     Ibuffer: input           # `_`-segment (ptr_fml_Ibuffer → Ibuffer → input). Unknown

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RenameBar } from "@/components/files";
+import { LLMToggle } from "@/components/llm-toggle";
 import {
   Select,
   SelectContent,
@@ -21,11 +22,15 @@ export function MappingEditor({
   busy,
   onDraft,
   onSave,
+  useLLM,
+  onUseLLM,
 }: {
   drafts: { path: string; content: string }[];
   busy: boolean;
   onDraft: (target: "go" | "cs") => void;
   onSave: (path: string, content: string) => void;
+  useLLM: boolean;
+  onUseLLM: (v: boolean) => void;
 }) {
   const [idx, setIdx] = React.useState(0);
   const [text, setText] = React.useState("");
@@ -64,14 +69,23 @@ export function MappingEditor({
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-sm">
           <PencilLine className="h-4 w-4" />
-          Mapping — tag endpoints
+          Step 1 — Mapping: draft, review, save
         </CardTitle>
         <CardDescription>
-          Drafts are advisory defaults. Review names/routes, delete what you don&apos;t want, then save &amp; convert.
+          Mapping comes first — conversion needs a reviewed mapping. Drafts are advisory defaults.
+          Review names/routes, delete what you don&apos;t want, save, then convert.
           Press <kbd className="rounded border px-1 font-mono text-[10px]">⌘/Ctrl+S</kbd> to save.
+          C# drafts are deterministic-only; the LLM toggle applies to Go drafts.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
+        <LLMToggle
+          id="mapping-llm"
+          value={useLLM}
+          onChange={onUseLLM}
+          disabled={busy}
+          hint="Go naming only — off works with no key"
+        />
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="secondary" disabled={busy} onClick={() => onDraft("go")}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
