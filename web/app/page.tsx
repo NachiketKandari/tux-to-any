@@ -3,6 +3,7 @@
 import * as React from "react";
 import {
   LayoutDashboard,
+  Gauge,
   FileJson,
   GitBranch,
   GitFork,
@@ -14,12 +15,16 @@ import {
   Loader2,
   Activity,
   Waypoints,
+  ArrowRight,
+  ArrowLeft,
+  Check,
 } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { PipelineSteps } from "@/components/pipeline-steps";
 import { Dropzone } from "@/components/dropzone";
 import { SamplesPanel } from "@/components/samples-panel";
 import { OverviewDashboard } from "@/components/overview-dashboard";
+import { AnalyzePanel } from "@/components/analyze-panel";
 import { IRExplorer } from "@/components/ir-explorer";
 import { FlowExplorer } from "@/components/flow-explorer";
 import { ScenarioExplorer } from "@/components/scenario-explorer";
@@ -31,7 +36,7 @@ import { MetricsPanel } from "@/components/metrics-panel";
 import { CodeView } from "@/components/files";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -40,13 +45,14 @@ import { useJob } from "@/hooks/use-job";
 import { useLineage } from "@/hooks/use-lineage";
 import { provenanceForFile } from "@/lib/lineage";
 import {
-  uploadFile,
+  uploadFiles,
   loadSample,
   discover,
   buildScenarios,
   saveMapping,
   convert,
   gentest,
+  runAnalysis,
   readConvertedFile,
   saveConvertedFile,
   fetchDbStatus,
@@ -55,22 +61,29 @@ import {
 } from "@/lib/api-client";
 import type { ConvertTarget } from "@/lib/targets";
 
-type TabId = "overview" | "ir" | "flow" | "scenarios" | "mapping" | "convert" | "trace" | "tests" | "metrics" | "logs" | "source";
+type StepId = "upload" | "overview" | "scenarios" | "mapping" | "convert" | "tests";
+type OverviewSub = "dashboard" | "analyze" | "ir" | "flow" | "source";
+type ConvertSub = "build" | "trace" | "logs";
+type TestsSub = "tests" | "metrics";
 
-/** Map the 11-tab model onto the 6-step pipeline strip: IR/Flow read as
- *  Overview detail, Trace reads as Convert detail, Source/Logs/Metrics sit
- *  outside the linear flow. */
-function stepperStepForTab(tab: TabId): string {
-  if (tab === "ir" || tab === "flow") return "overview";
-  if (tab === "trace") return "convert";
-  if (tab === "source" || tab === "logs" || tab === "metrics") return "upload";
-  return tab;
+const STEP_ORDER: StepId[] = ["upload", "overview", "scenarios", "mapping", "convert", "tests"];
+
+function nextStep(s: StepId): StepId | null {
+  const i = STEP_ORDER.indexOf(s);
+  return i >= 0 && i < STEP_ORDER.length - 1 ? STEP_ORDER[i + 1] : null;
+}
+function prevStep(s: StepId): StepId | null {
+  const i = STEP_ORDER.indexOf(s);
+  return i > 0 ? STEP_ORDER[i - 1] : null;
 }
 
 export default function Home() {
   const [jobId, setJobId] = React.useState<string | null>(null);
   const { job, setJob, logs, resetLogs } = useJob(jobId);
-  const [tab, setTab] = React.useState<TabId>("overview");
+  const [step, setStep] = React.useState<StepId>("upload");
+  const [overviewSub, setOverviewSub] = React.useState<OverviewSub>("dashboard");
+  const [convertSub, setConvertSub] = React.useState<ConvertSub>("build");
+  const [testsSub, setTestsSub] = React.useState<TestsSub>("tests");
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState("");
   const [target, setTarget] = React.useState<ConvertTarget>("go");
@@ -82,8 +95,8 @@ export default function Home() {
   const [fileContent, setFileContent] = React.useState("");
   const [loadingFile, setLoadingFile] = React.useState(false);
   const [savingFile, setSavingFile] = React.useState(false);
+  const [confirmReplace, setConfirmReplace] = React.useState<File[] | null>(null);
 
-  // Source→output trace: refetch whenever a new converted tree lands.
   const lineageStamp = job?.converted ? `${job.id}:${job.converted.target}:${job.converted.files.length}` : "";
   const { lineage, loading: lineageLoading, error: lineageError } = useLineage(jobId, lineageStamp);
   const selProvenance = React.useMemo(
@@ -113,23 +126,45 @@ export default function Home() {
     }
   }
 
-  async function handleUpload(f: File) {
+  async function doUpload(files: File[]) {
     resetLogs();
     setSelFile(null);
-    const d = await run(() => uploadFile(f));
+    setConfirmReplace(null);
+    const d = await run(() => uploadFiles(files));
     if (d) {
       setJobId(d.id);
-      setTab("overview");
+      setStep("overview");
+      setOverviewSub("dashboard");
     }
+  }
+
+  function handlePick(files: File[]) {
+    // Uploading again replaces the current batch — confirm so work isn't lost silently.
+    if (job && !confirmReplace) {
+      setConfirmReplace(files);
+      return;
+    }
+    void doUpload(files);
   }
 
   async function handleSample(path: string) {
     resetLogs();
     setSelFile(null);
+    setConfirmReplace(null);
     const d = await run(() => loadSample(path));
     if (d) {
       setJobId(d.id);
-      setTab("overview");
+      setStep("overview");
+      setOverviewSub("dashboard");
+    }
+  }
+
+  async function handleAnalyze() {
+    if (!job) return;
+    const j = await run(() => runAnalysis(job.id));
+    if (j) {
+      setJob(j);
+      setOverviewSub("analyze");
     }
   }
 
@@ -138,7 +173,7 @@ export default function Home() {
     const j = await run(() => discover(job.id, t, useLLMMapping));
     if (j) {
       setJob(j);
-      setTab("mapping");
+      setStep("mapping");
     }
   }
 
@@ -154,16 +189,21 @@ export default function Home() {
       await saveMapping(job.id, path, content);
       return true;
     });
-    if (ok) setTab("convert");
+    if (ok) {
+      // Batch: one save covers one draft — stay so the rest can be reviewed.
+      if (job.isBatch && (job.drafts?.length ?? 0) > 1) {
+        const r = await fetch(`/api/jobs/${job.id}`);
+        if (r.ok) setJob(await r.json());
+        return;
+      }
+      setStep("convert");
+    }
   }
 
   async function handleConvert() {
     if (!job) return;
-    // Mapping-first: Go/C# need a reviewed mapping (Step 1). Python converts
-    // directly. The backend keeps draft-and-stop as a safety net, but the UI
-    // enforces the order so conversion never silently drafts.
     if ((target === "go" || target === "cs") && !job.mappingPath) {
-      setTab("mapping");
+      setStep("mapping");
       setErr("Step 1 first — draft a mapping, save it, then convert (Step 2).");
       return;
     }
@@ -172,10 +212,11 @@ export default function Home() {
     const res = await run(() => convert(job.id, target, useLLMConvert));
     if (res) {
       setJob(res.job);
-      // Draft-and-stop safety net (e.g. mapping deleted mid-run).
       if (!res.job.converted && (res.note || res.drafts)) {
-        setTab("mapping");
-        setErr("No mapping yet — review the draft in the Mapping tab, save, then convert again.");
+        setStep("mapping");
+        setErr("No mapping yet — review the draft in the Mapping step, save, then convert again.");
+      } else {
+        setConvertSub("build");
       }
     }
   }
@@ -200,7 +241,7 @@ export default function Home() {
   }
 
   async function openTraceFile(p: string) {
-    setTab("convert");
+    setConvertSub("build");
     await openFile(p);
   }
 
@@ -221,13 +262,27 @@ export default function Home() {
     const s = new Set<string>();
     if (!job) return s;
     s.add("upload");
-    if (job.ir) s.add("overview");
+    if (job.ir || (job.irList && job.irList.length > 0)) {
+      s.add("overview");
+    }
+    if (job.analysis && job.analysis.length > 0) s.add("overview");
     if (job.scenarios) s.add("scenarios");
     if (job.drafts?.length || job.mappingPath) s.add("mapping");
     if (job.converted) s.add("convert");
     if (job.gentestGap) s.add("tests");
     return s;
   }, [job]);
+
+  const blocked = React.useMemo(() => {
+    const s = new Set<string>();
+    if (!job) {
+      for (const id of ["overview", "scenarios", "mapping", "convert", "tests"]) s.add(id);
+    }
+    return s;
+  }, [job]);
+
+  const nxt = nextStep(step);
+  const prv = prevStep(step);
 
   return (
     <div className="min-h-screen">
@@ -241,16 +296,14 @@ export default function Home() {
       />
 
       <main className="container max-w-7xl py-6">
-        {/* Hero */}
         <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Drop a Pro*C file — watch it become an API</h1>
+            <h1 className="text-2xl font-bold tracking-tight">Drop Pro*C files — watch them become APIs</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Tree-sitter parse → IR breakdown → dispatch-axis scenarios →{" "}
+              Batch upload → Overview + effort analysis → dispatch-axis scenarios →{" "}
               <span className="font-medium text-foreground">Step 1 mapping</span> →{" "}
-              <span className="font-medium text-foreground">Step 2 Tux → Go · Python · C#</span> → tests.
-              LLM off works with no keys; LLM on upgrades where a key resolves, otherwise falls back.
-              Oracle access is optional — offline by default.
+              <span className="font-medium text-foreground">Step 2 Tux → Go · Python · C#</span> → tests. LLM off
+              works with no keys; LLM on upgrades where a key resolves. Oracle access is optional.
             </p>
           </div>
           {job && (
@@ -258,6 +311,11 @@ export default function Home() {
               <Badge variant="secondary" className="font-mono">
                 {job.name}
               </Badge>
+              {job.isBatch && job.inputFiles && (
+                <Badge variant="outline" className="tabular-nums">
+                  {job.inputFiles.length} files
+                </Badge>
+              )}
               {busy && (
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> working…
@@ -267,50 +325,94 @@ export default function Home() {
           )}
         </div>
 
-        <div className="mb-4">
-          <PipelineSteps
-            active={job ? stepperStepForTab(tab) : "upload"}
-            done={done}
-            onGo={(id) => {
-              // The stepper only models the 6 pipeline stages; IR/Flow are
-              // sub-views of Overview and Source/Logs sit outside the flow.
-              // Never leave Tabs in a blank "upload" state.
-              if (id === "upload") setTab("overview");
-              else setTab(id as TabId);
-            }}
-          />
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <PipelineSteps active={step} done={done} blocked={blocked} onGo={(id) => setStep(id as StepId)} />
+          {job && (
+            <div className="ml-auto flex gap-1.5">
+              {prv && prv !== "upload" && (
+                <Button size="sm" variant="ghost" onClick={() => setStep(prv)}>
+                  <ArrowLeft className="h-3.5 w-3.5" /> Back
+                </Button>
+              )}
+              {nxt && done.has(step) && (
+                <Button size="sm" variant="outline" onClick={() => setStep(nxt)}>
+                  Next: {nxt} <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          )}
         </div>
 
-        {!job ? (
-          busy ? (
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_380px]" aria-label="Loading job">
-              <Card>
-                <CardContent className="space-y-2 p-4">
-                  <Skeleton className="h-5 w-1/3" />
-                  <Skeleton className="h-4 w-full" />
-                  <Skeleton className="h-4 w-5/6" />
-                  <Skeleton className="h-32 w-full" />
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="space-y-2 p-4">
-                  <Skeleton className="h-5 w-1/2" />
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-8 w-full" />
-                </CardContent>
-              </Card>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_380px]">
-              <Dropzone onFile={handleUpload} disabled={busy} />
-              <SamplesPanel busy={busy} onPick={handleSample} />
-            </div>
-          )
-        ) : (
+        {step === "upload" && !job && (
+          <>
+            {busy ? (
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_380px]" aria-label="Loading job">
+                <Card>
+                  <CardContent className="space-y-2 p-4">
+                    <Skeleton className="h-5 w-1/3" />
+                    <Skeleton className="h-4 w-full" />
+                    <Skeleton className="h-4 w-5/6" />
+                    <Skeleton className="h-32 w-full" />
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="space-y-2 p-4">
+                    <Skeleton className="h-5 w-1/2" />
+                    <Skeleton className="h-8 w-full" />
+                    <Skeleton className="h-8 w-full" />
+                  </CardContent>
+                </Card>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_380px]">
+                <Dropzone onFiles={handlePick} onFile={(f) => handlePick([f])} disabled={busy} />
+                <SamplesPanel busy={busy} onPick={handleSample} />
+              </div>
+            )}
+          </>
+        )}
+
+        {(job || step !== "upload") && step === "upload" && job && (
           <Card className="mb-4">
-            <CardContent className="flex flex-wrap items-center gap-2 p-4">
-              <Dropzone onFile={handleUpload} disabled={busy} compact />
-              <span className="text-xs text-muted-foreground">…or start over with a new file. Jobs are disposable tmpdirs.</span>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Batch contents — {job.inputFiles?.length ?? 1} file(s)</CardTitle>
+              <CardDescription>
+                One job = one batch. Uploading again starts a fresh batch (current progress is replaced).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <div className="flex flex-wrap gap-1.5">
+                {(job.inputFiles ?? [job.name]).map((n) => (
+                  <Badge key={n} variant="secondary" className="max-w-[240px] truncate font-mono text-[10px]" title={n}>
+                    {n}
+                  </Badge>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 rounded-md border p-3">
+                <Dropzone onFiles={handlePick} onFile={(f) => handlePick([f])} disabled={busy} compact />
+                <span className="text-xs text-muted-foreground">…or start over with a new batch.</span>
+              </div>
+              {confirmReplace && (
+                <Alert>
+                  <AlertDescription className="flex flex-wrap items-center gap-2">
+                    <span className="flex-1">
+                      Replace this batch ({job.inputFiles?.length ?? 1} file(s)) with {confirmReplace.length}{" "}
+                      new file(s)? Mapping / conversion progress on this batch will be lost.
+                    </span>
+                    <Button size="sm" variant="destructive" disabled={busy} onClick={() => void doUpload(confirmReplace)}>
+                      Replace batch
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setConfirmReplace(null)}>
+                      Keep current
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+              <div>
+                <Button size="sm" onClick={() => setStep("overview")}>
+                  Continue to Overview <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </CardContent>
           </Card>
         )}
@@ -326,193 +428,275 @@ export default function Home() {
           </Alert>
         )}
 
-        {job && (
-          <Tabs value={tab} onValueChange={(v) => setTab(v as TabId)}>
-            <TabsList className="flex h-auto max-w-full flex-wrap justify-start gap-1 overflow-x-auto">
-              <TabsTrigger value="overview">
-                <LayoutDashboard className="h-3.5 w-3.5" /> Overview
-              </TabsTrigger>
-              <TabsTrigger value="ir">
-                <FileJson className="h-3.5 w-3.5" /> IR
-              </TabsTrigger>
-              <TabsTrigger value="flow">
-                <GitBranch className="h-3.5 w-3.5" /> Flow
-              </TabsTrigger>
-              <TabsTrigger value="scenarios">
-                <GitFork className="h-3.5 w-3.5" /> Scenarios
-                {(job.scenarios?.artifacts.length ?? 0) > 0 && (
-                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
-                    {job.scenarios?.artifacts.length}
-                  </Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="mapping">
-                <PencilLine className="h-3.5 w-3.5" /> Mapping
-                {(job.drafts?.length ?? 0) > 0 && (
-                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
-                    {job.drafts?.length}
-                  </Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="convert">
-                <Hammer className="h-3.5 w-3.5" /> Convert
-                {(job.converted?.files.length ?? 0) > 0 && (
-                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
-                    {job.converted?.files.length}
-                  </Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="trace">
-                <Waypoints className="h-3.5 w-3.5" /> Trace
-                {(lineage?.nodes.length ?? 0) > 0 && (
-                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
-                    {lineage?.nodes.length}
-                  </Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="tests">
-                <FlaskConical className="h-3.5 w-3.5" /> Tests
-                {(job.gentestFiles?.length ?? 0) > 0 && (
-                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
-                    {job.gentestFiles?.length}
-                  </Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="metrics">
-                <Activity className="h-3.5 w-3.5" /> Metrics
-              </TabsTrigger>
-              <TabsTrigger value="source">
-                <FileCode2 className="h-3.5 w-3.5" /> Source
-              </TabsTrigger>
-              <TabsTrigger value="logs">
-                <ScrollText className="h-3.5 w-3.5" /> Logs
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="overview">
-              <OverviewDashboard
-                ir={job.ir}
-                flowReport={job.flowReport}
-                onGoMetrics={() => setTab("metrics")}
-                onGoTrace={job.converted ? () => setTab("trace") : undefined}
-              />
-            </TabsContent>
-
-            <TabsContent value="ir">
-              <IRExplorer ir={job.ir} />
-            </TabsContent>
-
-            <TabsContent value="flow">
-              <FlowExplorer flowText={job.flowText} flowReport={job.flowReport} />
-            </TabsContent>
-
-            <TabsContent value="scenarios">
-              <ScenarioExplorer jobId={job.id} bundle={job.scenarios} busy={busy} onBuild={handleScenarios} />
-            </TabsContent>
-
-            <TabsContent value="mapping">
-              <MappingEditor
-                drafts={job.drafts ?? []}
-                busy={busy}
-                onDraft={handleDiscover}
-                onSave={handleSaveMapping}
-                useLLM={useLLMMapping}
-                onUseLLM={setUseLLMMapping}
-                llmEffective={job.mappingLLMEffective}
-                llmNote={job.mappingLLMNote}
-                noKey={llmStatus ? !llmStatus.anyKey : false}
-              />
-            </TabsContent>
-
-            <TabsContent value="convert">
-              <ConvertPanel
-                target={target}
-                onTarget={setTarget}
-                onConvert={handleConvert}
-                busy={busy}
-                hasMapping={!!job.mappingPath}
-                useLLM={useLLMConvert}
-                onUseLLM={setUseLLMConvert}
-                onGoMapping={() => setTab("mapping")}
-                converted={job.converted}
-                onOpenFile={openFile}
-                onSaveFile={handleSaveFile}
-                savingFile={savingFile}
-                selFile={selFile}
-                fileContent={fileContent}
-                loadingFile={loadingFile}
-                provenance={selProvenance}
-                onGoTrace={() => setTab("trace")}
-                jobId={job.id}
-                noKey={llmStatus ? !llmStatus.anyKey : false}
-              />
-            </TabsContent>
-
-            <TabsContent value="trace">
-              <LineageExplorer
-                lineage={lineage}
-                loading={lineageLoading}
-                error={lineageError}
-                onOpenFile={openTraceFile}
-              />
-            </TabsContent>
-
-            <TabsContent value="tests">
-              <TestsPanel
-                busy={busy}
-                canRun={job.converted?.target === "go"}
-                gap={job.gentestGap}
-                testFiles={job.gentestFiles}
-                onGap={() => handleGentest("check")}
-                onGenerate={() => handleGentest("generate")}
-                onGoConvert={() => setTab("convert")}
-              />
-            </TabsContent>
-
-            <TabsContent value="metrics">
-              <MetricsPanel />
-            </TabsContent>
-
-            <TabsContent value="source">
-              <Card>
-                <CardContent className="p-0">
-                  <ScrollArea className="max-h-[560px] border-0">
-                    <CodeView content={job.sourcePreview ?? "(no preview)"} path={job.name} />
-                  </ScrollArea>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="logs">
-              <Card>
-                <CardContent className="p-0">
-                  <ScrollArea className="max-h-[480px] border-0">
-                    <pre className="whitespace-pre-wrap p-3 font-mono text-xs">
-                      {logs.length ? logs.join("\n") : "(no log lines yet)"}
-                    </pre>
-                  </ScrollArea>
-                  <div className="border-t p-2">
-                    <Button size="sm" variant="ghost" onClick={() => navigator.clipboard.writeText(logs.join("\n"))}>
-                      Copy logs
-                    </Button>
+        {job && step === "overview" && (
+          <div className="space-y-3">
+            <Tabs value={overviewSub} onValueChange={(v) => setOverviewSub(v as OverviewSub)}>
+              <TabsList className="flex h-auto max-w-full flex-wrap justify-start gap-1 overflow-x-auto">
+                <TabsTrigger value="dashboard">
+                  <LayoutDashboard className="h-3.5 w-3.5" /> Dashboard
+                </TabsTrigger>
+                <TabsTrigger value="analyze">
+                  <Gauge className="h-3.5 w-3.5" /> Analyze
+                  {(job.analysis?.length ?? 0) > 0 && (
+                    <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                      {job.analysis?.length}
+                    </Badge>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="ir">
+                  <FileJson className="h-3.5 w-3.5" /> IR
+                </TabsTrigger>
+                <TabsTrigger value="flow">
+                  <GitBranch className="h-3.5 w-3.5" /> Flow
+                </TabsTrigger>
+                <TabsTrigger value="source">
+                  <FileCode2 className="h-3.5 w-3.5" /> Source
+                  {(job.sourcePreviews?.length ?? 0) > 1 && (
+                    <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                      {job.sourcePreviews?.length}
+                    </Badge>
+                  )}
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="dashboard">
+                <OverviewDashboard
+                  ir={job.ir}
+                  irList={job.irList}
+                  inputFiles={job.inputFiles}
+                  analysis={job.analysis}
+                  flowReport={job.flowReport}
+                  onGoMetrics={() => {
+                    setStep("tests");
+                    setTestsSub("metrics");
+                  }}
+                  onGoTrace={job.converted ? () => { setStep("convert"); setConvertSub("trace"); } : undefined}
+                  onGoAnalyze={() => setOverviewSub("analyze")}
+                />
+                <div className="mt-3 flex gap-2">
+                  <Button size="sm" onClick={() => setStep("scenarios")}>
+                    Next: Scenarios <ArrowRight className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setOverviewSub("analyze")}>
+                    Effort estimate
+                  </Button>
+                </div>
+              </TabsContent>
+              <TabsContent value="analyze">
+                <AnalyzePanel jobId={job.id} analysis={job.analysis} csv={job.analysisCsv} busy={busy} onRun={handleAnalyze} />
+              </TabsContent>
+              <TabsContent value="ir">
+                {job.irList && job.irList.length > 1 ? (
+                  <div className="space-y-3">
+                    {job.irList.map((e) => (
+                      <Card key={e.name}>
+                        <CardHeader className="pb-2">
+                          <CardTitle className="font-mono text-sm">{e.name}</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <IRExplorer ir={e.ir} />
+                        </CardContent>
+                      </Card>
+                    ))}
                   </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
+                ) : (
+                  <IRExplorer ir={job.ir} />
+                )}
+              </TabsContent>
+              <TabsContent value="flow">
+                <FlowExplorer flowText={job.flowText} flowReport={job.flowReport} />
+              </TabsContent>
+              <TabsContent value="source">
+                {job.sourcePreviews && job.sourcePreviews.length > 1 ? (
+                  <div className="space-y-3">
+                    {job.sourcePreviews.map((s) => (
+                      <Card key={s.name}>
+                        <CardHeader className="pb-2">
+                          <CardTitle className="font-mono text-sm">{s.name}</CardTitle>
+                        </CardHeader>
+                        <CardContent className="p-0">
+                          <ScrollArea className="max-h-[420px] border-0">
+                            <CodeView content={s.preview} path={s.name} />
+                          </ScrollArea>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                ) : (
+                  <Card>
+                    <CardContent className="p-0">
+                      <ScrollArea className="max-h-[560px] border-0">
+                        <CodeView content={job.sourcePreview ?? "(no preview)"} path={job.name} />
+                      </ScrollArea>
+                    </CardContent>
+                  </Card>
+                )}
+              </TabsContent>
+            </Tabs>
+          </div>
+        )}
+
+        {job && step === "scenarios" && (
+          <div className="space-y-3">
+            <ScenarioExplorer jobId={job.id} bundle={job.scenarios} busy={busy} onBuild={handleScenarios} />
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => setStep("overview")}>
+                <ArrowLeft className="h-3.5 w-3.5" /> Overview
+              </Button>
+              <Button size="sm" onClick={() => setStep("mapping")}>
+                Next: Mapping <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {job && step === "mapping" && (
+          <div className="space-y-3">
+            <MappingEditor
+              drafts={job.drafts ?? []}
+              busy={busy}
+              onDraft={handleDiscover}
+              onSave={handleSaveMapping}
+              useLLM={useLLMMapping}
+              onUseLLM={setUseLLMMapping}
+              llmEffective={job.mappingLLMEffective}
+              llmNote={job.mappingLLMNote}
+              noKey={llmStatus ? !llmStatus.anyKey : false}
+            />
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => setStep("scenarios")}>
+                <ArrowLeft className="h-3.5 w-3.5" /> Scenarios
+              </Button>
+              {job.mappingPath && (
+                <Button size="sm" onClick={() => setStep("convert")}>
+                  <Check className="h-3.5 w-3.5" /> Saved — Convert <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {job && step === "convert" && (
+          <div className="space-y-3">
+            <Tabs value={convertSub} onValueChange={(v) => setConvertSub(v as ConvertSub)}>
+              <TabsList className="flex h-auto max-w-full flex-wrap justify-start gap-1 overflow-x-auto">
+                <TabsTrigger value="build">
+                  <Hammer className="h-3.5 w-3.5" /> Build
+                  {(job.converted?.files.length ?? 0) > 0 && (
+                    <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                      {job.converted?.files.length}
+                    </Badge>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="trace">
+                  <Waypoints className="h-3.5 w-3.5" /> Trace
+                </TabsTrigger>
+                <TabsTrigger value="logs">
+                  <ScrollText className="h-3.5 w-3.5" /> Logs
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="build">
+                <ConvertPanel
+                  target={target}
+                  onTarget={setTarget}
+                  onConvert={handleConvert}
+                  busy={busy}
+                  hasMapping={!!job.mappingPath}
+                  useLLM={useLLMConvert}
+                  onUseLLM={setUseLLMConvert}
+                  onGoMapping={() => setStep("mapping")}
+                  converted={job.converted}
+                  onOpenFile={openFile}
+                  onSaveFile={handleSaveFile}
+                  savingFile={savingFile}
+                  selFile={selFile}
+                  fileContent={fileContent}
+                  loadingFile={loadingFile}
+                  provenance={selProvenance}
+                  onGoTrace={() => setConvertSub("trace")}
+                  jobId={job.id}
+                  noKey={llmStatus ? !llmStatus.anyKey : false}
+                />
+              </TabsContent>
+              <TabsContent value="trace">
+                <LineageExplorer
+                  lineage={lineage}
+                  loading={lineageLoading}
+                  error={lineageError}
+                  onOpenFile={openTraceFile}
+                />
+              </TabsContent>
+              <TabsContent value="logs">
+                <Card>
+                  <CardContent className="p-0">
+                    <ScrollArea className="max-h-[480px] border-0">
+                      <pre className="whitespace-pre-wrap p-3 font-mono text-xs">
+                        {logs.length ? logs.join("\n") : "(no log lines yet)"}
+                      </pre>
+                    </ScrollArea>
+                    <div className="border-t p-2">
+                      <Button size="sm" variant="ghost" onClick={() => navigator.clipboard.writeText(logs.join("\n"))}>
+                        Copy logs
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => setStep("mapping")}>
+                <ArrowLeft className="h-3.5 w-3.5" /> Mapping
+              </Button>
+              {job.converted && (
+                <Button size="sm" onClick={() => setStep("tests")}>
+                  Next: Tests <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {job && step === "tests" && (
+          <div className="space-y-3">
+            <Tabs value={testsSub} onValueChange={(v) => setTestsSub(v as TestsSub)}>
+              <TabsList className="flex h-auto max-w-full flex-wrap justify-start gap-1 overflow-x-auto">
+                <TabsTrigger value="tests">
+                  <FlaskConical className="h-3.5 w-3.5" /> Tests
+                </TabsTrigger>
+                <TabsTrigger value="metrics">
+                  <Activity className="h-3.5 w-3.5" /> Metrics
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="tests">
+                <TestsPanel
+                  busy={busy}
+                  canRun={job.converted?.target === "go"}
+                  gap={job.gentestGap}
+                  testFiles={job.gentestFiles}
+                  onGap={() => handleGentest("check")}
+                  onGenerate={() => handleGentest("generate")}
+                  onGoConvert={() => setStep("convert")}
+                />
+              </TabsContent>
+              <TabsContent value="metrics">
+                <MetricsPanel />
+              </TabsContent>
+            </Tabs>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => setStep("convert")}>
+                <ArrowLeft className="h-3.5 w-3.5" /> Convert
+              </Button>
+            </div>
+          </div>
         )}
 
         <footer className="mt-8 border-t pt-4 text-[11px] text-muted-foreground">
-          Mapping-first flow — <span className="font-medium">Step 1</span> drafts & saves the mapping,{" "}
-          <span className="font-medium">Step 2</span> converts. Each step has its own LLM toggle (off ={" "}
-          <code className="font-mono">-no-llm</code>, no keys needed; on = LLM seam when a key resolves
-          (<code className="font-mono">VLLM_API_KEY</code> / <code className="font-mono">OPENROUTER_API_KEY</code> in
-          the server env), deterministic fallback otherwise — the panels report requested vs effective). Converted
-          trees live in disposable server tmpdirs — use <span className="font-medium">Download .zip</span> for the
-          durable copy. Oracle access is optional — offline unless a DSN is set
-          (<code className="font-mono">tuxconv dbcheck</code>). Jobs are disposable tmpdirs; re-upload
-          after a restart. Master totals accumulate in{" "}
-          <code className="font-mono">conversion_logs/web-metrics.jsonl</code>.
+          Batch flow — <span className="font-medium">Upload</span> (up to 50 files / .zip) →{" "}
+          <span className="font-medium">Overview + Analyze</span> (triage LOW/MEDIUM/HIGH) →{" "}
+          <span className="font-medium">Scenarios</span> → <span className="font-medium">Step 1 mapping</span> →{" "}
+          <span className="font-medium">Step 2 convert</span> → <span className="font-medium">Tests</span>. Each step
+          has its own LLM toggle (off = <code className="font-mono">-no-llm</code>, no keys needed; on = LLM seam
+          when a key resolves). Converted trees live in disposable server tmpdirs — use{" "}
+          <span className="font-medium">Download .zip</span> for the durable copy.
         </footer>
       </main>
     </div>

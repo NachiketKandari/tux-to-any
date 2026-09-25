@@ -9,10 +9,20 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 export async function uploadFile(file: File): Promise<{ id: string }> {
+  return uploadFiles([file]);
+}
+
+export async function uploadFiles(files: File[]): Promise<{ id: string }> {
   const fd = new FormData();
-  fd.append("file", file);
+  for (const f of files) fd.append("files", f);
   const r = await fetch("/api/jobs", { method: "POST", body: fd });
   return json(r);
+}
+
+export async function runAnalysis(jobId: string): Promise<JobState> {
+  const r = await fetch(`/api/jobs/${jobId}/analyze`, { method: "POST" });
+  await json(r);
+  return fetchJob(jobId);
 }
 
 export async function fetchJob(id: string): Promise<JobState> {

@@ -1,9 +1,10 @@
 import { promises as fs } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { setJob, makeLogger, type Job } from "@/lib/jobs";
 import { coerceFlowReport } from "@/lib/flow";
+import { parseTriageCsv } from "@/lib/analysis";
 import { countQueries, recordMetric } from "@/lib/metrics";
 import { newJobDir, runTux, REPO_ROOT } from "@/lib/tuxconv";
 
@@ -26,7 +27,7 @@ export async function POST(req: Request) {
   const sourcePath = join(inputDir, name);
   await fs.writeFile(sourcePath, src);
 
-  const job: Job = { id: randomUUID().slice(0, 8), name, dir, sourcePath, status: "running", logs: [] };
+  const job: Job = { id: randomUUID().slice(0, 8), name, dir, sourcePath, inputFiles: [name], isBatch: false, status: "running", logs: [] };
   setJob(job);
   const log = makeLogger(job);
   try {
@@ -45,6 +46,17 @@ export async function POST(req: Request) {
       }
     } catch {
       /* text fallback */
+    }
+    try {
+      const csvPath = join(dir, "triage.csv");
+      const an = await runTux(dir, ["analyze", sourcePath, "-csv", csvPath], log);
+      if (an.code === 0) {
+        const csv = await fs.readFile(csvPath, "utf8");
+        job.analysisCsv = csv;
+        job.analysis = parseTriageCsv(csv).map((r) => ({ ...r, file: basename(r.file) }));
+      }
+    } catch {
+      /* advisory */
     }
     try {
       const s = await fs.readFile(sourcePath, "utf8");

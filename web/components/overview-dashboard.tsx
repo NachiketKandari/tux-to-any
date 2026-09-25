@@ -3,6 +3,7 @@
 import * as React from "react";
 import { GitBranch, Database, FunctionSquare, MessageSquareText, Gauge, Waypoints } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { asArray, countKind, entryOf } from "@/lib/ir";
@@ -99,11 +100,27 @@ function Bars({ data, label }: { data: [string, number][]; label: string }) {
   );
 }
 
-export function OverviewDashboard({ ir, flowReport, onGoMetrics, onGoTrace }: { ir?: Record<string, unknown>; flowReport?: FlowReport; onGoMetrics?: () => void; onGoTrace?: () => void }) {
-  const conditions = asArray(ir, ["conditions", "Conditions"]);
-  const queries = asArray(ir, ["queries", "Queries", "queryUnits", "QueryUnits"]);
-  const functions = asArray(ir, ["functions", "Functions"]);
-  const fmlOps = asArray(ir, ["fml_ops", "fmlOps", "fml", "FmlOps"]);
+export function OverviewDashboard({ ir, irList, inputFiles, analysis, flowReport, onGoMetrics, onGoTrace, onGoAnalyze }: { ir?: Record<string, unknown>; irList?: { name: string; ir: Record<string, unknown> }[]; inputFiles?: string[]; analysis?: { complexity: string }[]; flowReport?: FlowReport; onGoMetrics?: () => void; onGoTrace?: () => void; onGoAnalyze?: () => void }) {
+  const mergedIr = React.useMemo(() => {
+    if (!irList || irList.length === 0) return ir;
+    // Aggregate batch IRs so the KPIs read across the whole upload.
+    const get = (o: Record<string, unknown>, keys: string[]): unknown[] => {
+      for (const k of keys) if (Array.isArray(o[k])) return o[k] as unknown[];
+      return [];
+    };
+    const pick = (...keys: string[][]): unknown[] => irList.flatMap((e) => get(e.ir, keys.flat()));
+    return {
+      ...(ir ?? {}),
+      conditions: pick(["conditions", "Conditions"]),
+      queries: pick(["queries", "Queries", "queryUnits", "QueryUnits"]),
+      functions: pick(["functions", "Functions"]),
+      fml_ops: pick(["fml_ops", "fmlOps", "fml", "FmlOps"]),
+    } as Record<string, unknown>;
+  }, [ir, irList]);
+  const conditions = asArray(mergedIr, ["conditions", "Conditions"]);
+  const queries = asArray(mergedIr, ["queries", "Queries", "queryUnits", "QueryUnits"]);
+  const functions = asArray(mergedIr, ["functions", "Functions"]);
+  const fmlOps = asArray(mergedIr, ["fml_ops", "fmlOps", "fml", "FmlOps"]);
 
   const queryKinds = React.useMemo(
     () => Array.from(countKind(queries, ["kind", "Kind", "op", "queryKind", "QueryKind", "type"]).entries()).sort((a, b) => b[1] - a[1]),
@@ -122,21 +139,39 @@ export function OverviewDashboard({ ir, flowReport, onGoMetrics, onGoTrace }: { 
   }, [flowReport]);
 
   const kpis = [
-    { icon: GitBranch, label: "Entry", value: entryOf(ir), sub: `${conditions.length} conditions` },
+    { icon: GitBranch, label: inputFiles && inputFiles.length > 1 ? `Files (${inputFiles.length})` : "Entry", value: inputFiles && inputFiles.length > 1 ? String(inputFiles.length) : entryOf(mergedIr), sub: `${conditions.length} conditions` },
     { icon: Database, label: "Query units", value: String(queries.length), sub: `${queryKinds.length} kinds` },
     { icon: FunctionSquare, label: "Functions", value: String(functions.length), sub: "inventoried" },
     { icon: MessageSquareText, label: "FML ops", value: String(fmlOps.length), sub: `${fmlKinds.length} op kinds` },
     {
       icon: Gauge,
-      label: "Flow coverage",
-      value: coverage.total ? `${coverage.pct}%` : "—",
-      sub: coverage.total ? `${coverage.cls}/${coverage.total} lines` : "run flow for detail",
+      label: analysis ? `Triage (${analysis.length})` : "Flow coverage",
+      value: analysis && analysis.length > 0 ? `${analysis.filter((a) => a.complexity.toUpperCase() === "HIGH").length} HIGH` : coverage.total ? `${coverage.pct}%` : "—",
+      sub: analysis && analysis.length > 0 ? "see Analyze step" : coverage.total ? `${coverage.cls}/${coverage.total} lines` : "run flow for detail",
     },
   ];
 
   return (
     <div className="space-y-4">
       <MasterTotalsBar onView={onGoMetrics} />
+      {inputFiles && inputFiles.length > 1 && (
+        <Card>
+          <CardContent className="flex flex-wrap items-center gap-1.5 p-3">
+            <span className="text-xs font-medium">Batch:</span>
+            {inputFiles.slice(0, 6).map((n) => (
+              <Badge key={n} variant="secondary" className="max-w-[200px] truncate font-mono text-[10px]" title={n}>
+                {n}
+              </Badge>
+            ))}
+            {inputFiles.length > 6 && <Badge variant="outline">+{inputFiles.length - 6} more</Badge>}
+            {onGoAnalyze && (
+              <Button size="sm" variant="ghost" className="ml-auto h-7 px-2 text-xs" onClick={onGoAnalyze}>
+                Effort estimate →
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         {kpis.map((k) => (
           <Card key={k.label}>

@@ -20,7 +20,18 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const body = (await req.json().catch(() => ({}))) as { target?: Target; mappingPath?: string; useLLM?: boolean };
   const target: Target = body.target === "py" || body.target === "cs" ? body.target : "go";
   const useLLM = body.useLLM === true;
-  const mapping = body.mappingPath ?? job.mappingPath;
+  // Batch jobs: the mappings dir carries one draft per source file, so pass
+  // the dir (CLI accepts yaml|dir) instead of a single draft.
+  const { promises: fs0 } = await import("node:fs");
+  let mapping = body.mappingPath ?? job.mappingPath;
+  if (job.isBatch && (target === "go" || target === "cs")) {
+    try {
+      const names = await fs0.readdir(join(job.dir, "mappings"));
+      if (names.some((n) => /\.ya?ml$/i.test(n))) mapping = join(job.dir, "mappings");
+    } catch {
+      /* fall back to single mapping */
+    }
+  }
   const noLLMFlag = useLLM ? [] : ["-no-llm"];
 
   job.status = "running";

@@ -1,10 +1,16 @@
 # tux-to-any viewer — shadcn UI over the tuxconv CLI
 
-Drag & drop a `.pc` / `.pcf` file (or pick a bundled sample) and watch it break down:
+Drag & drop `.pc` / `.pcf` files (multi-select, folder, or `.zip` — up to 50 files, 5MB each / 30MB
+total) or pick a bundled sample and watch the batch break down:
 
-Overview KPIs + charts → IR tables → flow coverage → dispatch-axis scenarios +
-scenarioFilter playground → editable mapping drafts → converted tree
-(**Tux → Go · Python · C#**) → gentest gap report + generated tests → live CLI logs.
+Upload batch → Overview dashboard + Analyze triage (LOW/MEDIUM/HIGH effort) → IR tables → flow
+coverage → dispatch-axis scenarios + scenarioFilter playground → editable mapping drafts → converted
+tree (**Tux → Go · Python · C#**) → gentest gap report + generated tests → live CLI logs.
+
+The 6-step wizard (Upload → Overview → Scenarios → Mapping → Convert → Tests) collapses the old
+11-tab sprawl: IR / Flow / Source live as Overview sub-tabs, Trace / Logs as Convert sub-tabs,
+Metrics as a Tests sub-tab. Each step shows Back / Next with a blocked-step guard, and re-uploading
+asks to confirm before replacing the current batch.
 
 No database, no auth in the browser. Every run shells out to the
 `tuxconv` CLI inside a disposable tmpdir (`TUXCONV_BIN` or `go run` fallback).

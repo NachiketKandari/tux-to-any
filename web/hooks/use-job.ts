@@ -1,17 +1,23 @@
 "use client";
 
 import * as React from "react";
-import type { FlowReport, ScenarioBundle } from "@/lib/jobs";
+import type { FlowReport, ScenarioBundle, AnalysisRow } from "@/lib/jobs";
 
 export interface JobState {
   id: string;
   name: string;
   status: "ready" | "running" | "done" | "error";
   error?: string;
+  inputFiles?: string[];
+  isBatch?: boolean;
   ir?: Record<string, unknown>;
+  irList?: { name: string; ir: Record<string, unknown> }[];
   flowText?: string;
   flowReport?: FlowReport;
   sourcePreview?: string;
+  sourcePreviews?: { name: string; preview: string }[];
+  analysis?: AnalysisRow[];
+  analysisCsv?: string;
   scenarios?: ScenarioBundle;
   drafts?: { path: string; content: string }[];
   mappingPath?: string;

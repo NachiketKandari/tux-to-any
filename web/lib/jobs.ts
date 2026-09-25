@@ -71,17 +71,42 @@ export interface ScenarioBundle {
   note?: string;
 }
 
+export interface AnalysisRow {
+  file: string;
+  numLines: number;
+  numQueries: number;
+  branchingFactor: number;
+  branchCount: number;
+  hasTpcall: boolean;
+  tpcallCount: number;
+  fnLocalCount: number;
+  fnExternalCount: number;
+  complexityScore: number;
+  complexity: string;
+  reasons: string;
+}
+
 export interface Job {
   id: string;
   name: string;
   dir: string;
   sourcePath: string;
+  /** All uploaded source basenames (batch jobs). Single-file jobs carry one. */
+  inputFiles?: string[];
+  /** True when the job holds more than one source file. */
+  isBatch?: boolean;
   status: JobStatus;
   error?: string;
   ir?: Record<string, unknown>;
+  /** Per-file IR for batch jobs (name + parsed IR). */
+  irList?: { name: string; ir: Record<string, unknown> }[];
   flowText?: string;
   flowReport?: FlowReport;
   sourcePreview?: string;
+  /** Per-file source previews for batch jobs (capped). */
+  sourcePreviews?: { name: string; preview: string }[];
+  analysis?: AnalysisRow[];
+  analysisCsv?: string;
   scenarios?: ScenarioBundle;
   drafts?: DraftFile[];
   mappingPath?: string;
