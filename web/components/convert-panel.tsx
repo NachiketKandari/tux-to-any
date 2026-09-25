@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Hammer, Loader2, Braces, FileCode2, Container } from "lucide-react";
+import { Hammer, Loader2, Braces, FileCode2, Container, Waypoints } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +33,8 @@ export function ConvertPanel({
   selFile,
   fileContent,
   loadingFile,
+  provenance,
+  onGoTrace,
 }: {
   target: ConvertTarget;
   onTarget: (t: ConvertTarget) => void;
@@ -49,6 +51,8 @@ export function ConvertPanel({
   selFile: string | null;
   fileContent: string;
   loadingFile: boolean;
+  provenance?: { node: string; kind: string; reason: string; confidence: string }[];
+  onGoTrace?: () => void;
 }) {
   return (
     <div className="space-y-3">
@@ -142,7 +146,7 @@ export function ConvertPanel({
             </div>
           )}
           {converted && <pre className="mb-3 whitespace-pre-wrap font-mono text-xs text-muted-foreground">{converted.summary}</pre>}
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-[280px_1fr]">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
             <ScrollArea className="max-h-[480px]">
               {busy && !converted ? (
                 <FileTreeSkeleton />
@@ -150,21 +154,47 @@ export function ConvertPanel({
                 <FileTree files={converted?.files ?? []} selected={selFile} onSelect={onOpenFile} />
               )}
             </ScrollArea>
-            <ScrollArea className="max-h-[480px]">
-              {loadingFile ? (
-                <CodeViewSkeleton />
-              ) : selFile ? (
-                <CodeView
-                  content={fileContent}
-                  path={selFile}
-                  editable
-                  saving={savingFile}
-                  onSave={(next) => onSaveFile(selFile, next)}
-                />
-              ) : (
-                <p className="p-3 text-xs text-muted-foreground">Select a file to view it.</p>
+            <div className="min-w-0">
+              {selFile && (provenance?.length ?? 0) > 0 && (
+                <div className="trace-item mb-2 flex flex-wrap items-center gap-1.5 rounded-lg border border-primary/25 bg-primary/5 px-2.5 py-2" aria-live="polite">
+                  <Waypoints className="h-3.5 w-3.5 shrink-0 text-primary" />
+                  <span className="text-[11px] font-medium">This file exists because of:</span>
+                  {provenance!.slice(0, 4).map((p) => (
+                    <Badge
+                      key={p.node}
+                      variant={p.confidence === "exact" ? "default" : "secondary"}
+                      className="max-w-[220px] truncate font-mono text-[10px]"
+                      title={`${p.node} — ${p.reason}`}
+                    >
+                      {p.node}
+                    </Badge>
+                  ))}
+                  {provenance!.length > 4 && (
+                    <span className="text-[11px] tabular-nums text-muted-foreground">+{provenance!.length - 4} more</span>
+                  )}
+                  {onGoTrace && (
+                    <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-[11px]" onClick={onGoTrace}>
+                      Full trace <Waypoints className="h-3 w-3" />
+                    </Button>
+                  )}
+                </div>
               )}
-            </ScrollArea>
+              <ScrollArea className="max-h-[480px]">
+                {loadingFile ? (
+                  <CodeViewSkeleton />
+                ) : selFile ? (
+                  <CodeView
+                    content={fileContent}
+                    path={selFile}
+                    editable
+                    saving={savingFile}
+                    onSave={(next) => onSaveFile(selFile, next)}
+                  />
+                ) : (
+                  <p className="p-3 text-xs text-muted-foreground">Select a file to view it.</p>
+                )}
+              </ScrollArea>
+            </div>
           </div>
         </CardContent>
       </Card>

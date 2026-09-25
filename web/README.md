@@ -106,6 +106,7 @@ web/
       jobs/[id]/discover/           # POST draft Go / C# mappings
       jobs/[id]/mapping/            # PUT save edited draft
       jobs/[id]/convert/            # POST convertgo / convertbatchpy / convertcs
+      jobs/[id]/lineage/            # GET source→output trace (this part became that part)
       jobs/[id]/gentest/            # POST gap report / generate
       jobs/[id]/files|logs|route    # file read, log tail, job fetch
       samples{,/load}/route.ts      # curated fixtures for one-click demos
@@ -121,13 +122,16 @@ web/
     flow-explorer.tsx     # per-function coverage + hints + raw text
     scenario-explorer.tsx # axis registry, slice picker, shared-md, filter playground
     mapping-editor.tsx    # draft Go/C#, edit, save & continue
-    convert-panel.tsx     # Tux→Go/Python/C# target cards + file tree + code view
+    convert-panel.tsx     # Tux→Go/Python/C# target cards + file tree + code view + provenance banner
+    lineage-explorer.tsx  # Trace tab: pick a source part → see every file it became, with evidence
     tests-panel.tsx       # gap report / generate (Go trees)
     files.tsx             # filterable file tree + copy/download code view
   hooks/use-job.ts        # job + log polling
+  hooks/use-lineage.ts    # source→output trace fetch (refetches per converted tree)
   lib/
     api-client.ts         # single home for browser → API calls
     jobs.ts               # Job / FlowReport / ScenarioBundle types + store
+    lineage.ts            # evidence-based IR→file matcher (exact/derived/related)
     targets.ts            # Tux→Go/Python/C# catalog
     ir.ts                 # case-tolerant IR accessors
     tuxconv.ts            # CLI spawn helper

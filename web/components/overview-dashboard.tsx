@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { GitBranch, Database, FunctionSquare, MessageSquareText, Gauge } from "lucide-react";
+import { GitBranch, Database, FunctionSquare, MessageSquareText, Gauge, Waypoints } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { asArray, countKind, entryOf } from "@/lib/ir";
 import { MasterTotalsBar } from "@/components/metrics-panel";
@@ -98,7 +99,7 @@ function Bars({ data, label }: { data: [string, number][]; label: string }) {
   );
 }
 
-export function OverviewDashboard({ ir, flowReport, onGoMetrics }: { ir?: Record<string, unknown>; flowReport?: FlowReport; onGoMetrics?: () => void }) {
+export function OverviewDashboard({ ir, flowReport, onGoMetrics, onGoTrace }: { ir?: Record<string, unknown>; flowReport?: FlowReport; onGoMetrics?: () => void; onGoTrace?: () => void }) {
   const conditions = asArray(ir, ["conditions", "Conditions"]);
   const queries = asArray(ir, ["queries", "Queries", "queryUnits", "QueryUnits"]);
   const functions = asArray(ir, ["functions", "Functions"]);
@@ -154,13 +155,26 @@ export function OverviewDashboard({ ir, flowReport, onGoMetrics }: { ir?: Record
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <Card>
+        <Card className="transition-all duration-200 hover:border-primary/30 hover:shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">What breaks down into what</CardTitle>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-sm">What breaks down into what</CardTitle>
+              {onGoTrace && (
+                <Button size="sm" variant="ghost" className="ml-auto h-7 px-2 text-xs" onClick={onGoTrace}>
+                  <Waypoints className="h-3.5 w-3.5" />
+                  Interactive trace
+                </Button>
+              )}
+            </div>
             <CardDescription>Query units by kind — each becomes a repository method.</CardDescription>
           </CardHeader>
           <CardContent>
             <Donut data={queryKinds} />
+            {onGoTrace && (
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                After converting, the Trace tab shows exactly which query landed in which file.
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card>

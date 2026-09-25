@@ -13,6 +13,7 @@ import {
   FileCode2,
   Loader2,
   Activity,
+  Waypoints,
 } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { PipelineSteps } from "@/components/pipeline-steps";
@@ -24,6 +25,7 @@ import { FlowExplorer } from "@/components/flow-explorer";
 import { ScenarioExplorer } from "@/components/scenario-explorer";
 import { MappingEditor } from "@/components/mapping-editor";
 import { ConvertPanel } from "@/components/convert-panel";
+import { LineageExplorer } from "@/components/lineage-explorer";
 import { TestsPanel } from "@/components/tests-panel";
 import { MetricsPanel } from "@/components/metrics-panel";
 import { CodeView } from "@/components/files";
@@ -35,6 +37,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useJob } from "@/hooks/use-job";
+import { useLineage } from "@/hooks/use-lineage";
+import { provenanceForFile } from "@/lib/lineage";
 import {
   uploadFile,
   loadSample,
@@ -49,12 +53,14 @@ import {
 } from "@/lib/api-client";
 import type { ConvertTarget } from "@/lib/targets";
 
-type TabId = "overview" | "ir" | "flow" | "scenarios" | "mapping" | "convert" | "tests" | "metrics" | "logs" | "source";
+type TabId = "overview" | "ir" | "flow" | "scenarios" | "mapping" | "convert" | "trace" | "tests" | "metrics" | "logs" | "source";
 
-/** Map the 10-tab model onto the 6-step pipeline strip: IR/Flow read as
- *  Overview detail, Source/Logs/Metrics sit outside the linear flow. */
+/** Map the 11-tab model onto the 6-step pipeline strip: IR/Flow read as
+ *  Overview detail, Trace reads as Convert detail, Source/Logs/Metrics sit
+ *  outside the linear flow. */
 function stepperStepForTab(tab: TabId): string {
   if (tab === "ir" || tab === "flow") return "overview";
+  if (tab === "trace") return "convert";
   if (tab === "source" || tab === "logs" || tab === "metrics") return "upload";
   return tab;
 }
@@ -73,6 +79,14 @@ export default function Home() {
   const [fileContent, setFileContent] = React.useState("");
   const [loadingFile, setLoadingFile] = React.useState(false);
   const [savingFile, setSavingFile] = React.useState(false);
+
+  // Source→output trace: refetch whenever a new converted tree lands.
+  const lineageStamp = job?.converted ? `${job.id}:${job.converted.target}:${job.converted.files.length}` : "";
+  const { lineage, loading: lineageLoading, error: lineageError } = useLineage(jobId, lineageStamp);
+  const selProvenance = React.useMemo(
+    () => (selFile ? provenanceForFile(lineage, selFile) : []),
+    [lineage, selFile]
+  );
 
   React.useEffect(() => {
     fetchDbStatus().then(setDbStatus).catch(() => setDbStatus(null));
@@ -179,6 +193,11 @@ export default function Home() {
     } finally {
       setLoadingFile(false);
     }
+  }
+
+  async function openTraceFile(p: string) {
+    setTab("convert");
+    await openFile(p);
   }
 
   async function handleSaveFile(p: string, content: string) {
@@ -304,7 +323,7 @@ export default function Home() {
 
         {job && (
           <Tabs value={tab} onValueChange={(v) => setTab(v as TabId)}>
-            <TabsList className="flex h-auto flex-wrap justify-start gap-1">
+            <TabsList className="flex h-auto max-w-full flex-wrap justify-start gap-1 overflow-x-auto">
               <TabsTrigger value="overview">
                 <LayoutDashboard className="h-3.5 w-3.5" /> Overview
               </TabsTrigger>
@@ -338,6 +357,14 @@ export default function Home() {
                   </Badge>
                 )}
               </TabsTrigger>
+              <TabsTrigger value="trace">
+                <Waypoints className="h-3.5 w-3.5" /> Trace
+                {(lineage?.nodes.length ?? 0) > 0 && (
+                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] tabular-nums">
+                    {lineage?.nodes.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
               <TabsTrigger value="tests">
                 <FlaskConical className="h-3.5 w-3.5" /> Tests
                 {(job.gentestFiles?.length ?? 0) > 0 && (
@@ -358,7 +385,12 @@ export default function Home() {
             </TabsList>
 
             <TabsContent value="overview">
-              <OverviewDashboard ir={job.ir} flowReport={job.flowReport} onGoMetrics={() => setTab("metrics")} />
+              <OverviewDashboard
+                ir={job.ir}
+                flowReport={job.flowReport}
+                onGoMetrics={() => setTab("metrics")}
+                onGoTrace={job.converted ? () => setTab("trace") : undefined}
+              />
             </TabsContent>
 
             <TabsContent value="ir">
@@ -401,6 +433,17 @@ export default function Home() {
                 selFile={selFile}
                 fileContent={fileContent}
                 loadingFile={loadingFile}
+                provenance={selProvenance}
+                onGoTrace={() => setTab("trace")}
+              />
+            </TabsContent>
+
+            <TabsContent value="trace">
+              <LineageExplorer
+                lineage={lineage}
+                loading={lineageLoading}
+                error={lineageError}
+                onOpenFile={openTraceFile}
               />
             </TabsContent>
 

@@ -59,11 +59,87 @@
   * {
     @apply border-border;
   }
+  html {
+    scroll-behavior: smooth;
+  }
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
   code, pre {
     font-feature-settings: "zero" 1;
+  }
+
+  /* Tab switches fade/slide instead of popping. */
+  [role="tabpanel"][data-state="active"] {
+    animation: tab-in 220ms ease-out both;
+  }
+
+  /* Trace explorer: staggered rise-in for source/target cards. */
+  .trace-item {
+    animation: trace-in 260ms ease-out both;
+  }
+
+  /* The "became" connector: a softly pulsing arrow. */
+  .trace-connector {
+    animation: trace-pulse 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes trace-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes trace-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* Laptop trackpads and keyboards: keep focus visible but calm. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+}
+
+/* Respect users who asked the OS for less motion: everything appears
+ * instantly, scrolling jumps, no pulse. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .trace-connector {
+    animation: none;
   }
 }
