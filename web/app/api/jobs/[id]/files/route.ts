@@ -4,8 +4,6 @@ import { NextResponse } from "next/server";
 import { getJob } from "@/lib/jobs";
 import { recordMetric } from "@/lib/metrics";
 
-const MAX_BYTES = 200 * 1024;
-
 function inside(jobDir: string, abs: string): boolean {
   const back = relative(jobDir, abs);
   return back !== "" && !back.startsWith("..");
@@ -23,8 +21,8 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   }
   try {
     const st = await fs.stat(abs);
-    if (!st.isFile() || st.size > MAX_BYTES) {
-      return NextResponse.json({ error: "file missing or over 200KB" }, { status: 400 });
+    if (!st.isFile()) {
+      return NextResponse.json({ error: "file missing" }, { status: 400 });
     }
     return NextResponse.json({ path: rel, content: await fs.readFile(abs, "utf8") });
   } catch {
@@ -41,9 +39,6 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   const body = (await req.json().catch(() => ({}))) as { path?: string; content?: string };
   if (!body.path || typeof body.content !== "string") {
     return NextResponse.json({ error: "path and content are required" }, { status: 400 });
-  }
-  if (body.content.length > MAX_BYTES) {
-    return NextResponse.json({ error: "file exceeds 200KB" }, { status: 400 });
   }
   const abs = join(job.converted.root, body.path);
   if (!inside(job.dir, abs) || relative(job.converted.root, abs).startsWith("..")) {

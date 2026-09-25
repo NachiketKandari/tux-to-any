@@ -59,20 +59,17 @@ export async function newJobDir(): Promise<string> {
   return fs.mkdtemp(join(tmpdir(), "tux-web-"));
 }
 
-export async function listFilesRecursive(root: string, maxFiles = 200, maxBytes = 200 * 1024): Promise<string[]> {
+export async function listFilesRecursive(root: string): Promise<string[]> {
   const out: string[] = [];
   async function walk(dir: string) {
-    if (out.length >= maxFiles) return;
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const e of entries) {
-      if (out.length >= maxFiles) break;
       const p = join(dir, e.name);
       if (e.isDirectory()) {
         if (e.name === "logs" || e.name === "node_modules") continue;
         await walk(p);
       } else {
-        const st = await fs.stat(p);
-        if (st.size <= maxBytes) out.push(p);
+        out.push(p);
       }
     }
   }
@@ -81,5 +78,6 @@ export async function listFilesRecursive(root: string, maxFiles = 200, maxBytes 
   } catch {
     return [];
   }
+  out.sort();
   return out;
 }

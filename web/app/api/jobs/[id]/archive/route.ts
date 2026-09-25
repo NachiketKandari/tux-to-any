@@ -14,9 +14,6 @@ import { getJob } from "@/lib/jobs";
 // (<tmp>/tux-web-*/go|py|cs); jobs vanish on server restart, so this
 // endpoint is the durable copy. Pure-Node STORE zip (no compression, no
 // new deps) — works on alpine without a `zip` binary.
-const MAX_FILES = 500;
-const MAX_FILE_BYTES = 1 * 1024 * 1024;
-const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
 
 function crc32(buf: Buffer): number {
   let table = (crc32 as { t?: Uint32Array }).t;
@@ -105,10 +102,8 @@ function safeName(n: string): string | null {
 
 async function walk(root: string, out: { rel: string; abs: string }[]): Promise<void> {
   async function rec(dir: string) {
-    if (out.length >= MAX_FILES) return;
     const ents = await fs.readdir(dir, { withFileTypes: true });
     for (const e of ents) {
-      if (out.length >= MAX_FILES) break;
       if (e.name === "logs" || e.name === "node_modules") continue;
       const abs = join(dir, e.name);
       if (e.isDirectory()) await rec(abs);
@@ -137,26 +132,16 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   found.sort((a, b) => a.rel.localeCompare(b.rel));
 
   const entries: { name: string; data: Buffer }[] = [];
-  let total = 0;
-  const skipped: string[] = [];
   for (const f of found) {
     const name = safeName(`${job.converted.target}/${f.rel}`);
     if (!name) continue;
     try {
       const st = await fs.stat(f.abs);
-      if (!st.isFile() || st.size > MAX_FILE_BYTES) {
-        skipped.push(f.rel);
-        continue;
-      }
-      if (total + st.size > MAX_TOTAL_BYTES) {
-        skipped.push(f.rel);
-        continue;
-      }
+      if (!st.isFile()) continue;
       const data = await fs.readFile(f.abs);
-      total += data.length;
       entries.push({ name, data });
     } catch {
-      skipped.push(f.rel);
+      continue;
     }
   }
   if (entries.length === 0) {
@@ -169,7 +154,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       const mp = job.mappingPath;
       if (relative(job.dir, mp) !== "" && !relative(job.dir, mp).startsWith("..")) {
         const st = await fs.stat(mp);
-        if (st.isFile() && st.size <= MAX_FILE_BYTES && total + st.size <= MAX_TOTAL_BYTES) {
+        if (st.isFile()) {
           entries.push({ name: `mapping/${basename(mp)}`, data: await fs.readFile(mp) });
         }
       }
@@ -182,10 +167,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     `tux-to-any conversion bundle`,
     `job: ${job.name} (id ${job.id})`,
     `target: ${job.converted.target}`,
-    `files: ${entries.length}${skipped.length ? ` (${skipped.length} oversized skipped)` : ""}`,
+    `files: ${entries.length}`,
     `llm: requested=${job.converted.llm ? "on" : "off"} effective=${job.converted.llmEffective ? "on" : "off"}${job.converted.llmCalls != null ? ` (${job.converted.llmCalls} calls)` : ""}`,
     job.converted.llmNote ? `llm note: ${job.converted.llmNote}` : "",
-    skipped.length ? `skipped: ${skipped.slice(0, 20).join(", ")}${skipped.length > 20 ? ` +${skipped.length - 20} more` : ""}` : "",
     ``,
     `Converted files live on the server under a disposable tmpdir and vanish`,
     `on restart — this zip is the durable copy.`,

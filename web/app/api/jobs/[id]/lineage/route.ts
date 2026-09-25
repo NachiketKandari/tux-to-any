@@ -14,8 +14,6 @@ import { buildLineage, parseLedgerSource, type LedgerMap } from "@/lib/lineage";
 //      the ledger does not cover (Python/C#, scaffolding, unmapped arms).
 //
 // Pure derivation from artifacts already on disk — no CLI spawn, no LLM.
-const MAX_FILES = 60;
-const MAX_BYTES = 120 * 1024;
 
 async function loadLedgerMaps(dir: string): Promise<LedgerMap[]> {
   const out: LedgerMap[] = [];
@@ -75,7 +73,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   if (!job.converted) return NextResponse.json({ error: "convert first — no converted tree yet" }, { status: 409 });
 
   const root = job.converted.root;
-  const rel = (job.converted.files ?? []).slice(0, MAX_FILES);
+  const rel = job.converted.files ?? [];
   const files: { path: string; content: string }[] = [];
   for (const r of rel) {
     try {
@@ -83,9 +81,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       const abs = join(root, r);
       if (!abs.startsWith(root)) continue;
       const st = await fs.stat(abs);
-      if (!st.isFile() || st.size > MAX_BYTES) continue;
+      if (!st.isFile()) continue;
       const content = await fs.readFile(abs, "utf8");
-      files.push({ path: r, content: content.slice(0, MAX_BYTES) });
+      files.push({ path: r, content });
     } catch {
       continue;
     }

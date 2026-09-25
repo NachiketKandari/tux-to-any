@@ -5,8 +5,6 @@ import { getJob, setJob, makeLogger } from "@/lib/jobs";
 import { runTux } from "@/lib/tuxconv";
 import { recordMetric } from "@/lib/metrics";
 
-const MAX_SCENARIO_BYTES = 120 * 1024;
-const MAX_ARTIFACTS = 40;
 
 // POST /api/jobs/:id/scenarios — build the dispatch-axis scenario explorer
 // bundle: `flow -scenarios` artifacts + `discover -list-axes` registry text.
@@ -43,11 +41,11 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     let sharedJson: unknown | undefined;
     let axesMd: string | undefined;
 
-    for (const n of names.slice(0, MAX_ARTIFACTS)) {
+    for (const n of names) {
       const p = join(scenDir, n);
       try {
         const st = await fs.stat(p);
-        if (!st.isFile() || st.size > MAX_SCENARIO_BYTES) continue;
+        if (!st.isFile()) continue;
         const content = await fs.readFile(p, "utf8");
         if (/\.shared\.md$/i.test(n)) sharedMd = content;
         else if (/\.shared\.json$/i.test(n)) {
