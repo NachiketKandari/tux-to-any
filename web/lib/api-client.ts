@@ -108,6 +108,23 @@ export async function fetchDbStatus(): Promise<{ enabled: boolean; driver: strin
   return json(r);
 }
 
+export interface LLMStatus {
+  anyKey: boolean;
+  vllmKey: boolean;
+  openrouterKey: boolean;
+  profile: string;
+  note: string;
+}
+
+export async function fetchLLMStatus(): Promise<LLMStatus> {
+  const r = await fetch("/api/llm-status");
+  return json(r);
+}
+
+export function downloadArchiveUrl(jobId: string): string {
+  return `/api/jobs/${jobId}/archive`;
+}
+
 export async function loadSample(path: string): Promise<{ id: string }> {
   const r = await fetch("/api/samples/load", {
     method: "POST",

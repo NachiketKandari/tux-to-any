@@ -46,6 +46,26 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     }
     log(`$ convert target=${target} llm=${useLLM ? "on" : "off"} mapping=${mapping ?? "(none — draft-and-stop)"}`);
     const r = await runTux(job.dir, args, log);
+    const combined = `${r.stdout}\n${r.stderr}`;
+    // Effective mode: the CLI prints "N llm calls" per service summary line
+    // (printServiceSummary). LLM-on with zero calls anywhere means the seam
+    // degraded (no key resolves) or nothing needed it — never report the
+    // requested flag as the outcome.
+    let llmCalls = 0;
+    const llmRe = /(\d+)\s+llm calls?/gi;
+    let m: RegExpExecArray | null;
+    while ((m = llmRe.exec(combined)) !== null) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n) && n > llmCalls) llmCalls = n;
+    }
+    const llmEffective = useLLM && llmCalls > 0;
+    const llmNote = !useLLM
+      ? "deterministic by request (LLM off — -no-llm), no key needed."
+      : llmEffective
+        ? `${llmCalls} LLM call(s) — AI seam filled bodies.`
+        : target === "py"
+          ? "LLM requested but 0 calls made — simple-shape Python is fully deterministic, or no API key resolves (VLLM_API_KEY / OPENROUTER_API_KEY). See Logs."
+          : "LLM requested but 0 calls made — no API key resolves in the server env (VLLM_API_KEY / OPENROUTER_API_KEY), so the run fell back to deterministic drafts (tuxgo:TODO seams). Set a key, restart the web server, and re-convert. See Logs.";
     const files = await listFilesRecursive(root);
     if (files.length === 0) {
       // Draft-and-stop (or a failure): surface fresh drafts when present.
@@ -63,6 +83,15 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       if (drafts.length > 0) {
         job.drafts = drafts;
         job.mappingPath = drafts[0].path;
+        // Draft-and-stop drafts obey the same origin marks as discover.
+        const hasAi = drafts.some((d) => d.content.includes("ai-suggested"));
+        job.mappingLLM = useLLM;
+        job.mappingLLMEffective = useLLM && hasAi;
+        job.mappingLLMNote = !useLLM
+          ? "deterministic by request (LLM off) — no key needed."
+          : hasAi
+            ? "AI naming applied (# ai-suggested proposals)."
+            : "LLM requested but the draft is fully deterministic — no API key resolves in the server env (VLLM_API_KEY / OPENROUTER_API_KEY). Set a key, restart, and re-run. See Logs.";
       }
       if (r.code !== 0 && drafts.length === 0) throw new Error("convert failed — see logs");
       job.status = "done";
@@ -75,7 +104,16 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       });
     }
     const tail = r.stdout.trim().split("\n").slice(-3).join("\n");
-    job.converted = { target, root, files: files.map((f) => f.slice(root.length + 1)), summary: tail, llm: useLLM };
+    job.converted = {
+      target,
+      root,
+      files: files.map((f) => f.slice(root.length + 1)),
+      summary: `${tail}\nllm: requested=${useLLM ? "on" : "off"} effective=${llmEffective ? "on" : "off"} (${llmCalls} calls)`,
+      llm: useLLM,
+      llmEffective,
+      llmNote,
+      llmCalls,
+    };
     job.status = "done";
     await recordMetric({
       kind: "convert",

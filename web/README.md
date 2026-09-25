@@ -6,10 +6,13 @@ Overview KPIs + charts → IR tables → flow coverage → dispatch-axis scenari
 scenarioFilter playground → editable mapping drafts → converted tree
 (**Tux → Go · Python · C#**) → gentest gap report + generated tests → live CLI logs.
 
-No database, no auth, no LLM in the browser. Every run shells out to the
-`tuxconv` CLI inside a disposable tmpdir (`TUXCONV_BIN` or `go run` fallback),
-always with `-no-llm` / deterministic drafts. Jobs are in-memory tmpdir
-snapshots — a server restart drops them (re-upload; runs are seconds).
+No database, no auth in the browser. Every run shells out to the
+`tuxconv` CLI inside a disposable tmpdir (`TUXCONV_BIN` or `go run` fallback).
+Each of Step 1 (mapping) and Step 2 (convert) has its own LLM toggle
+(off = `-no-llm`, deterministic, no keys needed; on = LLM seam when a key
+resolves, deterministic fallback otherwise). Jobs are in-memory tmpdir
+snapshots — a server restart drops them (re-upload; runs are seconds), so
+convert ships a **Download .zip** button for the durable copy.
 
 ## Run it
 
@@ -40,9 +43,11 @@ This viewer is a local tool. Runtime network behavior, verified:
   No analytics SDK, no tracking pixel, no Google Fonts, no CDN scripts,
   no Vercel Analytics, no `next/image` remotes. `grep -r "https://"`
   in `web/{app,components,hooks,lib}` hits nothing but comments.
-- `tuxconv` CLI → no network in viewer mode: every call runs with
-  `-no-llm` / deterministic drafts. The Go `internal/telemetry` package
-  is local `slog` file logging (`conversion_logs/logs/`) despite the name.
+- `tuxconv` CLI → no network in deterministic mode: every `-no-llm` call
+  stays local. LLM-on calls (when a key resolves) go to the configured
+  `apiBase` only — same egress contract as the CLI. The Go
+  `internal/telemetry` package is local `slog` file logging
+  (`conversion_logs/logs/`) despite the name.
 - Uploaded `.pc` files stay in disposable tmpdirs (`tux-web-*`) on your
   machine; nothing leaves it.
 
@@ -90,6 +95,68 @@ and upgrade Next when a non-breaking patched 14.x lands
 (`npm audit fix --force` would jump to Next 16 — breaking — so it is
 intentionally not applied).
 
+## LLM toggles — requested vs effective
+
+Step 1 (mapping) and Step 2 (convert) each have an LLM toggle:
+
+- **Off** appends `-no-llm` — deterministic drafts (`# deterministic — edit
+  freely`, `tuxgo:TODO` seams), no key needed, no network.
+- **On** omits `-no-llm` — the LLM seam runs *when a key resolves*,
+  deterministic fallback otherwise. No key is ever required; a run never
+  hard-fails for lack of one.
+
+Why LLM-on can still say "deterministic": the web server runs `tuxconv`
+inside a disposable job tmpdir with **no `.tuxgo.yaml`**, so the stock
+defaults apply — profile `onprem-vllm` (key `$VLLM_API_KEY`), alternative
+`local-dev-openrouter` (key `$OPENROUTER_API_KEY`). Unless the *server*
+process was started with one of those set, `resolveLLMClient` returns nil
+and the seam degrades. The fix is env, not clicks:
+
+```sh
+export VLLM_API_KEY=...        # or OPENROUTER_API_KEY=...
+# restart the web server so Next picks it up, then re-draft / re-convert
+```
+
+The UI reports **requested vs effective** so the fallback never looks like
+a broken toggle:
+
+- `GET /api/llm-status` — key presence (booleans only, never values); the
+  header shows `llm key ok/missing` and each toggle warns `no key — expect
+  fallback` while on.
+- Discover counts the draft's origin markers (`N ai-suggested ·
+  M deterministic`) and stores `mappingLLMEffective` + `mappingLLMNote`.
+- Convert parses the CLI's `N llm calls` summary tail and stores
+  `llmEffective` + `llmNote` + `llmCalls` (the summary line itself gains
+  `llm: requested=… effective=…`).
+- C# drafts are deterministic-only by design — the mapping toggle is a
+  documented no-op there.
+
+## Where converted files live + Download .zip
+
+Per job (server-local, disposable):
+
+```text
+$TMPDIR/tux-web-*/        # job.dir — vanishes on server restart
+  input/<name>.pc         # your upload
+  ir.json / flow.json     # deterministic parse artifacts
+  mappings/*.mapping.yaml # drafts (Step 1 saves in place)
+  scenarios/              # flow -scenarios artifacts
+  go/ | py/ | cs/         # converted tree (Step 2; -base/-out root)
+  logs/                   # tuxconv -log-dir output
+  job.json                # job snapshot (log tail capped at 500)
+```
+
+The Convert panel shows the tree's absolute `root` path and the per-file
+viewer (`files.tsx`) keeps per-file Copy/Download. For the durable copy:
+
+- `GET /api/jobs/:id/archive` — streams `<name>-<target>.zip` containing
+  `<target>/…` (the converted tree), `mapping/<draft>.yaml` (when saved),
+  and `tux-to-any-summary.txt` (target, file count, requested/effective LLM
+  mode). Pure-Node STORE zip (no compression, no extra deps, no `zip`
+  binary needed): ≤500 files, ≤1MB per file, ≤50MB total; oversized files
+  are skipped and named in the summary.
+- The Convert panel's **Download .zip** button links straight there.
+
 ## Architecture (frontend)
 
 Clean separation — routes stay thin, logic lives in `lib`, state in `hooks`:
@@ -109,6 +176,9 @@ web/
       jobs/[id]/lineage/            # GET source→output trace (this part became that part)
       jobs/[id]/gentest/            # POST gap report / generate
       jobs/[id]/files|logs|route    # file read, log tail, job fetch
+      jobs/[id]/archive/            # GET whole converted tree + mapping as .zip
+      llm-status/route.ts           # GET LLM key presence (booleans only)
+      db-status/route.ts            # GET Oracle DSN presence (booleans only)
       samples{,/load}/route.ts      # curated fixtures for one-click demos
   components/
     ui/                   # shadcn primitives (Radix): button, tabs, select,
@@ -132,6 +202,7 @@ web/
     api-client.ts         # single home for browser → API calls
     jobs.ts               # Job / FlowReport / ScenarioBundle types + store
     lineage.ts            # evidence-based IR→file matcher (exact/derived/related)
+    llm-status.ts         # server-env LLM key presence (no values)
     targets.ts            # Tux→Go/Python/C# catalog
     ir.ts                 # case-tolerant IR accessors
     tuxconv.ts            # CLI spawn helper
@@ -139,5 +210,7 @@ web/
 
 Every button runs something real: upload, sample, draft, build scenarios,
 filter preview, save mapping, convert (per target), gap report, generate,
-file open, copy/download, log tail. Busy states disable actions; errors
+file open, copy/download, download-all-.zip, log tail. Busy states disable actions; errors
 surface inline; draft-and-stop converts bounce you to the Mapping tab.
+Requested-vs-effective LLM badges (plus `/api/llm-status`) explain every
+deterministic fallback.

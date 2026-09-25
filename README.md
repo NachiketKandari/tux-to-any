@@ -199,6 +199,27 @@ test target.
   (`testdata/gentest/expected/gap_report.txt`); regenerate with
   `GT_UPDATE_GOLDENS=1 go test ./internal/testgen`.
 
+## Web viewer (`web/`)
+
+The Next.js viewer (`web/README.md`) is a thin shell over the same CLI:
+upload → deterministic IR/flow → scenarios → Step 1 mapping draft →
+Step 2 convert (Go/Python/C#) → gentest, with live logs. Jobs are
+disposable server tmpdirs (`$TMPDIR/tux-web-*`: `input/`, `ir.json`,
+`flow.json`, `mappings/`, `scenarios/`, `go/|py/|cs/`, `logs/`,
+`job.json`); a restart drops them, so Convert ships a **Download .zip**
+(`GET /api/jobs/:id/archive` — converted tree + saved mapping +
+`tux-to-any-summary.txt`).
+
+LLM toggles (one per step) need no keys to *use*: off is `-no-llm`
+deterministic; on runs the seam **when a key resolves**
+(`VLLM_API_KEY` / `OPENROUTER_API_KEY` in the *server* env — the tmpdirs
+carry no `.tuxgo.yaml`, so stock-profile defaults apply) and falls back
+deterministically otherwise, never hard-failing. The panels report
+**requested vs effective** (`# ai-suggested` census on drafts, `N llm
+calls` on converts, `llm key ok/missing` in the header via
+`GET /api/llm-status`) — an LLM-on run that stays fully `# deterministic`
+means no key resolves: export the key, restart the server, re-draft.
+
 ## Run configuration (.tuxgo.yaml)
 
 Every command resolves the run config the same way

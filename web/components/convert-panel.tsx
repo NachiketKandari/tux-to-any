@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Hammer, Loader2, Braces, FileCode2, Container, Waypoints } from "lucide-react";
+import { Hammer, Loader2, Braces, FileCode2, Container, Waypoints, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { FileTree, CodeView, FileTreeSkeleton, CodeViewSkeleton } from "@/components/files";
 import { LLMToggle } from "@/components/llm-toggle";
 import { CONVERT_TARGETS, type ConvertTarget } from "@/lib/targets";
+import { downloadArchiveUrl } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 
 const ICONS: Record<ConvertTarget, React.ReactNode> = {
@@ -35,6 +36,8 @@ export function ConvertPanel({
   loadingFile,
   provenance,
   onGoTrace,
+  jobId,
+  noKey,
 }: {
   target: ConvertTarget;
   onTarget: (t: ConvertTarget) => void;
@@ -44,7 +47,16 @@ export function ConvertPanel({
   useLLM: boolean;
   onUseLLM: (v: boolean) => void;
   onGoMapping?: () => void;
-  converted?: { target: string; files: string[]; summary: string; llm?: boolean };
+  converted?: {
+    target: string;
+    root: string;
+    files: string[];
+    summary: string;
+    llm?: boolean;
+    llmEffective?: boolean;
+    llmNote?: string;
+    llmCalls?: number;
+  };
   onOpenFile: (p: string) => void;
   onSaveFile: (path: string, content: string) => void;
   savingFile: boolean;
@@ -53,7 +65,23 @@ export function ConvertPanel({
   loadingFile: boolean;
   provenance?: { node: string; kind: string; reason: string; confidence: string }[];
   onGoTrace?: () => void;
+  /** Job id — enables the Download-all-.zip button. */
+  jobId?: string | null;
+  /** Server reports no LLM key — LLM-on will fall back. */
+  noKey?: boolean;
 }) {
+  const modeBadge = !converted ? null : converted.llmEffective ? (
+    <Badge variant="secondary">
+      {converted.files.length} files · llm
+      {converted.llmCalls != null && converted.llmCalls > 0 ? ` (${converted.llmCalls} calls)` : ""}
+    </Badge>
+  ) : converted.llm ? (
+    <Badge variant="outline" title={converted.llmNote ?? "LLM requested but the run fell back to deterministic output"}>
+      {converted.files.length} files · deterministic fallback
+    </Badge>
+  ) : (
+    <Badge variant="secondary">{converted.files.length} files · deterministic</Badge>
+  );
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3" role="radiogroup" aria-label="Conversion target">
@@ -98,14 +126,18 @@ export function ConvertPanel({
                 <Loader2 className="h-3 w-3 animate-spin" /> converting…
               </Badge>
             ) : (
-              converted && (
-                <Badge variant="secondary">
-                  {converted.files.length} files{converted.llm ? " · llm" : " · deterministic"}
-                </Badge>
-              )
+              modeBadge
             )}
             {!hasMapping && (target === "go" || target === "cs") && (
               <Badge variant="outline">Step 1 required — draft & save a mapping first</Badge>
+            )}
+            {converted && jobId && (
+              <Button size="sm" variant="outline" asChild title="Download the whole converted tree + mapping as a .zip">
+                <a href={downloadArchiveUrl(jobId)}>
+                  <Download className="h-3.5 w-3.5" />
+                  Download .zip
+                </a>
+              </Button>
             )}
             <Button
               size="sm"
@@ -135,8 +167,24 @@ export function ConvertPanel({
             value={useLLM}
             onChange={onUseLLM}
             disabled={busy}
-            hint="off works with no key"
+            hint="off works with no key; on needs VLLM_API_KEY / OPENROUTER_API_KEY in the server env"
+            noKey={noKey}
           />
+          {converted?.llmNote && (
+            <p
+              className={
+                converted.llmEffective
+                  ? "rounded-md border border-green-500/30 bg-green-500/10 p-2 text-xs"
+                  : converted.llm
+                    ? "rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs"
+                    : "rounded-md border p-2 text-xs text-muted-foreground"
+              }
+              role="status"
+            >
+              {converted.llm ? "LLM requested" : "LLM off"} · effective:{" "}
+              {converted.llmEffective ? "AI" : "deterministic"} — {converted.llmNote}
+            </p>
+          )}
           {!hasMapping && (target === "go" || target === "cs") && onGoMapping && (
             <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
               <span>No mapping yet — Step 1 drafts it. Save the draft, then convert.</span>
@@ -146,6 +194,13 @@ export function ConvertPanel({
             </div>
           )}
           {converted && <pre className="mb-3 whitespace-pre-wrap font-mono text-xs text-muted-foreground">{converted.summary}</pre>}
+          {converted && (
+            <p className="rounded-md border p-2 text-[11px] text-muted-foreground">
+              Stored on the server under <code className="font-mono">{converted.root}</code> (disposable job
+              tmpdir — vanishes on restart). Use <span className="font-medium">Download .zip</span> above for
+              the durable copy (converted tree + mapping + summary), or open a file for per-file Download.
+            </p>
+          )}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
             <ScrollArea className="max-h-[480px]">
               {busy && !converted ? (

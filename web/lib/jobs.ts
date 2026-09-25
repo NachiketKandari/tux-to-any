@@ -17,8 +17,14 @@ export interface ConvertedTree {
   root: string;
   files: string[];
   summary: string;
-  /** Whether the run used the LLM seam (false = deterministic -no-llm). */
+  /** Whether the run was requested with the LLM seam (false = deterministic -no-llm). */
   llm?: boolean;
+  /** Whether the run actually made LLM calls (false = deterministic fallback). */
+  llmEffective?: boolean;
+  /** Human-readable note explaining the effective mode (fallback reason, call count). */
+  llmNote?: string;
+  /** LLM calls reported on the CLI stdout tail ("N llm calls"), when parsed. */
+  llmCalls?: number;
 }
 
 export interface FlowCoverage {
@@ -79,8 +85,12 @@ export interface Job {
   scenarios?: ScenarioBundle;
   drafts?: DraftFile[];
   mappingPath?: string;
-  /** Whether the mapping draft used the LLM naming seam. */
+  /** Whether the mapping draft was requested with the LLM naming seam. */
   mappingLLM?: boolean;
+  /** Whether the draft actually carries AI-suggested names (false = deterministic fallback). */
+  mappingLLMEffective?: boolean;
+  /** Human-readable note explaining the effective mapping mode. */
+  mappingLLMNote?: string;
   converted?: ConvertedTree;
   gentestGap?: string;
   gentestFiles?: string[];

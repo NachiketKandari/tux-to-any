@@ -49,6 +49,28 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     job.drafts = drafts;
     job.mappingPath = drafts[0].path;
     job.mappingLLM = useLLM && target !== "cs";
+    // Effective mode: the draft text is the ground truth. AI naming marks
+    // its proposals `# ai-suggested`; the deterministic picker marks
+    // `# deterministic`. An LLM-on run with zero ai-suggested lines means
+    // the seam degraded (no key resolves in the server env) — surface that
+    // instead of letting the toggle look broken.
+    const hasAi = drafts.some((d) => d.content.includes("ai-suggested"));
+    if (target === "cs") {
+      job.mappingLLMEffective = false;
+      job.mappingLLMNote = useLLM
+        ? "C# drafts are deterministic-only — the LLM toggle is a no-op for C#."
+        : "deterministic by design (C# drafts never call the LLM).";
+    } else if (!useLLM) {
+      job.mappingLLMEffective = false;
+      job.mappingLLMNote = "deterministic by request (LLM off) — no key needed.";
+    } else if (hasAi) {
+      job.mappingLLMEffective = true;
+      job.mappingLLMNote = "AI naming applied (# ai-suggested proposals).";
+    } else {
+      job.mappingLLMEffective = false;
+      job.mappingLLMNote =
+        "LLM requested but the draft is fully deterministic — no API key resolves in the server env (VLLM_API_KEY / OPENROUTER_API_KEY), so the seam fell back. Set a key, restart the web server, and re-draft. See Logs.";
+    }
     job.status = "done";
     await recordMetric({ kind: "discover", job: job.name, target, files: drafts.length });
   } catch (e) {
@@ -56,5 +78,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     job.error = e instanceof Error ? e.message : "discover failed";
   }
   setJob(job);
-  return NextResponse.json({ status: job.status, error: job.error, drafts: job.drafts, mappingPath: job.mappingPath });
+  return NextResponse.json({
+    status: job.status,
+    error: job.error,
+    drafts: job.drafts,
+    mappingPath: job.mappingPath,
+    mappingLLM: job.mappingLLM,
+    mappingLLMEffective: job.mappingLLMEffective,
+    mappingLLMNote: job.mappingLLMNote,
+  });
 }

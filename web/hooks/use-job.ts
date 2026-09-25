@@ -16,7 +16,9 @@ export interface JobState {
   drafts?: { path: string; content: string }[];
   mappingPath?: string;
   mappingLLM?: boolean;
-  converted?: { target: string; root: string; files: string[]; summary: string; llm?: boolean };
+  mappingLLMEffective?: boolean;
+  mappingLLMNote?: string;
+  converted?: { target: string; root: string; files: string[]; summary: string; llm?: boolean; llmEffective?: boolean; llmNote?: string; llmCalls?: number };
   gentestGap?: string;
   gentestFiles?: string[];
 }

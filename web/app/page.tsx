@@ -50,6 +50,8 @@ import {
   readConvertedFile,
   saveConvertedFile,
   fetchDbStatus,
+  fetchLLMStatus,
+  type LLMStatus,
 } from "@/lib/api-client";
 import type { ConvertTarget } from "@/lib/targets";
 
@@ -75,6 +77,7 @@ export default function Home() {
   const [useLLMMapping, setUseLLMMapping] = React.useState(false);
   const [useLLMConvert, setUseLLMConvert] = React.useState(false);
   const [dbStatus, setDbStatus] = React.useState<{ enabled: boolean; driver: string; source: string } | null>(null);
+  const [llmStatus, setLlmStatus] = React.useState<LLMStatus | null>(null);
   const [selFile, setSelFile] = React.useState<string | null>(null);
   const [fileContent, setFileContent] = React.useState("");
   const [loadingFile, setLoadingFile] = React.useState(false);
@@ -90,6 +93,7 @@ export default function Home() {
 
   React.useEffect(() => {
     fetchDbStatus().then(setDbStatus).catch(() => setDbStatus(null));
+    fetchLLMStatus().then(setLlmStatus).catch(() => setLlmStatus(null));
   }, []);
 
   async function run<T>(fn: () => Promise<T>): Promise<T | null> {
@@ -233,6 +237,7 @@ export default function Home() {
         llmMapping={useLLMMapping}
         llmConvert={useLLMConvert}
         dbEnabled={dbStatus?.enabled ?? false}
+        llmKey={llmStatus ? llmStatus.anyKey : null}
       />
 
       <main className="container max-w-7xl py-6">
@@ -413,6 +418,9 @@ export default function Home() {
                 onSave={handleSaveMapping}
                 useLLM={useLLMMapping}
                 onUseLLM={setUseLLMMapping}
+                llmEffective={job.mappingLLMEffective}
+                llmNote={job.mappingLLMNote}
+                noKey={llmStatus ? !llmStatus.anyKey : false}
               />
             </TabsContent>
 
@@ -435,6 +443,8 @@ export default function Home() {
                 loadingFile={loadingFile}
                 provenance={selProvenance}
                 onGoTrace={() => setTab("trace")}
+                jobId={job.id}
+                noKey={llmStatus ? !llmStatus.anyKey : false}
               />
             </TabsContent>
 
@@ -495,8 +505,11 @@ export default function Home() {
         <footer className="mt-8 border-t pt-4 text-[11px] text-muted-foreground">
           Mapping-first flow — <span className="font-medium">Step 1</span> drafts & saves the mapping,{" "}
           <span className="font-medium">Step 2</span> converts. Each step has its own LLM toggle (off ={" "}
-          <code className="font-mono">-no-llm</code>, no keys needed; on = LLM seam when a key resolves,
-          deterministic fallback otherwise). Oracle access is optional — offline unless a DSN is set
+          <code className="font-mono">-no-llm</code>, no keys needed; on = LLM seam when a key resolves
+          (<code className="font-mono">VLLM_API_KEY</code> / <code className="font-mono">OPENROUTER_API_KEY</code> in
+          the server env), deterministic fallback otherwise — the panels report requested vs effective). Converted
+          trees live in disposable server tmpdirs — use <span className="font-medium">Download .zip</span> for the
+          durable copy. Oracle access is optional — offline unless a DSN is set
           (<code className="font-mono">tuxconv dbcheck</code>). Jobs are disposable tmpdirs; re-upload
           after a restart. Master totals accumulate in{" "}
           <code className="font-mono">conversion_logs/web-metrics.jsonl</code>.

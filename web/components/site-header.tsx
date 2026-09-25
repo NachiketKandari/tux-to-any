@@ -10,12 +10,15 @@ export function SiteHeader({
   llmMapping,
   llmConvert,
   dbEnabled,
+  llmKey,
 }: {
   jobName?: string;
   status?: string;
   llmMapping?: boolean;
   llmConvert?: boolean;
   dbEnabled?: boolean;
+  /** Null = unknown yet; true = a key resolves; false = LLM-on will fall back. */
+  llmKey?: boolean | null;
 }) {
   return (
     <header className="sticky top-0 z-40 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -44,6 +47,18 @@ export function SiteHeader({
           <Badge variant="outline" title="Step 2 convert LLM seam">
             convert LLM {llmConvert ? "on" : "off"}
           </Badge>
+          {llmKey != null && (
+            <Badge
+              variant={llmKey ? "default" : "secondary"}
+              title={
+                llmKey
+                  ? "An LLM API key resolves in the server env — LLM-on runs reach the model"
+                  : "No VLLM_API_KEY / OPENROUTER_API_KEY in the server env — LLM-on runs fall back to deterministic output"
+              }
+            >
+              llm key {llmKey ? "ok" : "missing"}
+            </Badge>
+          )}
           <Badge variant={dbEnabled ? "default" : "secondary"} title="Oracle access (internal/db) — offline unless a DSN is set">
             db {dbEnabled ? "on" : "off"}
           </Badge>

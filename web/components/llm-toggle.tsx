@@ -11,12 +11,15 @@ export function LLMToggle({
   disabled,
   id,
   hint,
+  noKey,
 }: {
   value: boolean;
   onChange: (v: boolean) => void;
   disabled?: boolean;
   id: string;
   hint?: string;
+  /** True when the server reports no LLM key — LLM-on will fall back. */
+  noKey?: boolean;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -41,6 +44,11 @@ export function LLMToggle({
         <Badge variant="secondary">AI seam — falls back to deterministic when no key resolves</Badge>
       ) : (
         <Badge variant="outline">deterministic — no key needed</Badge>
+      )}
+      {value && noKey && (
+        <Badge variant="outline" title="The web server reports no VLLM_API_KEY / OPENROUTER_API_KEY — this run will fall back to deterministic output">
+          no key — expect fallback
+        </Badge>
       )}
       {hint && <span className="text-[11px] text-muted-foreground">{hint}</span>}
     </div>

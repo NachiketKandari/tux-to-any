@@ -24,6 +24,9 @@ export function MappingEditor({
   onSave,
   useLLM,
   onUseLLM,
+  llmEffective,
+  llmNote,
+  noKey,
 }: {
   drafts: { path: string; content: string }[];
   busy: boolean;
@@ -31,6 +34,12 @@ export function MappingEditor({
   onSave: (path: string, content: string) => void;
   useLLM: boolean;
   onUseLLM: (v: boolean) => void;
+  /** Whether the last draft actually carries AI-suggested names (backend ground truth). */
+  llmEffective?: boolean | null;
+  /** Backend note explaining the effective mode (fallback reason). */
+  llmNote?: string | null;
+  /** Server reports no LLM key — LLM-on will fall back. */
+  noKey?: boolean;
 }) {
   const [idx, setIdx] = React.useState(0);
   const [text, setText] = React.useState("");
@@ -46,6 +55,15 @@ export function MappingEditor({
 
   const current = drafts[idx];
   const lines = React.useMemo(() => (text ? text.split("\n").length : 0), [text]);
+  // Origin census — the answer to "why does it say deterministic?": count
+  // the advisory-origin markers in the visible draft.
+  const originCounts = React.useMemo(() => {
+    if (!text) return { ai: 0, det: 0 };
+    return {
+      ai: (text.match(/ai-suggested/g) ?? []).length,
+      det: (text.match(/# deterministic/g) ?? []).length,
+    };
+  }, [text]);
 
   function save() {
     if (current && !busy) {
@@ -84,8 +102,21 @@ export function MappingEditor({
           value={useLLM}
           onChange={onUseLLM}
           disabled={busy}
-          hint="Go naming only — off works with no key"
+          hint="Go naming only — off works with no key; on needs VLLM_API_KEY / OPENROUTER_API_KEY in the server env"
+          noKey={noKey}
         />
+        {llmNote && drafts.length > 0 && (
+          <p
+            className={
+              llmEffective
+                ? "rounded-md border border-green-500/30 bg-green-500/10 p-2 text-xs"
+                : "rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs"
+            }
+            role="status"
+          >
+            {useLLM ? "LLM requested" : "LLM off"} · effective: {llmEffective ? "AI" : "deterministic"} — {llmNote}
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="secondary" disabled={busy} onClick={() => onDraft("go")}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
@@ -112,6 +143,8 @@ export function MappingEditor({
           {current && (
             <span className="text-[11px] tabular-nums text-muted-foreground">
               {lines} lines · {text.length} chars
+              {originCounts.ai + originCounts.det > 0 &&
+                ` · ${originCounts.ai} ai-suggested · ${originCounts.det} deterministic`}
             </span>
           )}
           <span className="ml-auto flex gap-1.5">
