@@ -1,9 +1,11 @@
 # .tuxgo.yaml — tuxgo run configuration (PRD F7, R1).
 #
 # Discovery: every command looks for ./.tuxgo.yaml in the working directory;
-# the -config <path> flag overrides it; with neither, the stock defaults
-# (internal/config Default()) apply — the filename is only the default-lookup
-# convention, any path works via -config. Unknown keys are load errors, and
+# the -config <path> flag overrides it; $TUXGO_CONFIG (the web viewer's
+# server-level pointer — job tmpdirs carry no yaml) is the next fallback;
+# with none of those, the stock defaults (internal/config Default()) apply —
+# the filename is only the default-lookup convention, any path works via
+# -config. Unknown keys are load errors, and
 # relative paths resolve against the working directory (not this file).
 # API keys are environment-variable NAMES only — never literals (R6); a
 # literal apiKey is allowed in the gitignored working copy as the local-dev

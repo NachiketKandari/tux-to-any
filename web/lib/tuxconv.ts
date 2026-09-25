@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { withServerConfig } from "@/lib/server-config";
 
 // Repo root = parent of web/. tuxconv runs with cwd=job dir so every
 // conversion_logs/ artifact stays inside the disposable job directory.
@@ -26,10 +27,14 @@ function trim(s: string): string {
 
 // runTux spawns the tuxconv CLI inside dir, always routing logs under
 // dir/logs via the global -log-dir flag. -no-llm is appended by callers
-// that want deterministic-only runs.
+// that want deterministic-only runs. When TUXGO_CONFIG points at a server
+// yaml, its -config is spliced after the subcommand (callers may still pass
+// their own -config — explicit wins) so disposable job tmpdirs share the
+// CLI's yaml keys instead of the stock defaults.
 export function runTux(dir: string, args: string[], log: (line: string) => void): Promise<RunResult> {
   const { cmd, preArgs } = tuxBinary();
-  const full = [...preArgs, "-log-dir", join(dir, "logs"), ...args];
+  const withCfg = withServerConfig(args);
+  const full = [...preArgs, "-log-dir", join(dir, "logs"), ...withCfg];
   log(`$ ${cmd} ${full.join(" ")}`);
   return new Promise((resolve) => {
     const child = spawn(cmd, full, { cwd: dir, timeout: 5 * 60 * 1000 });

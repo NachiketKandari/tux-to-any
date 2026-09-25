@@ -19,6 +19,13 @@ import (
 
 const defaultConfigFile = ".tuxgo.yaml"
 
+// configEnvVar names the server-level config pointer: when no -config flag
+// and no ./.tuxgo.yaml resolve, the file at this path supplies the run
+// configuration (models[].apiKey / database.dsn literals included). The web
+// viewer sets it once for the server process; every tuxconv call the viewer
+// spawns then shares the CLI's yaml keys instead of the stock defaults.
+const configEnvVar = "TUXGO_CONFIG"
+
 // runExtract implements `tuxgo extract <file|dir>` — the Phase 2 IR
 // extraction + marking flow (deterministic, zero LLM calls). The config is
 // loaded and its model profile routed so every run exercises the same
@@ -96,12 +103,23 @@ func irOptions(cfg *config.Config, forceFragment bool) ir.Options {
 }
 
 // loadRunConfig resolves the run configuration: explicit -config path, else
-// ./.tuxgo.yaml when present, else the stock defaults.
+// ./.tuxgo.yaml when present in the working directory, else the file named
+// by $TUXGO_CONFIG (the server-level config: the web viewer runs tuxconv
+// inside disposable job tmpdirs that carry no .tuxgo.yaml, so the operator
+// points TUXGO_CONFIG at one yaml whose models[].apiKey / database.dsn
+// literals the browser runs then share with the CLI), else the stock
+// defaults. A TUXGO_CONFIG path that names a missing file is a loud error —
+// a typo'd pointer must never silently run keyless.
 func loadRunConfig(explicit string) (*config.Config, string, error) {
 	path := explicit
 	if path == "" {
 		if _, err := os.Stat(defaultConfigFile); err == nil {
 			path = defaultConfigFile
+		}
+	}
+	if path == "" {
+		if env := strings.TrimSpace(os.Getenv(configEnvVar)); env != "" {
+			path = env
 		}
 	}
 	if path == "" {

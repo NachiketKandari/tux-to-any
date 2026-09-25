@@ -19,6 +19,9 @@ RUN npm run build
 # ---- Runtime: single process, no dev deps ----
 FROM node:20-alpine
 WORKDIR /app
+# TUXGO_CONFIG is unset here by default (stock defaults + container env).
+# To share yaml keys with browser runs, mount a gitignored yaml and set it:
+#   docker run -p 127.0.0.1:3000:3000 -v $PWD/.tuxgo.yaml:/cfg.yaml:ro -e TUXGO_CONFIG=/cfg.yaml tux-web
 ENV NODE_ENV=production TUXCONV_BIN=/app/bin/tuxconv NEXT_TELEMETRY_DISABLED=1
 COPY --from=gobuild /tuxconv /app/bin/tuxconv
 COPY --from=nodebuild /web/.next/standalone ./

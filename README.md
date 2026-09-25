@@ -211,20 +211,28 @@ disposable server tmpdirs (`$TMPDIR/tux-web-*`: `input/`, `ir.json`,
 `tux-to-any-summary.txt`).
 
 LLM toggles (one per step) need no keys to *use*: off is `-no-llm`
-deterministic; on runs the seam **when a key resolves**
-(`VLLM_API_KEY` / `OPENROUTER_API_KEY` in the *server* env — the tmpdirs
-carry no `.tuxgo.yaml`, so stock-profile defaults apply) and falls back
-deterministically otherwise, never hard-failing. The panels report
+deterministic; on runs the seam **when a key resolves** and falls back
+deterministically otherwise, never hard-failing. Key resolution is the same
+in both surfaces — env var first, yaml literal fallback (`models[].apiKey`):
+the CLI reads `./.tuxgo.yaml` (or `-config <path>`), while the viewer's
+disposable tmpdirs carry no yaml, so the server takes one pointer for all
+browser runs — `TUXGO_CONFIG=/path/to/.tuxgo.yaml` (every `tuxconv` call the
+viewer spawns gets `-config <that path>`; the CLI itself honors
+`$TUXGO_CONFIG` too when no `-config` / local yaml resolves). Without it,
+browser runs use the stock profiles (`VLLM_API_KEY` / `OPENROUTER_API_KEY`
+in the *server* env). The panels report
 **requested vs effective** (`# ai-suggested` census on drafts, `N llm
 calls` on converts, `llm key ok/missing` in the header via
 `GET /api/llm-status`) — an LLM-on run that stays fully `# deterministic`
-means no key resolves: export the key, restart the server, re-draft.
+means no key resolves: export the key (or point `TUXGO_CONFIG` at a yaml
+with the literal), restart the server, re-draft.
 
 ## Run configuration (.tuxgo.yaml)
 
 Every command resolves the run config the same way
 (`cmd/tuxconv/extract.go:100`): `-config <path>` wins; else `./.tuxgo.yaml`
-when present in the working directory; else the stock defaults
+when present in the working directory; else the file named by `$TUXGO_CONFIG`
+(the web viewer's server-level pointer); else the stock defaults
 (`internal/config.Default()`). The filename is only that default-lookup
 convention — any path works via `-config`. Unknown keys fail at load (strict
 decoding), and relative paths resolve against the working directory. Start

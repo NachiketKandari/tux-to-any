@@ -106,16 +106,28 @@ Step 1 (mapping) and Step 2 (convert) each have an LLM toggle:
   hard-fails for lack of one.
 
 Why LLM-on can still say "deterministic": the web server runs `tuxconv`
-inside a disposable job tmpdir with **no `.tuxgo.yaml`**, so the stock
-defaults apply — profile `onprem-vllm` (key `$VLLM_API_KEY`), alternative
-`local-dev-openrouter` (key `$OPENROUTER_API_KEY`). Unless the *server*
-process was started with one of those set, `resolveLLMClient` returns nil
-and the seam degrades. The fix is env, not clicks:
+inside a disposable job tmpdir with **no `.tuxgo.yaml`** of its own, so
+without a server config the stock defaults apply — profile `onprem-vllm`
+(key `$VLLM_API_KEY`), alternative `local-dev-openrouter` (key
+`$OPENROUTER_API_KEY`). Unless the *server* process was started with one of
+those set, `resolveLLMClient` returns nil and the seam degrades. Two fixes
+(env-first, same as the CLI — pick one):
 
 ```sh
 export VLLM_API_KEY=...        # or OPENROUTER_API_KEY=...
 # restart the web server so Next picks it up, then re-draft / re-convert
 ```
+
+```sh
+# ...or share the CLI's yaml (models[].apiKey literal included):
+export TUXGO_CONFIG=$PWD/.tuxgo.yaml   # gitignored working copy only, never commit
+# restart the web server; every tuxconv call it spawns gets -config <that path>
+```
+
+With `TUXGO_CONFIG` set, browser runs resolve keys exactly like the CLI
+(env var wins, yaml literal is the fallback), and `GET /api/llm-status` /
+`GET /api/db-status` report yaml-aware presence (booleans only, never
+values). Without it, only server-env keys count.
 
 The UI reports **requested vs effective** so the fallback never looks like
 a broken toggle:
@@ -202,10 +214,11 @@ web/
     api-client.ts         # single home for browser → API calls
     jobs.ts               # Job / FlowReport / ScenarioBundle types + store
     lineage.ts            # evidence-based IR→file matcher (exact/derived/related)
-    llm-status.ts         # server-env LLM key presence (no values)
+    llm-status.ts         # server-env + TUXGO_CONFIG yaml key presence (no values)
     targets.ts            # Tux→Go/Python/C# catalog
     ir.ts                 # case-tolerant IR accessors
-    tuxconv.ts            # CLI spawn helper
+    server-config.ts      # TUXGO_CONFIG resolution + -config injection + yaml snapshot
+    tuxconv.ts            # CLI spawn helper (injects server -config)
 ```
 
 Every button runs something real: upload, sample, draft, build scenarios,
