@@ -38,6 +38,7 @@ func runDiscover(ctx context.Context, args []string) error {
 	target := fs.String("target", "", "Draft dialect: go (default) or cs — the .NET Core mapping schema")
 	listAxes := fs.Bool("list-axes", false, "Print each entry's ranked dispatch-axis registry (the scenarioFilter variables) — read-only, no drafts/artifacts")
 	filterExpr := fs.String("filter", "", "Preview a scenarioFilter expression (merged key, matched assignments, kept blocks, queries) — read-only, no drafts/artifacts")
+	filterJSON := fs.String("filter-json", "", "Write the scenarioFilter preview as JSON to this path (structured + flattened source for the web playground) — read-only, no drafts/artifacts")
 
 	flagArgs, positional := reorderArgs(args)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -66,11 +67,14 @@ func runDiscover(ctx context.Context, args []string) error {
 
 	// Read-only preview modes (scenario-filter plan §5): the axes registry
 	// and the filter fast loop never need a draft, an artifact, or the LLM.
-	if *listAxes || *filterExpr != "" {
+	if *listAxes || *filterExpr != "" || *filterJSON != "" {
 		if *target == "cs" {
 			return fmt.Errorf("-list-axes/-filter preview the Go flow tree — drop -target cs")
 		}
-		return discoverPreview(path, cfg, *listAxes, *filterExpr)
+		if *filterJSON != "" && *filterExpr == "" {
+			return fmt.Errorf("-filter-json needs -filter \"<expr>\"")
+		}
+		return discoverPreview(path, cfg, *listAxes, *filterExpr, *filterJSON)
 	}
 
 	if *target == "cs" {

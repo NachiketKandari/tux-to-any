@@ -215,6 +215,8 @@ Available Commands:
                -list-axes prints the entry's dispatch-axis registry;
                -filter "<expr>" previews a scenarioFilter fold (read-only,
                no drafts/artifacts)
+               -filter-json <path> writes the same preview as JSON with the
+               flattened source (web playground; needs -filter)
   ainames      AI naming pass over an edited mapping yaml: names ONLY the surviving
                endpoints (name/route + dbMethods pins) and patches the yaml in
                place, preserving all comments and user edits. Skips entries

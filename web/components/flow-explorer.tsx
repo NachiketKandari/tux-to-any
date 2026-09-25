@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { CodeView } from "@/components/files";
 import type { FlowReport } from "@/lib/jobs";
 
 export function FlowExplorer({ flowText, flowReport }: { flowText?: string; flowReport?: FlowReport }) {
@@ -88,11 +89,11 @@ export function FlowExplorer({ flowText, flowReport }: { flowText?: string; flow
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">Raw flow output</CardTitle>
-          <CardDescription>Verbatim CLI text — the visual cards above are derived from flow.json.</CardDescription>
+          <CardDescription>Verbatim CLI text — the visual cards above are derived from flow.json. Wraps by default.</CardDescription>
         </CardHeader>
         <CardContent>
           <ScrollArea className="max-h-[320px]">
-            <pre className="whitespace-pre-wrap p-3 font-mono text-xs">{flowText ?? "(no flow output)"}</pre>
+            <CodeView content={flowText ?? "(no flow output)"} path="flow.txt" />
           </ScrollArea>
         </CardContent>
       </Card>

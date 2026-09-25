@@ -105,7 +105,15 @@ export function LineageExplorer({
   const stats = React.useMemo(() => {
     const withTargets = nodes.filter((n) => n.targets.length > 0).length;
     const exact = nodes.reduce((a, n) => a + n.targets.filter((t) => t.confidence === "exact").length, 0);
-    return { parts: nodes.length, withTargets, exact, files: lineage?.files.length ?? 0 };
+    const verified = nodes.reduce((a, n) => a + n.targets.filter((t) => t.verified).length, 0);
+    return {
+      parts: nodes.length,
+      withTargets,
+      exact,
+      verified,
+      files: lineage?.files.length ?? 0,
+      ledgerLinks: lineage?.ledgerLinks ?? 0,
+    };
   }, [nodes, lineage]);
 
   const counts = React.useMemo(() => {
@@ -169,8 +177,9 @@ export function LineageExplorer({
               <Waypoints className="h-4 w-4" />
               Trace — this part became that part
             </CardTitle>
-            <Badge variant="secondary" className="tabular-nums">
-              {stats.withTargets}/{stats.parts} linked · {stats.exact} exact · {stats.files} files
+            <Badge variant="secondary" className="tabular-nums" title={stats.verified > 0 ? `${stats.verified} ledger-verified links (backend ground truth)` : "No ledger links — heuristic token matching only"}>
+              {stats.withTargets}/{stats.parts} linked · {stats.exact} exact
+              {stats.verified > 0 && <> · {stats.verified} verified</>} · {stats.files} files
             </Badge>
             <div className="relative ml-auto w-full sm:w-56">
               <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -185,7 +194,9 @@ export function LineageExplorer({
           </div>
           <CardDescription>
             Pick a source part on the left — the right shows every generated file it landed in, with the matching
-            evidence. Click a file to open it in the Convert tab.
+            evidence. <span className="font-medium text-foreground">Verified</span> links come from the backend
+            ledger (source lines → file); the rest are heuristic token matches. Click a file to open it in the
+            Convert tab. Evidence snippets wrap by default.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-1.5">
@@ -349,6 +360,11 @@ export function LineageExplorer({
                         <Badge variant={confVariant(t.confidence)} className="text-[10px]">
                           {t.confidence}
                         </Badge>
+                        {t.verified && (
+                          <Badge variant="default" className="text-[10px]" title="Backend ledger ground truth (source lines → file)">
+                            verified
+                          </Badge>
+                        )}
                         <code className="min-w-0 flex-1 truncate font-mono text-[11px] font-semibold" title={t.file}>
                           {t.file}
                         </code>

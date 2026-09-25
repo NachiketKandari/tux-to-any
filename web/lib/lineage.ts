@@ -6,11 +6,21 @@
 // confidence level, so the UI can show *why* a file exists instead of
 // guessing.
 //
+// Two evidence layers, strongest first:
+//
+//   ledger   — backend ground truth from conversion_logs/ledger/*.ledger.json
+//              (source lines → generated file via the plan/ledger Map).
+//              Links carry verified:true and confidence exact. The server
+//              route loads these; the browser never parses them.
+//   heuristic — token matching (tables, FML fields, tpcall services) against
+//              file contents for everything the ledger does not cover
+//              (Python/C# targets, scaffolding, unmapped arms).
+//
 // Source facts come from the IR snapshot (queries, conditions, fml_ops,
 // tpcalls, functions). Targets are converted file contents read from the job
 // tmpdir. Matching is deliberately conservative:
 //   exact   — a source literal (table, FML field, tpcall service) appears
-//             verbatim in the file.
+//             verbatim in the file, or the ledger Map names the file.
 //   derived — a normalized form appears (USER_ID → user_id / UserId).
 //   related — transitive ownership (a condition owns q1, q1 lands in db/…,
 //             so the condition is related to db/…).
@@ -25,6 +35,8 @@ export interface LineageTarget {
   confidence: Confidence;
   reason: string;
   snippet?: string;
+  /** True when the link comes from the backend ledger Map (source lines → file), not token matching. */
+  verified?: boolean;
 }
 
 export interface LineageNode {
@@ -42,11 +54,59 @@ export interface LineageResult {
   files: string[];
   unmappedFiles: string[];
   generatedAt: string;
+  /** Ledger Map entries consumed (backend ground truth). 0 = heuristic-only (Python/C#, pre-convert). */
+  ledgerLinks?: number;
+  /** Ledger files read (audit + live ledger dir). */
+  ledgerFiles?: number;
 }
 
 export interface ConvertibleFile {
   path: string;
   content: string;
+}
+
+/** One backend ledger Map link: "SVC_X.pc :: Method (L61-66)" → generated file. */
+export interface LedgerMap {
+  source: string;
+  target: string;
+  name: string;
+  start: number;
+  end: number;
+}
+
+/** Parse a ledger Map source ("FILE :: Name (L61-66)" or "FILE :: Name"). */
+export function parseLedgerSource(source: string): { name: string; start: number; end: number } | null {
+  const m = source.match(/::\s*(.+?)\s*(?:\(L(\d+)(?:-(\d+))?\))?\s*$/);
+  if (!m) return null;
+  const name = (m[1] ?? "").trim();
+  if (!name) return null;
+  const start = m[2] ? Number(m[2]) : 0;
+  const end = m[3] ? Number(m[3]) : start;
+  return { name, start: Number.isFinite(start) ? start : 0, end: Number.isFinite(end) ? end : 0 };
+}
+
+function spansOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  if (!aStart || !bStart) return false;
+  const aE = aEnd || aStart;
+  const bE = bEnd || bStart;
+  return aStart <= bE && bStart <= aE;
+}
+
+/** Resolve a ledger target ("svc/db/file.go") against converted files (suffix-tolerant). */
+function resolveLedgerFile(target: string, files: IndexedFile[]): IndexedFile | null {
+  const t = target.replace(/\\/g, "/");
+  for (const f of files) {
+    if (f.path === t) return f;
+  }
+  for (const f of files) {
+    if (f.path.endsWith("/" + t) || t.endsWith("/" + f.path)) return f;
+  }
+  // Service-prefix tolerant: ledger "svc/db/x.go" vs converted "x.go" under a service root.
+  const base = t.split("/").slice(-2).join("/");
+  for (const f of files) {
+    if (f.path.endsWith(base)) return f;
+  }
+  return null;
 }
 
 export function layerOf(path: string): string {
@@ -173,7 +233,11 @@ function strArr(v: unknown): string[] {
   return [];
 }
 
-export function buildLineage(ir: Record<string, unknown> | undefined, files: ConvertibleFile[]): LineageResult {
+export function buildLineage(
+  ir: Record<string, unknown> | undefined,
+  files: ConvertibleFile[],
+  ledgerMaps: LedgerMap[] = []
+): LineageResult {
   const idx: IndexedFile[] = files.map((f) => ({
     path: f.path,
     layer: layerOf(f.path),
@@ -181,6 +245,39 @@ export function buildLineage(ir: Record<string, unknown> | undefined, files: Con
     lower: f.content.toLowerCase(),
   }));
   const nodes: LineageNode[] = [];
+  let ledgerLinks = 0;
+
+  // Ledger-verified targets for one source span: every Map entry whose
+  // lines overlap the span, resolved against the converted tree. The
+  // snippet anchors on the ledger method name so the evidence reads as
+  // "this unit landed here" instead of a token guess.
+  function ledgerTargetsFor(start: number, end: number, owner: string): LineageTarget[] {
+    const out: LineageTarget[] = [];
+    const seen = new Set<string>();
+    for (const m of ledgerMaps) {
+      if (!spansOverlap(start, end || start, m.start, m.end || m.start)) continue;
+      const hit = resolveLedgerFile(m.target, idx);
+      if (!hit || seen.has(hit.path)) continue;
+      seen.add(hit.path);
+      const at = wordHit(hit.lower, m.name.toLowerCase());
+      out.push({
+        file: hit.path,
+        layer: hit.layer,
+        confidence: "exact",
+        reason: `ledger: ${m.name} → ${hit.path} (${owner})`,
+        snippet: at >= 0 ? snippetAround(hit.content, at) : undefined,
+        verified: true,
+      });
+    }
+    return out.sort((a, b) => a.file.localeCompare(b.file));
+  }
+
+  function mergeVerifiedFirst(verified: LineageTarget[], heuristic: LineageTarget[]): LineageTarget[] {
+    const seen = new Set(verified.map((t) => t.file));
+    const rest = heuristic.filter((t) => !seen.has(t.file));
+    ledgerLinks += verified.length;
+    return [...verified, ...rest];
+  }
 
   const queries = asArray(ir, ["queries", "Queries", "queryUnits", "QueryUnits"]);
   const conditions = asArray(ir, ["conditions", "Conditions"]);
@@ -225,15 +322,21 @@ export function buildLineage(ir: Record<string, unknown> | undefined, files: Con
       (tok) => `table ${tok} in file`,
       (tok) => `row/bind ${tok} in file`
     );
-    queryTargets.set(id.toLowerCase(), targets);
-    queryTargets.set(id, targets);
+    // Ledger first: the backend Map joins on source lines (q1 L61-66 →
+    // GetMinAccounts → db/…). Heuristic stays as fallback.
+    const qStart = Number(q.start_line ?? q.startLine ?? 0) || 0;
+    const qEnd = Number(q.end_line ?? q.endLine ?? 0) || qStart;
+    const verified = qStart ? ledgerTargetsFor(qStart, qEnd, id) : [];
+    const merged = mergeVerifiedFirst(verified, targets);
+    queryTargets.set(id.toLowerCase(), merged);
+    queryTargets.set(id, merged);
     nodes.push({
       id,
       kind: "query",
       label: `${id} · ${type}`,
       detail: short,
       meta: [sites ? `L${sites}` : "", tables.length ? tables.join(", ") : ""].filter(Boolean).join(" · "),
-      targets,
+      targets: merged,
     });
   });
 
@@ -273,7 +376,23 @@ export function buildLineage(ir: Record<string, unknown> | undefined, files: Con
       }
     }
     const rank: Record<Confidence, number> = { exact: 0, derived: 1, related: 2 };
-    rel.sort((a, b) => rank[a.confidence] - rank[b.confidence] || a.file.localeCompare(b.file));
+    // Ledger-verified arm links first (c1 L51-73 → GetAccId → controller/…),
+    // then the transitive query/FML ownership as fallback. Verified links
+    // keep confidence exact so the UI can badge them.
+    const verifiedArm = start ? ledgerTargetsFor(start, end || start, id) : [];
+    for (const t of verifiedArm) {
+      if (!seen.has(t.file)) {
+        seen.add(t.file);
+        rel.push(t);
+      }
+    }
+    rel.sort((a, b) => {
+      const av = a.verified ? 0 : 1;
+      const bv = b.verified ? 0 : 1;
+      if (av !== bv) return av - bv;
+      return rank[a.confidence] - rank[b.confidence] || a.file.localeCompare(b.file);
+    });
+    ledgerLinks += verifiedArm.length;
     nodes.push({
       id,
       kind: "condition",
@@ -338,7 +457,16 @@ export function buildLineage(ir: Record<string, unknown> | undefined, files: Con
 
   tpcalls.forEach((t, i) => {
     const svc = str(t.service ?? t.Service ?? t.name, `tpcall${i + 1}`);
-    const targets = findInFiles(idx, [svc], [norm(svc)], () => `tpcall ${svc} recorded`, (tok) => `tpcall ${svc} → ${tok}`);
+    const heuristic = findInFiles(idx, [svc], [norm(svc)], () => `tpcall ${svc} recorded`, (tok) => `tpcall ${svc} → ${tok}`);
+    // Ledger tpcall placeholders (L79-83 → tpcall_placeholders.go) verify the site.
+    const line = Number(
+      (t as Record<string, unknown>).start_line ??
+        (t as Record<string, unknown>).startLine ??
+        (t as Record<string, unknown>).line ??
+        0
+    );
+    const verified = line ? ledgerTargetsFor(line, line, `tpcall:${svc}`) : [];
+    const targets = mergeVerifiedFirst(verified, heuristic);
     nodes.push({
       id: `tpcall:${svc}`,
       kind: "tpcall",
@@ -387,18 +515,26 @@ export function buildLineage(ir: Record<string, unknown> | undefined, files: Con
     files: idx.map((f) => f.path),
     unmappedFiles: idx.map((f) => f.path).filter((p) => !mapped.has(p)),
     generatedAt: new Date().toISOString(),
+    ledgerLinks,
+    ledgerFiles: ledgerMaps.length ? new Set(ledgerMaps.map((m) => m.target)).size : 0,
   };
 }
 
 /** Targets pointing at one file — the "why does this file exist" banner. */
-export function provenanceForFile(res: LineageResult | null, file: string): { node: string; kind: SourceKind; reason: string; confidence: Confidence }[] {
+export function provenanceForFile(
+  res: LineageResult | null,
+  file: string
+): { node: string; kind: SourceKind; reason: string; confidence: Confidence; verified?: boolean }[] {
   if (!res) return [];
-  const out: { node: string; kind: SourceKind; reason: string; confidence: Confidence }[] = [];
+  const out: { node: string; kind: SourceKind; reason: string; confidence: Confidence; verified?: boolean }[] = [];
   for (const n of res.nodes) {
     for (const t of n.targets) {
-      if (t.file === file) out.push({ node: `${n.id} · ${n.label}`, kind: n.kind, reason: t.reason, confidence: t.confidence });
+      if (t.file === file)
+        out.push({ node: `${n.id} · ${n.label}`, kind: n.kind, reason: t.reason, confidence: t.confidence, verified: t.verified });
     }
   }
   const rank: Record<Confidence, number> = { exact: 0, derived: 1, related: 2 };
-  return out.sort((a, b) => rank[a.confidence] - rank[b.confidence]).slice(0, 8);
+  return out
+    .sort((a, b) => (a.verified === b.verified ? rank[a.confidence] - rank[b.confidence] : a.verified ? -1 : 1))
+    .slice(0, 8);
 }

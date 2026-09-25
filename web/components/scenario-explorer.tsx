@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CodeView } from "@/components/files";
 import type { ScenarioBundle } from "@/lib/jobs";
-import { previewFilter } from "@/lib/api-client";
+import { previewFilter, type FilterPreview } from "@/lib/api-client";
 
 function parseScenarioName(name: string): { key: string; value: string } {
   // SVC_X.trn_cd_A.pc → key "trn_cd=A"
@@ -19,6 +19,166 @@ function parseScenarioName(name: string): { key: string; value: string } {
   const us = rest.lastIndexOf("_");
   if (us > 0) return { key: `${rest.slice(0, us)}=${rest.slice(us + 1)}`, value: rest.slice(us + 1) };
   return { key: rest, value: rest };
+}
+
+function formatBlocks(blocks?: [number, number][]): string {
+  if (!blocks || blocks.length === 0) return "none";
+  return blocks.map(([a, b]) => `${a}-${b}`).join(", ");
+}
+
+function Playground({ jobId }: { jobId: string }) {
+  const [expr, setExpr] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [raw, setRaw] = React.useState("");
+  const [previews, setPreviews] = React.useState<FilterPreview[]>([]);
+  const [selEntry, setSelEntry] = React.useState<string | null>(null);
+  const [err, setErr] = React.useState("");
+
+  const preview: FilterPreview | undefined = React.useMemo(() => {
+    if (previews.length === 0) return undefined;
+    if (previews.length === 1) return previews[0];
+    return previews.find((p) => p.entry === selEntry) ?? previews[0];
+  }, [previews, selEntry]);
+
+  React.useEffect(() => {
+    if (previews.length > 0 && !selEntry) setSelEntry(previews[0].entry);
+  }, [previews, selEntry]);
+
+  async function run() {
+    const text = expr.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const d = await previewFilter(jobId, text);
+      setRaw(d.output ?? "");
+      const list = d.previews ?? (d.preview ? [d.preview] : []);
+      setPreviews(list);
+      setSelEntry(list[0]?.entry ?? null);
+      if (list.length === 0 && (d.code ?? 0) !== 0) {
+        setErr(d.output || "preview failed — see Logs");
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "preview failed");
+      setPreviews([]);
+      setRaw("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <FlaskConical className="h-4 w-4" />
+          scenarioFilter playground
+        </CardTitle>
+        <CardDescription>
+          Fold one endpoint over several arms, e.g. <code className="font-mono">c_flag == &apos;F&apos; || c_flag == &apos;I&apos;</code>.
+          Backend fold — read-only preview with flattened source, no artifacts written.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <div className="flex gap-2">
+          <Input
+            value={expr}
+            onChange={(e) => setExpr(e.target.value)}
+            placeholder="c_flag == 'F' || c_flag == 'I'"
+            className="font-mono text-xs"
+            aria-label="scenarioFilter expression"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") run();
+            }}
+          />
+          <Button size="sm" disabled={busy || !expr.trim()} onClick={run}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+            Preview
+          </Button>
+        </div>
+        {err && (
+          <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs" role="alert">
+            {err}
+          </p>
+        )}
+        {previews.length > 1 && (
+          <div className="flex flex-wrap gap-1.5">
+            {previews.map((p) => (
+              <Button
+                key={p.entry}
+                size="sm"
+                variant={preview?.entry === p.entry ? "default" : "outline"}
+                className="h-7 font-mono text-[11px]"
+                onClick={() => setSelEntry(p.entry)}
+              >
+                {p.entry}
+                {p.error ? " · error" : ""}
+              </Button>
+            ))}
+          </div>
+        )}
+        {preview?.error && (
+          <p className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs" role="alert">
+            {preview.entry}: {preview.error}
+          </p>
+        )}
+        {preview && !preview.error && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-1.5" aria-live="polite">
+              <Badge variant="secondary" className="font-mono text-[11px]">
+                {preview.mergedKey || preview.filter}
+              </Badge>
+              <Badge variant="outline" className="tabular-nums">
+                {(preview.matched ?? []).length} matched
+              </Badge>
+              <Badge variant="outline" className="tabular-nums">
+                {preview.blockLines ?? 0} lines · {formatBlocks(preview.blocks)}
+              </Badge>
+              <Badge variant="outline" className="tabular-nums">
+                kept {preview.kept ?? 0} · dropped {preview.dropped ?? 0}
+                {(preview.unfolded ?? 0) > 0 ? ` · unfolded ${preview.unfolded}` : ""}
+              </Badge>
+              {(preview.queries ?? []).length > 0 && (
+                <Badge variant="outline" className="font-mono text-[11px]">
+                  {(preview.queries ?? []).length} queries: {(preview.queries ?? []).join(", ")}
+                </Badge>
+              )}
+              {preview.logicOnly && <Badge variant="outline">logic-only — no FML traffic</Badge>}
+            </div>
+            {(preview.matched ?? []).length > 0 && (
+              <p className="font-mono text-[11px] text-muted-foreground">
+                matched: {(preview.matched ?? []).join(", ")}
+                {(preview.pruned ?? []).length > 0 && <> · pruned: {(preview.pruned ?? []).join(", ")}</>}
+              </p>
+            )}
+            <p className="font-mono text-[11px] text-muted-foreground">
+              reads: {(preview.reads ?? []).join(", ") || "none"} · writes: {(preview.writes ?? []).join(", ") || "none"}
+              {(preview.tx ?? []).length > 0 && <> · tx: {(preview.tx ?? []).join(", ")}</>}
+              {(preview.residue ?? []).length > 0 && <> · residue: {(preview.residue ?? []).join("; ")}</>}
+            </p>
+            {preview.flattened && (
+              <ScrollArea className="max-h-[420px]">
+                <CodeView content={preview.flattened} path={`${preview.entry}.filter.pc`} />
+              </ScrollArea>
+            )}
+            {raw && (
+              <details className="text-[11px] text-muted-foreground">
+                <summary className="cursor-pointer font-mono">console output</summary>
+                <ScrollArea className="max-h-[180px]">
+                  <CodeView content={raw} path="filter-preview.log" />
+                </ScrollArea>
+              </details>
+            )}
+          </div>
+        )}
+        {!preview && raw && !err && (
+          <ScrollArea className="max-h-[240px]">
+            <CodeView content={raw} path="filter-preview.log" />
+          </ScrollArea>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export function ScenarioExplorer({
@@ -33,47 +193,34 @@ export function ScenarioExplorer({
   onBuild: () => void;
 }) {
   const [sel, setSel] = React.useState<string | null>(null);
-  const [expr, setExpr] = React.useState("");
-  const [preview, setPreview] = React.useState("");
-  const [previewBusy, setPreviewBusy] = React.useState(false);
 
   React.useEffect(() => {
     if (bundle && bundle.artifacts.length > 0 && !sel) setSel(bundle.artifacts[0].name);
   }, [bundle, sel]);
 
-  async function runPreview() {
-    if (!expr.trim() || previewBusy) return;
-    setPreviewBusy(true);
-    try {
-      const d = await previewFilter(jobId, expr.trim());
-      setPreview(d.output);
-    } catch (e) {
-      setPreview(e instanceof Error ? e.message : "preview failed");
-    } finally {
-      setPreviewBusy(false);
-    }
-  }
-
   if (!bundle) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <GitFork className="h-4 w-4" />
-            Scenarios — one slice per dispatch value
-          </CardTitle>
-          <CardDescription>
-            The entry folds on its dispatch axis (e.g. trn_cd). Each arm becomes an isolated slice with its own
-            FML census and queries — the unit a mapping endpoint covers.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button size="sm" disabled={busy} onClick={onBuild}>
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-            Build scenarios
-          </Button>
-        </CardContent>
-      </Card>
+      <div className="space-y-3">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <GitFork className="h-4 w-4" />
+              Scenarios — one slice per dispatch value
+            </CardTitle>
+            <CardDescription>
+              The entry folds on its dispatch axis (e.g. trn_cd). Each arm becomes an isolated slice with its own
+              FML census and queries — the unit a mapping endpoint covers.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button size="sm" disabled={busy} onClick={onBuild}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+              Build scenarios
+            </Button>
+          </CardContent>
+        </Card>
+        <Playground jobId={jobId} />
+      </div>
     );
   }
 
@@ -102,8 +249,8 @@ export function ScenarioExplorer({
           {bundle.note && <CardDescription>{bundle.note}</CardDescription>}
         </CardHeader>
         <CardContent>
-          <ScrollArea className="max-h-[180px]">
-            <pre className="whitespace-pre-wrap p-3 font-mono text-[11px]">{bundle.axesText || "(no axes output)"}</pre>
+          <ScrollArea className="max-h-[220px]">
+            <CodeView content={bundle.axesText || "(no axes output)"} path="axes.txt" />
           </ScrollArea>
         </CardContent>
       </Card>
@@ -159,47 +306,14 @@ export function ScenarioExplorer({
             <CardDescription>What every slice shares, and what makes each arm unique.</CardDescription>
           </CardHeader>
           <CardContent>
-            <ScrollArea className="max-h-[240px]">
-              <pre className="whitespace-pre-wrap p-3 font-mono text-[11px]">{bundle.sharedMd}</pre>
+            <ScrollArea className="max-h-[280px]">
+              <CodeView content={bundle.sharedMd} path="shared.md" />
             </ScrollArea>
           </CardContent>
         </Card>
       )}
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <FlaskConical className="h-4 w-4" />
-            scenarioFilter playground
-          </CardTitle>
-          <CardDescription>
-            Fold one endpoint over several arms, e.g. <code className="font-mono">c_flag == &apos;F&apos; || c_flag == &apos;I&apos;</code>.
-            Read-only preview — no artifacts written.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <div className="flex gap-2">
-            <Input
-              value={expr}
-              onChange={(e) => setExpr(e.target.value)}
-              placeholder="c_flag == 'F' || c_flag == 'I'"
-              className="font-mono text-xs"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") runPreview();
-              }}
-            />
-            <Button size="sm" disabled={previewBusy || !expr.trim()} onClick={runPreview}>
-              {previewBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-              Preview
-            </Button>
-          </div>
-          {preview && (
-            <ScrollArea className="max-h-[240px]">
-              <pre className="whitespace-pre-wrap p-3 font-mono text-[11px]">{preview}</pre>
-            </ScrollArea>
-          )}
-        </CardContent>
-      </Card>
+      <Playground jobId={jobId} />
     </div>
   );
 }

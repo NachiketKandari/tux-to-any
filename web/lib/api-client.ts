@@ -36,7 +36,31 @@ export async function buildScenarios(jobId: string): Promise<JobState> {
   return fetchJob(jobId);
 }
 
-export async function previewFilter(jobId: string, expr: string): Promise<{ output: string; code: number }> {
+export interface FilterPreview {
+  entry: string;
+  filter: string;
+  mergedKey?: string;
+  matched?: string[];
+  pruned?: string[];
+  blocks?: [number, number][];
+  blockLines?: number;
+  kept?: number;
+  dropped?: number;
+  unfolded?: number;
+  reads?: string[];
+  writes?: string[];
+  queries?: string[];
+  tx?: string[];
+  residue?: string[];
+  logicOnly?: boolean;
+  flattened?: string;
+  error?: string;
+}
+
+export async function previewFilter(
+  jobId: string,
+  expr: string
+): Promise<{ output: string; code: number; filter?: string; preview?: FilterPreview; previews?: FilterPreview[] }> {
   const r = await fetch(`/api/jobs/${jobId}/filter-preview`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

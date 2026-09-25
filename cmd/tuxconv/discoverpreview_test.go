@@ -184,3 +184,44 @@ func TestReorderArgsFilterValue(t *testing.T) {
 		t.Errorf("positional = %v, want the entry file only", positional)
 	}
 }
+
+// TestReorderArgsFilterJSON pins the -filter-json value-flag contract: the
+// web playground's `discover -filter <expr> -filter-json <path>` must keep
+// both values as flag args, leaving only the entry file positional.
+func TestReorderArgsFilterJSON(t *testing.T) {
+	flagArgs, positional := reorderArgs([]string{"-filter", "c_flag == 'F'", "-filter-json", "/tmp/out.json", "svc.pc"})
+	if len(flagArgs) != 4 || flagArgs[2] != "-filter-json" || flagArgs[3] != "/tmp/out.json" {
+		t.Errorf("flagArgs = %v, want -filter + expr + -filter-json + path", flagArgs)
+	}
+	if len(positional) != 1 || positional[0] != "svc.pc" {
+		t.Errorf("positional = %v, want the entry file only", positional)
+	}
+}
+
+// TestBuildFilterPreviewJSON pins the web playground contract: the JSON
+// preview carries the same merged key/matched census as the console text
+// plus a flattened .pc the console never prints.
+func TestBuildFilterPreviewJSON(t *testing.T) {
+	tree := previewTree(t)
+	axes := tree.AxesFor([]byte(previewSrc))
+	filter, err := flow.ParseScenarioFilter("c_flag == 'F' || c_flag == 'H'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := buildFilterPreviewJSON("demo.pc", tree, axes, filter, []byte(previewSrc), &ir.File{Path: "demo.pc", Entry: "SVC_DEMO"})
+	if p.Error != "" {
+		t.Fatalf("preview error = %v", p.Error)
+	}
+	if p.MergedKey != "c_flag in {F,H}" {
+		t.Errorf("mergedKey = %q, want c_flag in {F,H}", p.MergedKey)
+	}
+	if len(p.Matched) != 2 || p.Flattened == "" {
+		t.Errorf("preview missing matched/flattened: %+v", p)
+	}
+	if !strings.Contains(p.Flattened, "/* scenario:") || !strings.Contains(p.Flattened, "/*L") {
+		t.Errorf("flattened is not a RenderScenario artifact:\n%s", p.Flattened[:500])
+	}
+	if len(p.Blocks) == 0 || p.BlockLines == 0 {
+		t.Errorf("preview carries no kept-block evidence: %+v", p)
+	}
+}

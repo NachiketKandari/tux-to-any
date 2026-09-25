@@ -63,7 +63,7 @@ export function ConvertPanel({
   selFile: string | null;
   fileContent: string;
   loadingFile: boolean;
-  provenance?: { node: string; kind: string; reason: string; confidence: string }[];
+  provenance?: { node: string; kind: string; reason: string; confidence: string; verified?: boolean }[];
   onGoTrace?: () => void;
   /** Job id — enables the Download-all-.zip button. */
   jobId?: string | null;
@@ -217,10 +217,11 @@ export function ConvertPanel({
                   {provenance!.slice(0, 4).map((p) => (
                     <Badge
                       key={p.node}
-                      variant={p.confidence === "exact" ? "default" : "secondary"}
+                      variant={p.verified || p.confidence === "exact" ? "default" : "secondary"}
                       className="max-w-[220px] truncate font-mono text-[10px]"
-                      title={`${p.node} — ${p.reason}`}
+                      title={`${p.node} — ${p.reason}${p.verified ? " (ledger-verified)" : ""}`}
                     >
+                      {p.verified ? "✓ " : ""}
                       {p.node}
                     </Badge>
                   ))}

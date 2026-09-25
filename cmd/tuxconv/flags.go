@@ -16,7 +16,7 @@ var commandFlags = map[string][]string{
 	"extract":        {"out", "config"},
 	"plan":           {"mapping", "config", "ledger"},
 	"convertgo":      {"mapping", "config", "base", "templates"},
-	"discover":       {"out", "config", "target", "filter"},
+	"discover":       {"out", "config", "target", "filter", "filter-json"},
 	"convertbatchpy": {"out", "config", "shape", "dml-loop", "templates"},
 	"convertcs":      {"out", "mapping", "config", "templates"},
 	"analyze":        {"csv", "weights", "pattern"},
