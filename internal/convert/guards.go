@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"tux-to-any/internal/common"
 	"tux-to-any/internal/flow"
 	"tux-to-any/internal/gen"
 	"tux-to-any/internal/ir"
@@ -105,9 +106,16 @@ func (b *guardBindings) extendFromAssigns(assigns [][2]string) {
 // guard identifier, plus the Go request-field name that reads its FML field
 // (the axis flag is typically inlined as request.<Field> or copied from it
 // into a local).
+//
+// Foccur32 presence guards (`Foccur32(buf, FML_X) > 0`) bind the same way:
+// the Go presence form (`request.X != ""`, `X != ""`, or a derived local)
+// names the request field FieldFromFML(FML_X) — claimed here so the
+// equivalence gate meets the legacy FML spelling.
 func guardBindingsFor(guards []flow.MixedGuard, endpoint string, c *ir.Condition, svc *gen.Service) *guardBindings {
 	b := newGuardBindings()
 	idents := map[string]bool{}
+	var foccurFields []string
+	foccurSeen := map[string]bool{}
 	for _, g := range guards {
 		for _, text := range []string{g.Cond, g.Alt} {
 			if text == "" {
@@ -116,6 +124,12 @@ func guardBindingsFor(guards []flow.MixedGuard, endpoint string, c *ir.Condition
 			pe := pred.Parse(text)
 			for _, id := range flow.ExprIdents(&pe) {
 				idents[id] = true
+			}
+			for _, f := range pred.FoccurFields(&pe) {
+				if !foccurSeen[f] {
+					foccurSeen[f] = true
+					foccurFields = append(foccurFields, f)
+				}
 			}
 		}
 	}
@@ -126,6 +140,11 @@ func guardBindingsFor(guards []flow.MixedGuard, endpoint string, c *ir.Condition
 	sort.Strings(names)
 	for _, id := range names {
 		b.claimIdent(id)
+	}
+	for _, f := range foccurFields {
+		if goField := common.FieldFromFML(f); goField != "" {
+			b.claim(goField, f)
+		}
 	}
 	if c == nil || svc == nil {
 		return b

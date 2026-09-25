@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"tux-to-any/internal/common"
 	"tux-to-any/internal/pred"
 )
 
@@ -421,9 +422,31 @@ func stripCasts(s string) string {
 
 // exprGo renders a best-effort Go condition; "" when the expression is not
 // transpilable (calls stay honest TODOs, never fake Go).
+//
+// Foccur32 presence checks transliterate to Go presence checks:
+// `Foccur32(buf, FML_X) > 0` → `FmlX != ""`, `== 0` → `FmlX == ""`
+// (FieldFromFML naming — the request-struct policy). The buffer never
+// renders: presence is a property of the request field, not of which
+// local buffer variable carried it.
 func exprGo(e *pred.Expr) string {
 	if e == nil {
 		return ""
+	}
+	if field, present, ok := pred.PresenceOf(e); ok {
+		goField := common.FieldFromFML(field)
+		if goField == "" {
+			return ""
+		}
+		if present {
+			return goField + ` != ""`
+		}
+		return goField + ` == ""`
+	}
+	if ident, present, ok := pred.GoPresenceOf(e); ok {
+		if present {
+			return ident + ` != ""`
+		}
+		return ident + ` == ""`
 	}
 	switch e.Kind {
 	case "and", "or":

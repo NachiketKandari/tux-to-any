@@ -56,10 +56,15 @@ type ReturnArm struct {
 }
 
 // noiseCondSubstr marks guard predicates that are plumbing, not business
-// dispatch: SQL status, FML presence checks, debug switches, buffer-alloc
-// NULL checks. These dominate raw if-counts (e.g. ~1800 ifs in the large
-// transaction file, most of them SQLCODE/DEBUG/Ferror guards)
+// dispatch: SQL status, FML unpack/error checks, debug switches,
+// buffer-alloc NULL checks. These dominate raw if-counts (e.g. ~1800 ifs
+// in the large transaction file, most of them SQLCODE/DEBUG/Ferror guards)
 // but never delimit services.
+//
+// Foccur32/Foccur existence checks (`Foccur32(buf, FML_X) > 0`) are
+// deliberately absent here: which optional request flag arrived is business
+// dispatch, not plumbing — they stay in guard chains, the census, and the
+// draft as Go presence checks.
 var noiseCondSubstr = []string{
 	"SQLCODE", "sqlca", "Ferror", "FNOTPRES", "Fget32",
 	"DEBUG", "debug", "tpalloc", "tprealloc", "tpfree",

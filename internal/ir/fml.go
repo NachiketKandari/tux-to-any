@@ -6,12 +6,16 @@ import (
 	"tux-to-any/internal/tsscan"
 )
 
-// allFmlOps classifies every Fget32/Fadd32 call into an ordered FmlOp list.
+// allFmlOps classifies every Fget32/Fadd32/Foccur32 call into an ordered
+// FmlOp list. Foccur32/Foccur presence checks join as Get-kind ops (the
+// counted field belongs to the request contract even when the arm never
+// Fget-reads it — the existence test is the read).
 func allFmlOps(facts *tsscan.SourceFacts, f *File, opts Options) []FmlOp {
 	out := make([]FmlOp, 0, 8)
 	for i := range facts.Calls {
 		c := &facts.Calls[i]
-		if c.Name != "Fget32" && c.Name != "Fadd32" {
+		if c.Name != "Fget32" && c.Name != "Fadd32" &&
+			!isFoccurCallName(c.Name) {
 			continue
 		}
 		if op, ok := FmlOpOf(c, facts); ok {
@@ -24,13 +28,25 @@ func allFmlOps(facts *tsscan.SourceFacts, f *File, opts Options) []FmlOp {
 	return out
 }
 
+// isFoccurCallName reports the FML occurrence-count spellings:
+// Foccur32 and the Foccur shorthand (case-insensitive — the corpus
+// varies, and the logical part treats every spelling as existence).
+func isFoccurCallName(name string) bool {
+	return strings.EqualFold(name, "Foccur32") || strings.EqualFold(name, "Foccur")
+}
+
 // FmlOpOf is the exported FML classifier (flow consumes it for per-node
-// annotation): Fget32 reads the request in, Fadd32 writes the response out;
-// field = 2nd arg, target = 4th (get) / 3rd (add), buffer = 1st. Optional
-// marks an FNOTPRES-guarded read; Dropped marks session/error plumbing;
-// Code is the legacy error-message code harvested from the latest
-// preceding writer of the target variable (or the add's own literal).
+// annotation): Fget32 reads the request in, Fadd32 writes the response out,
+// Foccur32/Foccur counts a field's occurrences (presence — a Get-kind read
+// with no host target); field = 2nd arg, target = 4th (get) / 3rd (add),
+// buffer = 1st. Optional marks an FNOTPRES-guarded read; Dropped marks
+// session/error plumbing; Code is the legacy error-message code harvested
+// from the latest preceding writer of the target variable (or the add's
+// own literal).
 func FmlOpOf(call *tsscan.FunctionCall, facts *tsscan.SourceFacts) (FmlOp, bool) {
+	if isFoccurCallName(call.Name) {
+		return foccurOpOf(call)
+	}
 	var kind FmlOpKind
 	switch call.Name {
 	case "Fget32":
@@ -68,6 +84,33 @@ func FmlOpOf(call *tsscan.FunctionCall, facts *tsscan.SourceFacts) (FmlOp, bool)
 	if kind == FmlAdd {
 		op.Code = harvestCode(facts, call, op.Target)
 	}
+	return op, true
+}
+
+// foccurOpOf classifies an Foccur32/Foccur presence count as a Get-kind op:
+// the counted field (2nd arg) belongs to the request contract; the buffer
+// (1st arg) is recorded for audit; there is no host target — existence
+// itself is the read. Needs only 2 args (`Foccur32(buf, FIELD)`), not the
+// 4-arg Fget shape.
+func foccurOpOf(call *tsscan.FunctionCall) (FmlOp, bool) {
+	args := splitArgs(call.Args)
+	if len(args) < 2 {
+		return FmlOp{}, false
+	}
+	field := strings.TrimSpace(args[1])
+	if n, ok := identifierArg(args[1]); ok {
+		field = n
+	}
+	if field == "" {
+		return FmlOp{}, false
+	}
+	op := FmlOp{
+		Kind:   FmlGet,
+		Field:  field,
+		Buffer: baseIdent(args[0]),
+		Line:   call.Line,
+	}
+	op.Dropped = op.Field == "FML_USER_ID" || op.Field == "FML_SESSION_ID" || IsErrField(op.Field)
 	return op, true
 }
 

@@ -50,6 +50,12 @@ func emptyIfErrs(body string) []string {
 // census Effect. Misses feed a targeted retry note naming the lost source
 // line. An empty census (or an unparseable body, which the parse gate owns)
 // passes silently.
+//
+// Identifier matching is spelling-insensitive (pred.IdentKey) with FML
+// presence normalization: a legacy `Foccur32(buf, FML_X)` ident meets the
+// Go `request.X` / `X` spelling via FieldFromFML, and skeletons meet via
+// the presence-normalized form (`# != ""` / `# == ""`). Go conditions
+// parse with ParseCode so selector chains collapse before matching.
 func conditionPresenceErrs(census []flow.CensusCond, body string) []string {
 	if len(census) == 0 {
 		return nil
@@ -82,14 +88,16 @@ func conditionPresenceErrs(census []flow.CensusCond, body string) []string {
 			return true
 		}
 		condText := condSource(wrapped, fset, ist)
-		pe := pred.Parse(condText)
+		pe := pred.ParseCode(condText)
 		g := goIf{
 			skeleton: flow.Skeleton(&pe),
 			idents:   map[string]bool{},
 			assigned: map[string]bool{},
 		}
 		for _, id := range flow.ExprIdents(&pe) {
-			g.idents[common.CamelLowerGo(id)] = true
+			if k := normCondIdent(id); k != "" {
+				g.idents[k] = true
+			}
 		}
 		collectIfAssigns(ist, g.assigned)
 		ifs = append(ifs, g)
@@ -99,11 +107,13 @@ func conditionPresenceErrs(census []flow.CensusCond, body string) []string {
 	for _, c := range census {
 		wantIdents := map[string]bool{}
 		for _, id := range c.Idents {
-			wantIdents[common.CamelLowerGo(id)] = true
+			if k := normCondIdent(id); k != "" {
+				wantIdents[k] = true
+			}
 		}
 		wantEffects := map[string]bool{}
 		for _, e := range c.Effects {
-			wantEffects[common.CamelLowerGo(e)] = true
+			wantEffects[pred.IdentKey(e)] = true
 		}
 		satisfied := false
 		for _, g := range ifs {
@@ -240,12 +250,44 @@ func collectBlockAssigns(b *ast.BlockStmt, out map[string]bool) {
 			}
 			for _, lhs := range as.Lhs {
 				for _, id := range assignTargetIdents(lhs) {
-					out[common.CamelLowerGo(id)] = true
+					out[pred.IdentKey(id)] = true
 				}
 			}
 			return true
 		})
 	}
+}
+
+// normCondIdent normalizes a census/Go identifier for presence-aware
+// matching: FML field spellings fold through FieldFromFML
+// (`FML_FOO` → `Foo`) so the legacy field meets the request-struct
+// spelling, then IdentKey makes the comparison spelling-insensitive.
+// `request` itself (the Raw-scan residue of an uncollapsed selector)
+// never names a variable and is dropped.
+func normCondIdent(id string) string {
+	if id == "request" {
+		return ""
+	}
+	t := id
+	if len(t) >= 4 && (t[:4] == "FML_" || t[:4] == "fml_") {
+		t = common.FieldFromFML(t)
+	} else {
+		upper := ""
+		for _, r := range t {
+			if r >= 'a' && r <= 'z' {
+				upper += string(r - 'a' + 'A')
+			} else {
+				upper += string(r)
+			}
+		}
+		if len(upper) >= 4 && upper[:4] == "FML_" {
+			t = common.FieldFromFML(upper)
+		}
+	}
+	if t == "" {
+		return ""
+	}
+	return pred.IdentKey(t)
 }
 
 // assignTargetIdents extracts assigned names from an assignment target:

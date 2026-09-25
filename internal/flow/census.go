@@ -27,9 +27,27 @@ type CensusCond struct {
 // operators and literal values are kept, every identifier becomes `#`.
 // `cnt_d2u > 0 || i_cnt_d2us > 0` → `# > 0 || # > 0`, while a single-arm
 // `cntD2u > 0` → `# > 0` — the lost-OR-arm shape matches neither arm alone.
+//
+// Foccur32 presence checks normalize to the Go presence form they
+// transliterate to: `Foccur32(buf, FML_X) > 0` → `# != ""`,
+// `Foccur32(buf, FML_X) == 0` → `# == ""`. The buffer spelling never
+// participates, and a presence check never collides with a generic
+// numeric `x > 0` (`# > 0`).
 func Skeleton(e *pred.Expr) string {
 	if e == nil {
 		return ""
+	}
+	if _, present, ok := pred.PresenceOf(e); ok {
+		if present {
+			return `# != ""`
+		}
+		return `# == ""`
+	}
+	if _, present, ok := pred.GoPresenceOf(e); ok {
+		if present {
+			return `# != ""`
+		}
+		return `# == ""`
 	}
 	switch e.Kind {
 	case "or", "and":
@@ -229,6 +247,10 @@ func ConditionCensus(tree *Tree, from, to int) []CensusCond {
 // censusSkipped reports whether a branch stays out of the census, mirroring
 // the renderer's own elisions plus the plumbing-predicate filter. Loops
 // never reach here (the census covers if/elseif headers only).
+//
+// Foccur32/Foccur presence checks (`Foccur32(buf, FML_X) > 0`) are business
+// logic — which optional request flag arrived — and never skip: they stay
+// in the census with a presence-normalized skeleton (`# != ""` / `# == ""`).
 func censusSkipped(n *Node, fetchDepth int) bool {
 	if n.Kind != KindBranch {
 		return true

@@ -1,6 +1,10 @@
 package pred
 
-import "strings"
+import (
+	"strings"
+
+	"tux-to-any/internal/common"
+)
 
 // Equivalent reports whether two parsed predicates are the same condition
 // modulo identifier spelling (identEq), commutative && / || reordering, and
@@ -17,6 +21,24 @@ import "strings"
 func Equivalent(a, b *Expr, identEq func(a, b string) bool) bool {
 	if a == nil || b == nil {
 		return a == b
+	}
+	// Foccur32 presence equivalence (logical part): a legacy existence
+	// check (`Foccur32(buf, FML_X) > 0` / `== 0`, any buffer spelling)
+	// equals the Go presence form (`X != ""` / `== ""`) on the same
+	// field with the same polarity. Buffers never participate — the
+	// request buffer vs local buffer spelling is not a semantic change.
+	if af, ap, ok := PresenceOf(a); ok {
+		if bf, bp, ok := PresenceOf(b); ok {
+			return ap == bp && presenceFieldsEqual(af, bf, identEq)
+		}
+		if gi, gp, ok := GoPresenceOf(b); ok {
+			return ap == gp && presenceFieldsEqual(af, gi, identEq)
+		}
+	}
+	if ag, ap, ok := GoPresenceOf(a); ok {
+		if bf, bp, ok := PresenceOf(b); ok {
+			return ap == bp && presenceFieldsEqual(ag, bf, identEq)
+		}
 	}
 	switch a.Kind {
 	case KindOr, KindAnd:
@@ -213,3 +235,25 @@ func normLit(s string) string {
 }
 
 func isNilName(s string) bool { return s == "nil" || s == "NULL" || s == "null" }
+
+// presenceFieldsEqual compares an FML presence field against a Go presence
+// ident: FML spellings normalize through FieldFromFML (`FML_FOO` → `Foo`)
+// so the legacy field and the request-struct field meet under the caller's
+// identEq (bindings or spelling keys). Non-FML names compare directly.
+func presenceFieldsEqual(a, b string, identEq func(a, b string) bool) bool {
+	return identEq(presenceGo(a), presenceGo(b))
+}
+
+func presenceGo(s string) string {
+	t := strings.TrimSpace(s)
+	if len(t) >= 4 && (t[:4] == "FML_" || t[:4] == "fml_") {
+		return common.FieldFromFML(t)
+	}
+	// FML field constants sometimes arrive lowercased through arg-token
+	// normalization — match case-insensitively before giving up.
+	upper := strings.ToUpper(t)
+	if strings.HasPrefix(upper, "FML_") {
+		return common.FieldFromFML(upper)
+	}
+	return t
+}
