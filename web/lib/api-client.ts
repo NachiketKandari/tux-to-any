@@ -148,6 +148,7 @@ export interface LLMStatus {
   openrouterKey: boolean;
   profile: string;
   config: string;
+  configPath?: string | null;
   note: string;
 }
 

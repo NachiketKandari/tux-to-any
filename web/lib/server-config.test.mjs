@@ -69,9 +69,19 @@ function withEnv(vars, fn) {
 }
 
 test("serverConfigPath: null without env, absolute when set, null when missing", () => {
-  withEnv({ TUXGO_CONFIG: undefined }, () => {
-    assert.equal(mod.serverConfigPath(), null);
-  });
+  // Hermetic: run the no-env probe from an empty tmpdir so a working-copy
+  // .tuxgo.yaml at the real repo root (the new fallback) cannot leak in.
+  const empty = mkdtempSync(join(tmpdir(), "tux-cfg-empty-"));
+  const savedCwd = process.cwd();
+  try {
+    process.chdir(empty);
+    withEnv({ TUXGO_CONFIG: undefined }, () => {
+      assert.equal(mod.serverConfigPath(), null);
+    });
+  } finally {
+    process.chdir(savedCwd);
+    rmSync(empty, { recursive: true, force: true });
+  }
   const dir = mkdtempSync(join(tmpdir(), "tux-cfg-"));
   try {
     const p = join(dir, "srv.yaml");
@@ -84,6 +94,35 @@ test("serverConfigPath: null without env, absolute when set, null when missing",
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("serverConfigPath: falls back to working-copy .tuxgo.yaml without env; explicit-missing stays null", () => {
+  const { mkdirSync, realpathSync } = require("node:fs");
+  const savedCwd = process.cwd();
+  const repo = mkdtempSync(join(tmpdir(), "tux-repo-"));
+  try {
+    const webdir = join(repo, "web");
+    mkdirSync(webdir, { recursive: true });
+    writeFileSync(join(repo, ".tuxgo.yaml"), YAML);
+    process.chdir(webdir);
+    // No pointer: repo-root .tuxgo.yaml lights up (CLI parity).
+    // realpath: macOS tmpdir (/var) vs cwd (/private/var) symlink alias.
+    withEnv({ TUXGO_CONFIG: undefined }, () => {
+      assert.equal(realpathSync(mod.serverConfigPath()), realpathSync(join(repo, ".tuxgo.yaml")));
+      const snap = mod.readServerConfigSnapshot();
+      assert.ok(snap);
+      assert.equal(snap.profile, "yaml-prof");
+      assert.equal(snap.models[0].hasLiteralApiKey, true);
+    });
+    // Explicit-but-missing pointer stays loud (null) — never silently mask
+    // a typo as the nearby working-copy file.
+    withEnv({ TUXGO_CONFIG: join(repo, "nope.yaml") }, () => {
+      assert.equal(mod.serverConfigPath(), null);
+    });
+  } finally {
+    process.chdir(savedCwd);
+    rmSync(repo, { recursive: true, force: true });
   }
 });
 
@@ -104,7 +143,16 @@ test("withServerConfig: injects -config after subcommand; skips analyze + explic
       assert.deepEqual(mod.withServerConfig([]), []);
     });
     withEnv({ TUXGO_CONFIG: undefined }, () => {
-      assert.deepEqual(mod.withServerConfig(["convertgo", "a.pc"]), ["convertgo", "a.pc"]);
+      // Hermetic: empty cwd so the repo-root fallback cannot inject here.
+      const empty2 = mkdtempSync(join(tmpdir(), "tux-cfg-empty2-"));
+      const saved2 = process.cwd();
+      try {
+        process.chdir(empty2);
+        assert.deepEqual(mod.withServerConfig(["convertgo", "a.pc"]), ["convertgo", "a.pc"]);
+      } finally {
+        process.chdir(saved2);
+        rmSync(empty2, { recursive: true, force: true });
+      }
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -130,7 +178,16 @@ test("readServerConfigSnapshot: profile, per-model env+literal, database dsn", (
       assert.ok(!JSON.stringify(snap).includes("yaml-literal-dsn"));
     });
     withEnv({ TUXGO_CONFIG: undefined }, () => {
-      assert.equal(mod.readServerConfigSnapshot(), null);
+      // Hermetic: empty cwd so the repo-root fallback cannot resolve here.
+      const empty3 = mkdtempSync(join(tmpdir(), "tux-cfg-empty3-"));
+      const saved3 = process.cwd();
+      try {
+        process.chdir(empty3);
+        assert.equal(mod.readServerConfigSnapshot(), null);
+      } finally {
+        process.chdir(saved3);
+        rmSync(empty3, { recursive: true, force: true });
+      }
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -15,6 +15,11 @@ import { isAbsolute, join } from "node:path";
 //
 // and every viewer run shares the CLI's yaml keys (models[].apiKey,
 // database.dsn — env vars still win over literals, same resolution).
+// When TUXGO_CONFIG is unset, serverConfigPath falls back to the
+// working-copy .tuxgo.yaml at the repo root (the CLI's `./.tuxgo.yaml`
+// discovery), so the plain README flow works without an export;
+// an explicit-but-missing TUXGO_CONFIG still resolves to null (loud
+// warning, stock defaults) so typos never mask as another file.
 //
 // Two layers, both fail-open to today's behavior:
 //
@@ -58,21 +63,38 @@ let warnedMissing = "";
 
 export function serverConfigPath(): string | null {
   const raw = (process.env[ENV_VAR] ?? "").trim();
-  if (raw === "") return null;
-  const candidates = isAbsolute(raw) ? [raw] : [join(repoRoot(), raw), join(process.cwd(), raw)];
-  for (const c of candidates) {
+  if (raw !== "") {
+    const candidates = isAbsolute(raw) ? [raw] : [join(repoRoot(), raw), join(process.cwd(), raw)];
+    for (const c of candidates) {
+      try {
+        if (statSync(c).isFile()) {
+          warnedMissing = "";
+          return c;
+        }
+      } catch {
+        /* try next */
+      }
+    }
+    if (warnedMissing !== raw) {
+      warnedMissing = raw;
+      console.warn(`[tux-web] ${ENV_VAR}=${raw} names no file — running on stock defaults`);
+    }
+    return null;
+  }
+  // No pointer: mirror the CLI's `./.tuxgo.yaml` discovery so a working-copy
+  // yaml (the README's `cp configs/.tuxgo.example.yaml .tuxgo.yaml` flow)
+  // lights the header without forcing every operator to export TUXGO_CONFIG.
+  // An explicit-but-missing TUXGO_CONFIG above stays loud (null, no silent
+  // fallback) so a typo'd pointer never masks as another file.
+  const fallbacks = [join(repoRoot(), ".tuxgo.yaml"), join(process.cwd(), ".tuxgo.yaml")];
+  for (const c of fallbacks) {
     try {
       if (statSync(c).isFile()) {
-        warnedMissing = "";
         return c;
       }
     } catch {
       /* try next */
     }
-  }
-  if (warnedMissing !== raw) {
-    warnedMissing = raw;
-    console.warn(`[tux-web] ${ENV_VAR}=${raw} names no file — running on stock defaults`);
   }
   return null;
 }

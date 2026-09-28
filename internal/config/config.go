@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -338,18 +339,21 @@ func (c *Config) Route(override string) (*Model, error) {
 
 // APIKey resolves the profile's key: the env var wins; the literal apiKey
 // (local gitignored config only) is the fallback. The source is returned for
-// audit logging — never log the key value itself.
+// audit logging — never log the key value itself. Surrounding whitespace is
+// ignored on both channels (pasted keys commonly carry quotes/spaces/newlines;
+// internal/db ResolveDSN and the web viewer already trim), so a
+// whitespace-only value counts as unset and the returned key is trimmed.
 func (m *Model) ResolveKey() (key, source string, err error) {
 	if m.APIKeyEnv != "" {
-		if v := os.Getenv(m.APIKeyEnv); v != "" {
+		if v := strings.TrimSpace(os.Getenv(m.APIKeyEnv)); v != "" {
 			return v, "env:" + m.APIKeyEnv, nil
 		}
-		if m.APIKey == "" {
+		if strings.TrimSpace(m.APIKey) == "" {
 			return "", "", fmt.Errorf("profile %s: env var %s is not set", m.Name, m.APIKeyEnv)
 		}
 	}
-	if m.APIKey != "" {
-		return m.APIKey, "literal", nil
+	if strings.TrimSpace(m.APIKey) != "" {
+		return strings.TrimSpace(m.APIKey), "literal", nil
 	}
 	return "", "none", nil
 }

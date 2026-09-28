@@ -3,9 +3,11 @@
 // names + the config source label.
 //
 // Resolution mirrors the CLI exactly (internal/config Model.ResolveKey):
-// the env var wins, the yaml literal (models[].apiKey in the TUXGO_CONFIG
-// file) is the fallback. Without TUXGO_CONFIG the stock defaults apply:
-// profile `onprem-vllm` (key = $VLLM_API_KEY) with `local-dev-openrouter`
+// the env var wins, the yaml literal (models[].apiKey in the resolved yaml
+// file) is the fallback. Resolution order is $TUXGO_CONFIG when set, else
+// the working-copy .tuxgo.yaml at the repo root (the CLI's `./.tuxgo.yaml`
+// discovery), else the stock defaults: profile `onprem-vllm`
+// (key = $VLLM_API_KEY) with `local-dev-openrouter`
 // ($OPENROUTER_API_KEY) as the documented alternative. When no key resolves
 // for the active profile, every LLM-on run degrades to deterministic output
 // — the toggle still works, it just cannot reach a model. The UI fetches
@@ -19,6 +21,8 @@ export interface LLMStatus {
   openrouterKey: boolean;
   profile: string;
   config: string;
+  /** Resolved yaml path, or null when on stock defaults. Never a secret. */
+  configPath: string | null;
   note: string;
 }
 
@@ -40,15 +44,18 @@ export function getLLMStatus(): LLMStatus {
   const active = byName.get(profile);
   const activeResolves = active ? modelResolves(active) : resolves(profile, profile === "local-dev-openrouter" ? "OPENROUTER_API_KEY" : "VLLM_API_KEY");
   const anyKey = activeResolves || vllmKey || openrouterKey || (snap?.models ?? []).some(modelResolves);
-  const config = snap ? "yaml (TUXGO_CONFIG)" : "stock defaults";
+  const envSet = (process.env["TUXGO_CONFIG"] ?? "").trim() !== "";
+  const config = snap ? (envSet ? "yaml (TUXGO_CONFIG)" : "yaml (repo .tuxgo.yaml)") : "stock defaults";
+  const activeEnv = active?.apiKeyEnv || (profile === "local-dev-openrouter" ? "OPENROUTER_API_KEY" : "VLLM_API_KEY");
   return {
     anyKey,
     vllmKey,
     openrouterKey,
     profile,
     config,
+    configPath: snap?.path ?? null,
     note: anyKey
       ? `API key resolves (${config}) — LLM-on runs reach the model`
-      : "no API key resolves (server env VLLM_API_KEY / OPENROUTER_API_KEY nor the TUXGO_CONFIG yaml literal) — LLM-on runs fall back to deterministic output; set a key or point TUXGO_CONFIG at a yaml with one and restart the web server for AI fills",
+      : `no API key resolves for profile ${profile} (server env ${activeEnv} nor the yaml literal models[].apiKey in ${snap?.path ?? "TUXGO_CONFIG / repo .tuxgo.yaml"}) — LLM-on runs fall back to deterministic output; set the env var or add the literal, then restart the web server for AI fills`,
   };
 }

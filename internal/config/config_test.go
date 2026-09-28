@@ -258,3 +258,34 @@ func TestAPIKeyResolution(t *testing.T) {
 		t.Errorf("keyless = %q %q %v", key, source, err)
 	}
 }
+
+func TestAPIKeyResolutionTrimsWhitespace(t *testing.T) {
+	// Pasted keys commonly carry surrounding spaces/newlines (and yaml
+	// literals can too) — the CLI must agree with the web viewer, which
+	// already trims, and must never send padding to the endpoint.
+	m := &Model{Name: "p", APIKeyEnv: "TUXGO_TEST_WS_KEY", APIKey: "  spaced-literal  "}
+	t.Setenv("TUXGO_TEST_WS_KEY", "  env-value  \n")
+	if key, source, err := m.ResolveKey(); err != nil || key != "env-value" || source != "env:TUXGO_TEST_WS_KEY" {
+		t.Errorf("whitespace env = %q %q %v", key, source, err)
+	}
+	os.Unsetenv("TUXGO_TEST_WS_KEY")
+	if key, source, err := m.ResolveKey(); err != nil || key != "spaced-literal" || source != "literal" {
+		t.Errorf("whitespace literal = %q %q %v", key, source, err)
+	}
+	// Whitespace-only counts as unset on both channels.
+	t.Setenv("TUXGO_TEST_WS_KEY", "   \n ")
+	m.APIKey = "  \n "
+	if _, _, err := m.ResolveKey(); err == nil {
+		t.Error("whitespace-only env+literal must error like unset")
+	}
+	os.Unsetenv("TUXGO_TEST_WS_KEY")
+	m.APIKey = "   "
+	if _, _, err := m.ResolveKey(); err == nil {
+		t.Error("whitespace-only literal must error like empty")
+	}
+	m.APIKeyEnv = ""
+	m.APIKey = "  \t\n "
+	if key, source, err := m.ResolveKey(); key != "" || source != "none" || err != nil {
+		t.Errorf("whitespace-only keyless = %q %q %v", key, source, err)
+	}
+}
