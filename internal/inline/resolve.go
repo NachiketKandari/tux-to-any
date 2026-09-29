@@ -165,6 +165,31 @@ func isTypeishLine(line string) bool {
 	return true
 }
 
+// spanCalls returns the distinct function names called INSIDE a callee's
+// definition span, in first-appearance order. A name called on a line
+// outside the span belongs to some other function in the same file and is
+// not this helper's dependency.
+//
+// This is the dependency set the expansion follows, and it has to be read
+// from the span rather than from the callee file's ExternalFns: that record
+// holds the symbols the callee's own file leaves UNDEFINED, so a sibling
+// helper defined right beside it is local there and absent from it — and
+// lifting the first without the second would leave the expanded caller with
+// an undeclared call.
+func spanCalls(cal *callee) []string {
+	seen := map[string]bool{}
+	var out []string
+	for i := range cal.facts.Calls {
+		c := &cal.facts.Calls[i]
+		if c.Line < cal.start || c.Line > cal.end || c.Name == "" || seen[c.Name] {
+			continue
+		}
+		seen[c.Name] = true
+		out = append(out, c.Name)
+	}
+	return out
+}
+
 // fmlInside reports the FML or tpcall call a callee's body makes, or "" when
 // the body is clean. A helper touching the service's buffers is out of
 // contract — the buffers are the caller's scope — and lifting it would let

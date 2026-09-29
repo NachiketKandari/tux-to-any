@@ -7,6 +7,8 @@
 package archtest
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
@@ -35,9 +37,24 @@ var sharedDepsErr error
 func sharedDeps(t *testing.T) deps {
 	t.Helper()
 	sharedDepsOnce.Do(func() {
-		out, err := exec.Command("go", "list", "-f", "{{.ImportPath}}|{{join .Imports \",\"}}", "./...").CombinedOutput()
-		sharedDepsOut = out
-		sharedDepsErr = err
+		// Anchor go list at the MODULE ROOT, not at "./...". A test binary
+		// runs with its working directory set to its own package, so a bare
+		// "./..." enumerates internal/archtest and nothing else — loadDeps
+		// would return a single entry with no imports, and every rule below
+		// would pass without inspecting anything. Resolving the module
+		// directory first is what makes these laws actually run.
+		modOut, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}").CombinedOutput()
+		sharedDepsOut, sharedDepsErr = modOut, err
+		if err != nil {
+			return
+		}
+		modDir := strings.TrimSpace(string(modOut))
+		if modDir == "" {
+			sharedDepsErr = errors.New("go list -m returned no module directory")
+			return
+		}
+		out, err := exec.Command("go", "list", "-f", "{{.ImportPath}}|{{join .Imports \",\"}}", modDir+"/...").CombinedOutput()
+		sharedDepsOut, sharedDepsErr = out, err
 		if err != nil {
 			return
 		}
@@ -59,6 +76,13 @@ func sharedDeps(t *testing.T) deps {
 				}
 			}
 			d[parts[0]] = internal
+		}
+		// A law that inspects no packages inspects nothing. Fail loudly
+		// rather than pass vacuously — that is the exact failure mode this
+		// file exists to prevent, and it is the one that was happening.
+		if len(d) < 2 {
+			sharedDepsErr = fmt.Errorf("go list enumerated %d package(s), expected the whole module — every rule here would pass without inspecting anything", len(d))
+			return
 		}
 		sharedDepsVal = d
 	})
@@ -149,11 +173,17 @@ func TestProfilesLiveAboveSharedCore(t *testing.T) {
 // (uniform-ir plan §3.2): tsscan/ir/pred/flow/sqltext/contract never import
 // an emitter (Go, Python-batch, or C#). The one sanctioned upward edge is
 // none — emitters project from the stack, never the reverse.
+//
+// inline is in the stack: it resolves cross-file helpers and re-folds the
+// expanded source into IR, which is the same language-neutral position, one
+// step above ir. It is listed here so the law covers it rather than leaving
+// the new package unpoliced — a future import of an emitter from inline
+// would be a layering break, not a detail.
 func TestParseStackNeverLooksUp(t *testing.T) {
 	d := loadDeps(t)
 	stack := map[string]bool{
 		"tsscan": true, "ir": true, "pred": true, "flow": true,
-		"sqltext": true, "contract": true,
+		"sqltext": true, "contract": true, "inline": true,
 	}
 	forbidden := map[string]bool{
 		"gen": true, "convert": true, "testgen": true, "testscan": true,

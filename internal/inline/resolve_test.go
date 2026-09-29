@@ -86,6 +86,17 @@ func TestCorpusResolutionIsFirstWinsSorted(t *testing.T) {
 	}
 }
 
+// readSource reads a corpus file's text off disk, for tests that need the
+// caller's original bytes to compare against the expanded ones.
+func readSource(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 // defAt scans src and returns the definition of name — a helper so the
 // table tests below read as source, not as synthesized scanner records.
 func defAt(t *testing.T, src, name string) tsscan.FunctionDef {

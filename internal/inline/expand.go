@@ -81,6 +81,18 @@ func Expand(caller *ir.File, corpus *Corpus, opts Options) (*Result, error) {
 		item := queue[0]
 		queue = queue[1:]
 
+		// A cycle is checked FIRST, ahead of the already-materialized
+		// test. fn_a → fn_b → fn_a would otherwise be absorbed by the
+		// dedup and reported as nothing, and that is the one case a user
+		// genuinely needs to see. A diamond (two helpers pulling the same
+		// third) is not a cycle and still dedups silently below.
+		if onChain(item.chain, item.name) {
+			res.Skips = append(res.Skips, Skip{
+				Fn: item.name, Code: SkipCycle, Depth: item.depth, Via: item.via,
+				Detail: "cycle: " + strings.Join(append(item.chain, item.name), " → "),
+			})
+			continue
+		}
 		if appendedFns[item.name] {
 			// Already materialized through another path. Benign — a
 			// helper two of the caller's helpers share — so it is not a
@@ -91,13 +103,6 @@ func Expand(caller *ir.File, corpus *Corpus, opts Options) (*Result, error) {
 			res.Skips = append(res.Skips, Skip{
 				Fn: item.name, Code: SkipDuplicate, Depth: item.depth, Via: item.via,
 				Detail: "the caller defines " + item.name + " itself — nothing to inline",
-			})
-			continue
-		}
-		if onChain(item.chain, item.name) {
-			res.Skips = append(res.Skips, Skip{
-				Fn: item.name, Code: SkipCycle, Depth: item.depth, Via: item.via,
-				Detail: "cycle: " + strings.Join(append(item.chain, item.name), " → "),
 			})
 			continue
 		}
@@ -184,20 +189,44 @@ func seed(externals []ir.ExternalFn) []pending {
 	return out
 }
 
-// frontierOf enqueues the externals a materialized helper itself calls, so a
-// helper-of-a-helper becomes legible in the same expansion. Sorted by name,
-// at depth+1, carrying the chain so a cycle is detectable rather than merely
-// depth-bounded.
+// frontierOf enqueues the helpers a materialized definition depends on, so a
+// helper-of-a-helper becomes legible in the same expansion.
+//
+// The dependency set is the calls INSIDE the lifted span that the caller
+// would not otherwise have — not the callee file's ExternalFns. Those record
+// the symbols the callee's own file leaves UNDEFINED, so a sibling helper
+// defined right beside it in that same file is not among them, yet lifting
+// fn_outer into a caller that lacks fn_inner would leave the expanded text
+// with an undeclared call. So the set is the span's calls filtered to those
+// the callee file either defines (lift it here) or records as external
+// (resolve it in the corpus). Names matching neither are C library and ATMI
+// calls and are ignored.
+//
+// Sorted by name, at depth+1, carrying the chain so a cycle is detectable
+// rather than merely depth-bounded.
 func frontierOf(corpus *Corpus, cal *callee, depth int, via string, chain []string) []pending {
 	calIR, ok := corpus.File(cal.path)
 	if !ok {
 		return nil
 	}
-	names := make([]string, 0, len(calIR.ExternalFns))
+	local := make(map[string]bool, len(calIR.Functions))
+	for _, fn := range calIR.Functions {
+		local[fn] = true
+	}
+	external := make(map[string]bool, len(calIR.ExternalFns))
 	for _, e := range calIR.ExternalFns {
-		names = append(names, e.Name)
+		external[e.Name] = true
+	}
+
+	var names []string
+	for _, name := range spanCalls(cal) {
+		if name == cal.name || (!local[name] && !external[name]) {
+			continue
+		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
+
 	next := append(append([]string{}, chain...), via)
 	out := make([]pending, 0, len(names))
 	for _, n := range names {
