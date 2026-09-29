@@ -19,6 +19,16 @@ type Options struct {
 	dirMode bool // corpus mode: fragment detection is bypassed
 }
 
+// CorpusMode returns a copy of opts in corpus (directory) mode — fragment
+// detection bypassed, exactly as ExtractDirOpts folds a whole directory.
+// ExtractDirOpts sets the flag itself because it owns the walk; a caller
+// that already holds a corpus (the inline pass folding an expanded file)
+// needs the same posture for one file, and cannot reach the private field.
+func (o Options) CorpusMode() Options {
+	o.dirMode = true
+	return o
+}
+
 // DefaultOptions returns the built-in buffer-role registry.
 func DefaultOptions() Options {
 	return Options{
@@ -48,6 +58,28 @@ func ExtractFileOpts(path string, opts Options) (*File, error) {
 		if err != nil {
 			return nil, err
 		}
+		fragFacts, err := tsscan.ScanFragment(src, path)
+		if err != nil {
+			return nil, err
+		}
+		return build(fragFacts, opts), nil
+	}
+	return build(facts, opts), nil
+}
+
+// ExtractSourceOpts extracts IR from source text already in memory, using
+// path for identity only — the same deterministic fold ExtractFileOpts
+// applies to a file on disk, so identical bytes in yield byte-identical IR
+// out. The inline pass (internal/inline) needs this to re-fold its expanded
+// source: the expanded file is an IR input, never written to disk, and
+// going through the ordinary extractor is what makes the inlined helpers
+// indistinguishable from helpers the file always defined itself.
+func ExtractSourceOpts(src []byte, path string, opts Options) (*File, error) {
+	facts, err := tsscan.ScanBytes(src, path)
+	if err != nil {
+		return nil, err
+	}
+	if !opts.dirMode && (opts.ForceFragment || isFragmentFacts(facts)) {
 		fragFacts, err := tsscan.ScanFragment(src, path)
 		if err != nil {
 			return nil, err
