@@ -140,7 +140,7 @@ go run ./cmd/tuxconv convertgo <file|dir> [-mapping <yaml|dir>] [-no-llm] [-base
 go run ./cmd/tuxconv convertbatchpy <file|dir> [-no-llm] [-shape auto|repo] [-dml-loop batch|rowbyrow] [-out dir] [-config path] [-templates dir]
 go run ./cmd/tuxconv convertcs <file|dir> -mapping <yaml> [-no-llm] [-out dir] [-config path] [-templates dir]
 go run ./cmd/tuxconv analyze <file|dir> [-csv out.csv] [-weights csv] [-pattern mf_]
-go run ./cmd/tuxconv gentest <converted tree> [-check-only] [-no-llm] [-layers db,controller,handler] [-base dir] [-config path] [-templates dir]
+go run ./cmd/tuxconv gentest <converted tree> [-check-only] [-no-llm] [-layers db,controller,handler] [-out dir] [-log-file path] [--nice-names] [-config path] [-templates dir]
 go run ./cmd/tuxconv flow <file|dir> [-go] [-scenarios] [-scenarios-dir dir] [-out report.json]   # read-only flow trees: coverage, hints, draft
 go run ./cmd/tuxconv templates list|dump|verify [-dir <override dir>] [-out <export dir>] [-config path] [-force]
 go run ./cmd/tuxconv retrystats <audit-run-dir> [<audit-run-dir-B>]   # retry methodology A/B read-out
@@ -175,10 +175,36 @@ test target.
   a `Test*` body. `-check-only` prints the gap report and writes nothing;
   the machine twin `gentest_gap_report.json` lands in the run audit.
 - **Generate** is one function per table-driven suite method and is
-  staged-first: `-base` wins, else `paths.staged` — the target tree is
+  staged-first: `-out`/`-base` wins, else `paths.staged` — the target tree is
   never written. A layer that already has test files gets a
   `<stem>_gentest_test.go` twin with `…Gen` suite names, so existing suites
   are never touched; `New*` and wiring constructors skip by design.
+- **Log-driven fixtures** (`-log-file`, GT-7): parse the edited app's own
+  runtime log and take real fixture values per `(service, method)` — request
+  bodies for handler/controller case fields, `SuccessJSON`/`responseBody` for
+  expected responses, `db.(*store).Method Result:` rows for mock returns and
+  expected structs. Row 1 is the first successful complete trace; the first
+  failed complete trace becomes a second `Logged#2` case (SELECT shapes) and
+  the logged business error becomes a `Logged-Error` case for
+  controller/handler tests, with that trace's own request values and
+  executed-call mock returns. Methods the log never hit keep assumed
+  placeholders and are tagged `// fixture: assumed`; every generated method
+  is recorded in the gap report (`fixtures` in `gentest_summary.json`).
+  A complete trace also makes field-mapping controllers deterministic (no
+  LLM); multi-call flows get one guarded `mockInput…` per store call.
+  Same folder + same log = byte-identical output.
+- **`-out` is a complete snapshot**: the scanned non-test sources (and
+  `go.mod`) are staged into the out tree, collision-renamed to
+  `<name>_convertgo.go` when a destination name already exists — existing
+  files are never overwritten, so a re-run is safe.
+- **Run outputs**: the generated tests under the `-out` tree (else in-place /
+  `paths.staged`), the machine record
+  `conversion_logs/audit/<run-id>/gentest_summary.json` (`files`, `staged`,
+  per-method `fixtures` provenance, `gates`), and
+  `conversion_logs/logs/run-*.log` (relocate with `-log-dir`; the audit stays
+  under `conversion_logs/audit/`). The deterministic re-run recipe for the
+  real risk-profile snapshots (`riskPipelineTest/`) is in
+  [`docs/gt7-log-fixtures-plan.md`](docs/gt7-log-fixtures-plan.md).
 - Deterministic templates cover db stores — SELECT shapes through
   `ExpectQuery`, INSERT/UPDATE/DELETE/MERGE through `ExpectExec`, plain or
   tx-variant (`ExpectBegin` + `Beginx` with the tx handle threaded into the
@@ -191,9 +217,14 @@ test target.
   passthrough controllers are deterministic too.
   Field-mapping controller tests ride the LLM seam (parse + shape gated,
   budget-bounded — see the modes table above); `-no-llm` marks them
-  `llm-required` and writes nothing for them.
+  `llm-required` and writes nothing for them — unless `-log-file` supplies
+  deterministic values. `--nice-names` is the one optional LLM polish: it may
+  rewrite string literals and comments only, enforced by a token-stream gate.
 - When outputs land inside a Go module, every written package gets a
-  best-effort `go vet` + compile-only `go test -run '^$'` gate line; a
+  best-effort `go vet` + compile-only `go test -run '^$'` gate line; explicit
+  `-out`/`-base` runs also run the full `go test -count=1` per written
+  package inside the out tree. Gates are non-fatal but visible, and a failed
+  full run flips the summary line `gentest: tests FAILED (see gates)`; a
   missing module or dependency tree degrades visibly, never fails the run.
 - Byte-pinned goldens live in `testdata/gentest`, including the gap report
   (`testdata/gentest/expected/gap_report.txt`); regenerate with
@@ -424,7 +455,7 @@ exactly one template-shaped gap per unit — and only in LLM mode:
 | `convert` | one stub-synthesis attempt per unresolved external fn (call-site lines + inferred in/out signature shown; pure helpers land as idiomatic Go, declines keep the panicking stub) | all stubs stay panicking; synthesis runs first-run-only, a resume never re-calls |
 | `batchpy` | stateful-batch service body | `# tuxgo:TODO service body` placeholder (simple shape is 100% deterministic either way) |
 | `convertcs` | residual arm logic per endpoint (from the query-replaced arm view — never raw SQL); ledger resume never re-generates filled bodies | `tuxgo:TODO` residual-block placeholder, kept on seam exhaustion |
-| `gentest` | field-mapping controller tests | `llm-required` notes (db/handler/passthrough are template-deterministic) |
+| `gentest` | field-mapping controller tests (only when no `-log-file` trace exists) | `llm-required` notes (db/handler/passthrough are template-deterministic; `-log-file` makes covered field-mapping controllers deterministic too) |
 | `discover` | endpoint name/route proposals | deterministic names from cursor/FML tokens, marked `# deterministic — edit freely` (`-target cs` is deterministic-only throughout) |
 
 Dispatch-arm coverage: `discover` folds a dispatch-axis entry into one

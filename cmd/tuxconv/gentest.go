@@ -29,9 +29,12 @@ func runGentest(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("gentest", flag.ContinueOnError)
 	layers := fs.String("layers", "", "Comma-separated subset of db,controller,handler (default: all layers found in the target)")
 	checkOnly := fs.Bool("check-only", false, "Report the test gap (functions without tests) and exit without writing")
-	baseDir := fs.String("base", "", "Output base directory override (default: the converted tree's own module root, so tests land in the same folder as the converted code; explicit -base stages elsewhere)")
-	inPlace := fs.Bool("in-place", false, "Write each test file into the same folder as the converted code it covers (ignores -base and paths.staged)")
+	baseDir := fs.String("base", "", "Output base directory override (alias of -out; default: the converted tree's own module root, so tests land in the same folder as the converted code)")
+	outDir := fs.String("out", "", "Explicit output root: tests plus a complete non-test source snapshot (collision-renamed) land here; the target tree is never modified")
+	inPlace := fs.Bool("in-place", false, "Write each test file into the same folder as the converted code it covers (ignores -out/-base and paths.staged)")
 	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: skip the LLM gap-fill seam (overrides run.llm)")
+	logFile := fs.String("log-file", "", "Parse a runtime log and take fixture values from it (empty = assumed placeholders; same folder + same log = byte-identical output)")
+	niceNames := fs.Bool("nice-names", false, "Optional LLM polish for test names only (default off; never affects assertions or structure)")
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
 	templatesDir := fs.String("templates", "", "Directory of <template_id>.tmpl overrides (flag > templates.dir config; missing ids keep the embedded set)")
 
@@ -44,6 +47,17 @@ func runGentest(ctx context.Context, args []string) error {
 		return fmt.Errorf("gentest: must provide a target (.go file, layer dir, service dir, or services root)")
 	}
 	target := positional[0]
+
+	if *outDir != "" && *baseDir != "" && *outDir != *baseDir {
+		return fmt.Errorf("gentest: -out and -base are aliases — give one of them (got %q and %q)", *outDir, *baseDir)
+	}
+	explicitOut := *outDir
+	if explicitOut == "" {
+		explicitOut = *baseDir
+	}
+	if *outDir != "" {
+		baseDir = outDir
+	}
 
 	var layerFilter []testscan.Layer
 	if *layers != "" {
@@ -129,13 +143,31 @@ func runGentest(ctx context.Context, args []string) error {
 
 	client := resolveLLMClient(ctx, cfg, *noLLM, "controller gap-fill")
 	llmEnabled := client != nil
+	if *niceNames && client == nil {
+		log.Warn("nice-names requested but no LLM client is available; names stay as generated")
+		fmt.Println("  nice-names: no LLM client available — names left as generated")
+	}
 
 	wiring := newWiring(ctx, cfg)
+
+	var logData *testgen.LogData
+	if *logFile != "" {
+		logData, err = testgen.ParseLogFile(*logFile)
+		if err != nil {
+			return err
+		}
+		log.Info("gentest log parsed", "path", logData.Path, "traces", len(logData.Traces),
+			"skipped_null", logData.SkippedNull, "stack_lines", logData.StackLines, "warnings", len(logData.Warnings))
+	}
+	// -out/-base are explicit snapshots: stage the non-test sources next to
+	// the generated tests and run the full test gate inside the out tree.
+	explicit := explicitOut != "" && !*inPlace
 
 	res, err := testgen.Generate(ctx, tgt, rep, testgen.Options{
 		BaseDir: base, Workers: cfg.Concurrency.Workers, NoLLM: !llmEnabled,
 		Client: client, Budget: wiring.budget,
 		MaxRetries: cfg.ValidateCfg.MaxRetries, Audit: wiring.audit, Templates: tpl,
+		Log: logData, NiceNames: *niceNames, Stage: explicit, FullTest: explicit,
 	})
 	if err != nil {
 		return err
@@ -154,8 +186,22 @@ func printGentestSummary(base string, res *testgen.Result) {
 	fmt.Printf("gentest: %d functions under %s — %d generated (template), %d generated (llm), %d llm-required, %d skipped-covered, %d skipped-by-design, %d unsupported, %d llm calls\n",
 		len(res.Units), base, counts[testgen.StatusTemplate], counts[testgen.StatusLLM], counts[testgen.StatusLLMNeeded],
 		counts["skipped-covered"], counts[testgen.StatusDesign], counts[testgen.StatusUnsupported], res.LLMCalls)
+	if len(res.Fixtures) > 0 {
+		fromLog, assumed := 0, 0
+		for _, f := range res.Fixtures {
+			if f.Source == "assumed" {
+				assumed++
+			} else {
+				fromLog++
+			}
+		}
+		fmt.Printf("gentest: fixtures — %d methods from log values, %d assumed\n", fromLog, assumed)
+	}
 	for _, f := range res.Files {
 		fmt.Println("  wrote:", f)
+	}
+	for _, f := range res.Staged {
+		fmt.Println("  staged:", f)
 	}
 	for _, u := range res.Units {
 		switch u.Status {
@@ -166,8 +212,14 @@ func printGentestSummary(base string, res *testgen.Result) {
 	for _, g := range res.Gates {
 		fmt.Println("  gate:", g)
 	}
+	for _, c := range res.Checklist {
+		fmt.Println("  ", c)
+	}
 	for _, w := range res.Warnings {
 		fmt.Println("  warning:", w)
+	}
+	if res.TestsFailed {
+		fmt.Println("gentest: tests FAILED (see gates)")
 	}
 }
 

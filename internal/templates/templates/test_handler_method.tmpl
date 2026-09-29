@@ -9,31 +9,19 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 		expectedError         string
 		expectedErrorHttpCode int
 	}{
+{{- range $i, $c := .CasesOrDerived}}
 		{
-			desc: "{{.Name}}Error",
-{{- range .ReqFields}}
+			desc: "{{$c.Desc}}",
+{{- range $c.ReqFields}}
 			{{.Name}}: "{{.Value}}",
 {{- end}}
-			mockInput:             []any{nil, errors.New("error while fetching data")},
-			expectedError:         "error while fetching data",
-			expectedErrorHttpCode: http.StatusInternalServerError,
-		},
-		{
-			desc: "Failure",
-{{- range .ReqFields}}
-			{{.Name}}: "{{.Value}}",
+			mockInput:     {{$c.Input}},
+			expectedError: "{{$c.ExpectedError}}",
+{{- if $c.HTTPCode}}
+			expectedErrorHttpCode: {{$c.HTTPCode}},
 {{- end}}
-			mockInput:             []any{nil, nil},
-			expectedError:         "No Data Found",
-			expectedErrorHttpCode: http.StatusNoContent,
 		},
-		{
-			desc: "Success",
-{{- range .ReqFields}}
-			{{.Name}}: "{{.Value}}",
 {{- end}}
-			mockInput: {{.SuccessInput}},
-		},
 	}
 
 	for _, testCase := range testCases {

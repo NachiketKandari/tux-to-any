@@ -61,10 +61,11 @@ func (suite *DemoControllerSuiteController) TestOrderDirect() {
 		expectedOutput []*models.OrderResponse
 	}{
 		{
-			desc:          "StoreError",
-			CompCode:      "fmlcompcd",
-			mockInput:     []any{nil, errors.New("store error")},
-			expectedError: "store error",
+			desc:           "StoreError",
+			CompCode:       "fmlcompcd",
+			mockInput:      []any{nil, errors.New("store error")},
+			expectedError:  "store error",
+			expectedOutput: nil,
 		},
 		{
 			desc:           "Success",
@@ -78,7 +79,6 @@ func (suite *DemoControllerSuiteController) TestOrderDirect() {
 	for _, testCase := range testCases {
 		suite.T().Run(testCase.desc, func(t *testing.T) {
 			// Mocking and Setting Expected Result
-
 			if testCase.mockInput != nil {
 				suite.demoStore.
 					EXPECT().

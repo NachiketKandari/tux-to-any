@@ -44,6 +44,19 @@ type Options struct {
 	// Templates is the template provider (user overlay over the embedded
 	// set); nil = the embedded defaults.
 	Templates templates.Provider
+	// Log is the parsed runtime log (GT-7); nil keeps the assumed-placeholder
+	// behavior. When set, fixture values come from it and every generated
+	// method is tagged with its provenance.
+	Log *LogData
+	// NiceNames enables the optional LLM polish for names only (default off;
+	// never affects assertions or structure).
+	NiceNames bool
+	// Stage copies the scanned non-test sources (and go.mod) into BaseDir as
+	// a complete snapshot — the target tree is never modified by staging.
+	Stage bool
+	// FullTest runs `go test -count=1` per written package inside BaseDir
+	// after the compile gate (non-fatal; flips Result.TestsFailed).
+	FullTest bool
 }
 
 // provider resolves the run's template set (nil-safe embedded default).
@@ -72,13 +85,29 @@ type UnitResult struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
+// FixtureEntry is one generated method's fixture provenance (GT-7 gap
+// report): "log <short-id>" when a complete trace supplied its values,
+// "assumed" when the log had no hit.
+type FixtureEntry struct {
+	Service string `json:"service"`
+	Layer   string `json:"layer"`
+	Func    string `json:"func"`
+	Source  string `json:"source"`
+}
+
 // Result is one run's outcome.
 type Result struct {
-	Files    []string     `json:"files"`
-	Units    []UnitResult `json:"units"`
-	LLMCalls int          `json:"llm_calls"`
-	Gates    []string     `json:"gates,omitempty"`
-	Warnings []string     `json:"warnings,omitempty"`
+	Files     []string       `json:"files"`
+	Staged    []string       `json:"staged,omitempty"`
+	Units     []UnitResult   `json:"units"`
+	Fixtures  []FixtureEntry `json:"fixtures,omitempty"`
+	LLMCalls  int            `json:"llm_calls"`
+	Gates     []string       `json:"gates,omitempty"`
+	Checklist []string       `json:"checklist,omitempty"`
+	Warnings  []string       `json:"warnings,omitempty"`
+	// TestsFailed is set when the -out full-test gate observed a failure;
+	// the CLI flips its summary line on it (non-fatal by design).
+	TestsFailed bool `json:"tests_failed,omitempty"`
 }
 
 // unit is one function's generation work item.
@@ -135,10 +164,18 @@ func Generate(ctx context.Context, tgt *testscan.Target, rep *testscan.Report, o
 		opts.Workers = 1
 	}
 	res := &Result{}
+	if opts.Log != nil {
+		res.Warnings = append(res.Warnings, opts.Log.Warnings...)
+	}
 
-	svcs := buildServiceCtxs(rep, opts.provider())
+	svcs := buildServiceCtxs(rep, opts.provider(), opts)
 	if len(svcs) == 0 {
 		return res, nil
+	}
+	if opts.Log != nil {
+		for _, sc := range svcs {
+			sc.logOnlyWarnings(res, opts.Log)
+		}
 	}
 
 	var units []*unit
@@ -151,7 +188,7 @@ func Generate(ctx context.Context, tgt *testscan.Target, rep *testscan.Report, o
 				lf := sc.factsFor(lr.Layer)
 				outFile, suite := outNames(sc, lr.Layer, lr.Dir)
 				for i := range lr.Funcs {
-					if u := buildUnit(sc, lr.Layer, lr.Dir, outFile, suite, lr.Funcs[i], lf, res); u != nil {
+					if u := buildUnit(sc, lr.Layer, lr.Dir, outFile, suite, lr.Funcs[i], lf, res, opts); u != nil {
 						units = append(units, u)
 					}
 				}
@@ -192,10 +229,14 @@ func Generate(ctx context.Context, tgt *testscan.Target, rep *testscan.Report, o
 				continue
 			}
 			methods := make([]string, 0, len(lb))
+			tags := make([]string, 0, len(lb))
 			for _, b := range lb {
 				methods = append(methods, b.method)
+				if opts.Log != nil {
+					tags = append(tags, sc.fixtureTag(layer, b.unit.fn.Name))
+				}
 			}
-			content, err := composeFile(sc, layer, lb[0].unit.outFile, lb[0].unit.suite, methods)
+			content, err := composeFile(sc, layer, lb[0].unit.outFile, lb[0].unit.suite, methods, provenanceLine(tags))
 			if err != nil {
 				res.Warnings = append(res.Warnings, fmt.Sprintf("%s/%s: compose failed: %v", sc.name, layer, err))
 				continue
@@ -214,14 +255,35 @@ func Generate(ctx context.Context, tgt *testscan.Target, rep *testscan.Report, o
 				continue
 			}
 			res.Files = append(res.Files, outPath)
+			res.Checklist = append(res.Checklist, checklistFile(layer, content)...)
 			log.Info("gentest file written", "path", outPath, "methods", len(methods), "suite", lb[0].unit.suite)
 		}
 	}
 
+	stageSources(res, opts, svcs)
 	runServiceMocks(ctx, svcs)
 	compileGate(res)
+	fullTestGate(res, opts)
 	archiveSummary(opts.Audit, res)
 	return res, nil
+}
+
+// provenanceLine renders the per-file fixture provenance comment, e.g.
+// "// fixture: log ebb010eb | assumed" (deduplicated, method order).
+func provenanceLine(tags []string) string {
+	seen := map[string]bool{}
+	var parts []string
+	for _, t := range tags {
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		parts = append(parts, t)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "// fixture: " + strings.Join(parts, " | ")
 }
 
 // compileGate is the degrade-safe compile pass (PRD-2026-09-09 GT-D6): for
@@ -233,7 +295,8 @@ func Generate(ctx context.Context, tgt *testscan.Target, rep *testscan.Report, o
 func compileGate(res *Result) {
 	pkgs := map[string]string{} // package dir → module root
 	skipped := map[string]bool{}
-	for _, f := range res.Files {
+	files := append(append([]string{}, res.Files...), res.Staged...)
+	for _, f := range files {
 		dir := filepath.Dir(f)
 		root, ok := moduleRootOf(dir)
 		if !ok {
@@ -245,7 +308,7 @@ func compileGate(res *Result) {
 			}
 			continue
 		}
-		if _, ok := pkgs[dir]; !ok {
+		if _, ok := pkgs[dir]; !ok && hasGoFiles(dir) {
 			pkgs[dir] = root
 		}
 	}
@@ -263,27 +326,77 @@ func compileGate(res *Result) {
 	}
 }
 
+// fullTestGate is the -out full run (GT-7): `go test -count=1` per written
+// package inside the output tree. Non-fatal, but a failure flips the visible
+// Result.TestsFailed summary flag (the CLI prints "gentest: tests FAILED").
+func fullTestGate(res *Result, opts Options) {
+	if !opts.FullTest || len(res.Files) == 0 {
+		return
+	}
+	dirs := map[string]bool{}
+	for _, f := range res.Files {
+		if dir := filepath.Dir(f); hasGoFiles(dir) {
+			dirs[dir] = true
+		}
+	}
+	for dir := range dirs {
+		root, ok := moduleRootOf(dir)
+		if !ok {
+			continue
+		}
+		rel, err := filepath.Rel(root, dir)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		pkg := "./" + filepath.ToSlash(rel)
+		if rel == "." {
+			pkg = "."
+		}
+		detail, failed := gateCmd(root, 120*time.Second, "go", "test", "-count=1", pkg)
+		label := "go test -count=1 " + pkg + " [" + dir + "]"
+		if failed {
+			res.TestsFailed = true
+			res.Gates = append(res.Gates, label+": FAILED — "+detail)
+			continue
+		}
+		res.Gates = append(res.Gates, label+": PASS")
+	}
+}
+
 // gateOne runs one gate command (bounded) and renders its outcome line.
 func gateOne(dir, name string, args ...string) []string {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	detail, failed := gateCmd(dir, 90*time.Second, name, args...)
 	label := name + " " + strings.Join(args, " ") + " [" + dir + "]"
-	if err != nil {
-		detail := string(out)
-		if len(detail) > 400 {
-			detail = detail[:400]
-		}
-		return []string{label + ": FAILED — " + strings.TrimSpace(detail)}
+	if failed {
+		return []string{label + ": FAILED — " + detail}
 	}
 	return []string{label + ": clean"}
 }
 
+// gateCmd runs one bounded gate command; the returned detail is the clipped
+// combined output on failure ("" on success).
+func gateCmd(dir string, timeout time.Duration, name string, args ...string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return "", false
+	}
+	detail := strings.TrimSpace(string(out))
+	if len(detail) > 400 {
+		detail = detail[:400]
+	}
+	if detail == "" {
+		detail = err.Error()
+	}
+	return detail, true
+}
+
 // buildUnit classifies one scanned function into a unit, recording skip
 // outcomes on the run result; nil return = no work item.
-func buildUnit(sc *serviceCtx, layer testscan.Layer, dir, outFile, suite string, fn testscan.Func, lf *layerFacts, res *Result) *unit {
+func buildUnit(sc *serviceCtx, layer testscan.Layer, dir, outFile, suite string, fn testscan.Func, lf *layerFacts, res *Result, opts Options) *unit {
 	skip := func(status, detail string) *unit {
 		res.Units = append(res.Units, UnitResult{Service: sc.name, Layer: string(layer), Func: fn.Name, Status: status, Detail: detail})
 		return nil
@@ -343,6 +456,12 @@ func buildUnit(sc *serviceCtx, layer testscan.Layer, dir, outFile, suite string,
 	default:
 		return skip(StatusUnsupported, "layer not testable")
 	}
+	if opts.Log != nil {
+		res.Fixtures = append(res.Fixtures, FixtureEntry{
+			Service: sc.name, Layer: string(layer), Func: fn.Name,
+			Source: sc.fixtureTag(layer, fn.Name),
+		})
+	}
 	return u
 }
 
@@ -382,7 +501,8 @@ func scalarishType(t string) bool {
 		"int", "int8", "int16", "int32", "int64",
 		"uint", "uint8", "uint16", "uint32", "uint64",
 		"float32", "float64",
-		"sql.NullString", "sql.NullInt64", "sql.NullInt32", "sql.NullBool", "sql.NullFloat64", "sql.NullTime",
+		"sql.NullString", "sql.NullInt64", "sql.NullInt32", "sql.NullInt16",
+		"sql.NullBool", "sql.NullFloat64", "sql.NullTime",
 		"time.Time":
 		return true
 	}
@@ -393,39 +513,50 @@ func scalarishType(t string) bool {
 // template when the shape allows, else the LLM seam, else llm-required.
 func renderUnit(ctx context.Context, u *unit, opts Options) *block {
 	b := &block{unit: u}
+	template := func(m string) *block {
+		b.method = opts.polish(ctx, m)
+		b.status = StatusTemplate
+		return b
+	}
+	unsupported := func(err error) *block {
+		b.status = StatusUnsupported
+		b.detail = err.Error()
+		return b
+	}
 	switch u.layer {
 	case testscan.LayerDB:
 		m, err := renderDBMethod(u)
 		if err != nil {
-			b.status = StatusUnsupported
-			b.detail = err.Error()
-			return b
+			return unsupported(err)
 		}
-		b.method, b.status = m, StatusTemplate
-		return b
+		return template(m)
 	case testscan.LayerHandler:
 		m, err := renderHandlerMethod(u)
 		if err != nil {
-			b.status = StatusUnsupported
-			b.detail = err.Error()
-			return b
+			return unsupported(err)
 		}
-		b.method, b.status = m, StatusTemplate
-		return b
+		return template(m)
 	case testscan.LayerController:
 		if u.ctrl.Passthrough && len(u.ctrl.StoreCalls) == 1 {
 			m, err := renderCtrlMethod(u)
 			if err != nil {
-				b.status = StatusUnsupported
-				b.detail = err.Error()
-				return b
+				return unsupported(err)
 			}
-			b.method, b.status = m, StatusTemplate
-			return b
+			return template(m)
+		}
+		// GT-7: a complete log trace for the method makes the field-mapping
+		// shape deterministic — request values, store mock returns and the
+		// expected response all come from the log, so no LLM is needed.
+		if _, mv := u.sc.fixtureFor(u.layer, u.fn.Name); mv != nil && mv.SuccessTrace() != nil {
+			m, err := renderCtrlMethod(u)
+			if err != nil {
+				return unsupported(err)
+			}
+			return template(m)
 		}
 		if opts.NoLLM || opts.Client == nil {
 			b.status = StatusLLMNeeded
-			b.detail = "field-mapping controller body needs the LLM seam (-no-llm skips it)"
+			b.detail = "field-mapping controller body needs the LLM seam (-no-llm skips it; -log-file supplies deterministic values)"
 			return b
 		}
 		m, calls, err := fillCtrlMethod(ctx, u, opts)
@@ -503,8 +634,9 @@ func outPathFor(baseDir string, sc *serviceCtx, dir, outFile string) (string, er
 }
 
 // composeFile renders the full test file: scaffold + suite + method blocks,
-// parse-gated and gofmt-canonicalized.
-func composeFile(sc *serviceCtx, layer testscan.Layer, outFile, suite string, methods []string) (string, error) {
+// parse-gated and gofmt-canonicalized. provLine is the optional per-file
+// fixture-provenance comment (GT-7).
+func composeFile(sc *serviceCtx, layer testscan.Layer, outFile, suite string, methods []string, provLine string) (string, error) {
 	prov := sc.provider()
 	mockCmd, covCmd := headerCmds(sc, layer)
 	var out string
@@ -570,6 +702,9 @@ func composeFile(sc *serviceCtx, layer testscan.Layer, outFile, suite string, me
 	if err != nil {
 		return "", err
 	}
+	if provLine != "" {
+		out = provLine + "\n" + out
+	}
 	formatted, ferr := goast.Emit("gentest: "+outFile, out)
 	if ferr != nil {
 		return "", ferr
@@ -578,7 +713,9 @@ func composeFile(sc *serviceCtx, layer testscan.Layer, outFile, suite string, me
 }
 
 // buildServiceCtxs builds per-service extraction contexts from the scan.
-func buildServiceCtxs(rep *testscan.Report, prov templates.Provider) []*serviceCtx {
+// With a parsed log (GT-7) the fixture source is the log backend; without
+// one it stays the assumed-placeholder backend.
+func buildServiceCtxs(rep *testscan.Report, prov templates.Provider, opts Options) []*serviceCtx {
 	seen := map[string]bool{}
 	var svcs []*serviceCtx
 	for _, sr := range rep.Services {
@@ -593,13 +730,48 @@ func buildServiceCtxs(rep *testscan.Report, prov templates.Provider) []*serviceC
 		sc.module = moduleName(sc.moduleRoot, sr.Dir)
 		sc.models = extractModels(sr.Dir)
 		sc.ctrlIface = extractCtrlIface(sr.Dir)
-		sc.fixtures = &AssumedFixtureSource{Models: sc.models}
+		if opts.Log != nil {
+			sc.fixtures = NewLogFixtureSource(opts.Log, sc.models, sr.Name)
+		} else {
+			sc.fixtures = &AssumedFixtureSource{Models: sc.models}
+		}
 		sc.dbFacts = extractLayer(filepath.Join(sr.Dir, "db"), "db")
 		sc.ctrlFacts = extractLayer(filepath.Join(sr.Dir, "controller"), "controller")
 		sc.handlerFacts = extractLayer(filepath.Join(sr.Dir, "handler"), "handler")
 		svcs = append(svcs, sc)
 	}
 	return svcs
+}
+
+// logOnlyWarnings records methods the log references but the disk tree does
+// not define — the log cannot invent code (plan "Caller ↔ code matching"),
+// so these are ignored visibly instead of silently.
+func (sc *serviceCtx) logOnlyWarnings(res *Result, data *LogData) {
+	seen := map[string]bool{}
+	for _, t := range data.Traces {
+		for _, c := range t.Callers {
+			if !strings.EqualFold(c.Service, sc.name) {
+				continue
+			}
+			key := c.Layer + "." + c.Method
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			known := false
+			switch c.Layer {
+			case "db":
+				known = sc.dbFacts.DB[c.Method] != nil
+			case "controller":
+				known = sc.ctrlFacts.Ctrl[c.Method] != nil
+			case "handler":
+				known = sc.handlerFacts.Handler[c.Method] != nil
+			}
+			if !known {
+				res.Warnings = append(res.Warnings, fmt.Sprintf("log-only %s method %s/%s ignored (no code match)", c.Layer, sc.name, c.Method))
+			}
+		}
+	}
 }
 
 func (sc *serviceCtx) factsFor(l testscan.Layer) *layerFacts {

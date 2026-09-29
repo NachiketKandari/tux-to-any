@@ -20,7 +20,7 @@ var commandFlags = map[string][]string{
 	"convertbatchpy": {"out", "config", "shape", "dml-loop", "templates"},
 	"convertcs":      {"out", "mapping", "config", "templates"},
 	"analyze":        {"csv", "weights", "pattern"},
-	"gentest":        {"layers", "base", "config", "templates"},
+	"gentest":        {"layers", "base", "out", "log-file", "config", "templates"},
 	"ainames":        {"mapping", "config"},
 	"templates":      {"out", "config", "dir"},
 	"flow":           {"out", "scenarios-dir", "config"},

@@ -78,6 +78,14 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 			mockInput:     nil,
 			expectedError: "ORA Error",
 		},
+{{- if .HasAlt}}
+		{
+			desc:           "{{.AltDesc}}",
+			mockInput:      sqlmock.NewRows([]string{ {{range .Cols}}"{{.}}", {{end}}}){{if .AltRow}}.AddRow({{range .AltRow}}"{{.}}", {{end}}){{end}},
+			expectedError:  "",
+			expectedOutput: {{.AltExpect}},
+		},
+{{- end}}
 		{
 			desc:           "Success",
 			mockInput:      sqlmock.NewRows([]string{ {{range .Cols}}"{{.}}", {{end}}}){{if .Row}}.AddRow({{range .Row}}"{{.}}", {{end}}){{end}},
@@ -132,6 +140,14 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 			mockInput:      sqlmock.NewRows([]string{ {{range .Cols}}"{{.}}", {{end}}}),
 			expectedError:  "",
 			expectedOutput: {{.NoRowsExpr}},
+		},
+{{- end}}
+{{- if .HasAlt}}
+		{
+			desc:           "{{.AltDesc}}",
+			mockInput:      sqlmock.NewRows([]string{ {{range .Cols}}"{{.}}", {{end}}}){{if .AltRow}}.AddRow({{range .AltRow}}"{{.}}", {{end}}){{end}},
+			expectedError:  "",
+			expectedOutput: {{.AltExpect}},
 		},
 {{- end}}
 		{

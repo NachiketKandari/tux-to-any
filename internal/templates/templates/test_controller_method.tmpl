@@ -5,39 +5,41 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 {{- range .ReqFields}}
 		{{.Name}}      string
 {{- end}}
-		mockInput      []any
+{{- range .CallsOrDerived}}
+		{{.Field}}      []any
+{{- end}}
 		expectedError  string
 		expectedOutput {{.ExpectType}}
 	}{
+{{- range $i, $c := .CasesOrDerived}}
 		{
-			desc:          "StoreError",
-{{- range .ReqFields}}
+			desc:          "{{$c.Desc}}",
+{{- range $c.ReqFields}}
 			{{.Name}}:     "{{.Value}}",
 {{- end}}
-			mockInput:     []any{nil, errors.New("store error")},
-			expectedError: "store error",
-		},
-		{
-			desc:           "Success",
-{{- range .ReqFields}}
-			{{.Name}}:      "{{.Value}}",
+{{- range $j, $in := $c.Inputs}}
+{{- with index $.CallsOrDerived $j}}
+			{{.Field}}:     {{$in}},
 {{- end}}
-			mockInput:      {{.MockReturn}},
-			expectedError:  "",
-			expectedOutput: {{.ExpectExpr}},
+{{- end}}
+			expectedError:  "{{$c.ExpectedError}}",
+			expectedOutput: {{$c.ExpectedOutput}},
 		},
+{{- end}}
 	}
 
 	for _, testCase := range testCases {
 		suite.T().Run(testCase.desc, func(t *testing.T) {
 			// Mocking and Setting Expected Result
 
-			if testCase.mockInput != nil {
-				suite.{{.StoreVar}}.
+{{- range .CallsOrDerived}}
+			if testCase.{{.Field}} != nil {
+				suite.{{$.StoreVar}}.
 					EXPECT().
-					{{.StoreCall}}(gomock.Any(){{range .StoreArgs}}, {{.}}{{end}}).
-					Return(testCase.mockInput...)
+					{{.Method}}(gomock.Any(){{range .Args}}, {{.}}{{end}}).
+					Return(testCase.{{.Field}}...)
 			}
+{{- end}}
 
 			// Triggering Function
 			request := &{{.ReqExpr}}

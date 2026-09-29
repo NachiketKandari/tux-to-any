@@ -314,6 +314,11 @@ type TestDBMethodData struct {
 	IsDML      bool     // Exec contract: error-only, ExpectExec + NewResult
 	IsTx       bool     // tx handle: ExpectBegin + Beginx + tx second arg
 	DeleteTx   bool     // DELETE-tx tolerates zero rows (no RowsAffected check)
+	// GT-7: the first failed complete trace's row as a second case.
+	HasAlt    bool
+	AltDesc   string   // "Logged#2"
+	AltRow    []string // mock row values from the failed trace
+	AltExpect string   // expectedOutput literal for the logged row
 }
 
 // TestControllerFileData renders a controller test file
@@ -338,6 +343,62 @@ type TestControllerFileData struct {
 	Methods   []string
 }
 
+// CtrlCall is one store-call occurrence inside a controller method: the
+// mock method, the EXPECT args after the ctx matcher, and the generated case
+// field carrying its Return payload.
+type CtrlCall struct {
+	Method string   // GetOrderDetails
+	Args   []string // args after gomock.Any() (concrete literal or gomock.Any())
+	Field  string   // mockInput, mockInput2, ...
+}
+
+// CtrlCaseField is one request-field value for one controller case (the
+// failed trace can carry a different request than the success trace).
+type CtrlCaseField struct {
+	Name  string
+	Value string // pre-escaped body text (embedded between quotes)
+}
+
+// CtrlCase is one row of the controller test's case table, aligned with the
+// method's CtrlCall list.
+type CtrlCase struct {
+	Desc           string
+	ReqFields      []CtrlCaseField
+	Inputs         []string // one Return payload per call; "nil" = skip EXPECT
+	ExpectedError  string
+	ExpectedOutput string
+}
+
+// HandlerCase is one row of the handler test's case table.
+type HandlerCase struct {
+	Desc          string
+	ReqFields     []CtrlCaseField
+	Input         string // the mockInput literal
+	ExpectedError string // "" = success path
+	HTTPCode      string // pre-rendered status literal ("" = omit, success path)
+}
+
+// CasesOrDerived returns Cases when the GT-7 case table was built; the
+// legacy three-case table (Error / Failure / Success) from the pre-GT-7
+// fields otherwise — template-data compatibility for external callers.
+func (d TestHandlerMethodData) CasesOrDerived() []HandlerCase {
+	if len(d.Cases) > 0 {
+		return d.Cases
+	}
+	if d.SuccessInput == "" && d.Name == "" {
+		return nil
+	}
+	req := make([]CtrlCaseField, 0, len(d.ReqFields))
+	for _, f := range d.ReqFields {
+		req = append(req, CtrlCaseField{Name: f.Name, Value: f.Value})
+	}
+	return []HandlerCase{
+		{Desc: d.Name + "Error", ReqFields: req, Input: `[]any{nil, errors.New("error while fetching data")}`, ExpectedError: "error while fetching data", HTTPCode: "http.StatusInternalServerError"},
+		{Desc: "Failure", ReqFields: req, Input: "[]any{nil, nil}", ExpectedError: "No Data Found", HTTPCode: "http.StatusNoContent"},
+		{Desc: "Success", ReqFields: req, Input: d.SuccessInput},
+	}
+}
+
 // TestControllerMethodData renders one suite method: request fields as case
 // fields, guarded EXPECT (gomock.Any() ctx + concrete args) in body-call
 // order, request built from the case fields, ErrorContains / NoError+Equal
@@ -354,6 +415,70 @@ type TestControllerMethodData struct {
 	MockReturn string     // []any{<store row literal>, nil} — pre-rendered
 	ExpectType string     // []*models.OrderResponse
 	ExpectExpr string     // success expectedOutput literal — pre-rendered
+	// GT-7: multi-call deterministic rendering. Calls is one entry per store
+	// call occurrence; Cases is the case table (StoreError / Success / and
+	// the logged business-error case when the log has one).
+	Calls []CtrlCall
+	Cases []CtrlCase
+}
+
+// CallsOrDerived returns Calls when the GT-7 multi-call data was built; a
+// single-call projection of the legacy StoreCall/StoreArgs fields otherwise
+// (template-data compatibility).
+func (d TestControllerMethodData) CallsOrDerived() []CtrlCall {
+	if len(d.Calls) > 0 {
+		return d.Calls
+	}
+	if d.StoreCall == "" {
+		return nil
+	}
+	return []CtrlCall{{Method: d.StoreCall, Args: d.StoreArgs, Field: "mockInput"}}
+}
+
+// CasesOrDerived returns Cases or the legacy two-case table (StoreError /
+// Success) from MockReturn/ExpectExpr.
+func (d TestControllerMethodData) CasesOrDerived() []CtrlCase {
+	if len(d.Cases) > 0 {
+		return d.Cases
+	}
+	calls := d.CallsOrDerived()
+	if len(calls) == 0 {
+		return nil
+	}
+	req := make([]CtrlCaseField, 0, len(d.ReqFields))
+	for _, f := range d.ReqFields {
+		req = append(req, CtrlCaseField{Name: f.Name, Value: f.Value})
+	}
+	storeErr := make([]string, len(calls))
+	for i := range storeErr {
+		storeErr[i] = "nil"
+	}
+	storeErr[0] = `[]any{nil, errors.New("store error")}`
+	return []CtrlCase{
+		{Desc: "StoreError", ReqFields: req, Inputs: storeErr, ExpectedError: "store error", ExpectedOutput: expectZero(d.ExpectType)},
+		{Desc: "Success", ReqFields: req, Inputs: []string{d.MockReturn}, ExpectedOutput: d.ExpectExpr},
+	}
+}
+
+// expectZero renders the zero expectation for a Go type name.
+func expectZero(t string) string {
+	switch {
+	case t == "":
+		return "nil"
+	case strings.HasPrefix(t, "[]"), strings.HasPrefix(t, "*"),
+		strings.HasPrefix(t, "map["), strings.HasPrefix(t, "chan "), t == "any", t == "interface{}":
+		return "nil"
+	case t == "string":
+		return `""`
+	case t == "bool":
+		return "false"
+	case t == "int", t == "int8", t == "int16", t == "int32", t == "int64",
+		t == "uint", t == "uint8", t == "uint16", t == "uint32", t == "uint64",
+		t == "float32", t == "float64":
+		return "0"
+	default:
+		return t + "{}"
+	}
 }
 
 // TestHandlerFileData renders a handler test file
@@ -384,14 +509,16 @@ type ReqField struct {
 }
 
 // TestHandlerMethodData renders one suite method: gin-context table cases
-// (Error 500 / Failure 204 / Success 200) over the mocked controller.
+// (Error 500 / Failure 204 / Success 200) over the mocked controller. With a
+// log, Cases carries the per-case request values and the logged-error case.
 type TestHandlerMethodData struct {
-	SuiteName    string     // NavHandlerSuite
-	CtrlMockVar  string     // navController
-	HandlerVar   string     // navHandler
-	Name         string     // NavList
-	ReqFields    []ReqField // request fields driving the case struct
-	ReqInit      string     // models.NavRequest{CompCode: testCase.CompCode}
-	SuccessInput string     // []any{<response literal>, nil} — pre-rendered
-	RespType     string     // []*models.NavResponse
+	SuiteName    string        // NavHandlerSuite
+	CtrlMockVar  string        // navController
+	HandlerVar   string        // navHandler
+	Name         string        // NavList
+	ReqFields    []ReqField    // request fields driving the case struct
+	ReqInit      string        // models.NavRequest{CompCode: testCase.CompCode}
+	SuccessInput string        // []any{<response literal>, nil} — pre-rendered
+	RespType     string        // []*models.NavResponse
+	Cases        []HandlerCase // GT-7 case table
 }

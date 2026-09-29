@@ -77,9 +77,10 @@ func (suite *DemoHandlerSuite) TestOrderList() {
 			expectedErrorHttpCode: http.StatusNoContent,
 		},
 		{
-			desc:      "Success",
-			CompCode:  "fmlcompcd",
-			mockInput: []any{[]*models.OrderResponse{{CompCode: "fmlcompcd", CompName: "fmlcompname"}}, nil},
+			desc:          "Success",
+			CompCode:      "fmlcompcd",
+			mockInput:     []any{[]*models.OrderResponse{{CompCode: "fmlcompcd", CompName: "fmlcompname"}}, nil},
+			expectedError: "",
 		},
 	}
 

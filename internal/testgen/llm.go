@@ -106,7 +106,7 @@ func ctrlUserPrompt(u *unit, notes []string) string {
 	for _, fv := range sc.fixtures.FieldValues(structBase(f.RequestType)) {
 		fmt.Fprintf(&sb, "  - %s: %q\n", fv[0], fv[1])
 	}
-	fmt.Fprintf(&sb, "Response type: %s — assumed Success expectedOutput value: %s\n", f.ResponseType, responseLiteral(sc, f.ResponseType))
+	fmt.Fprintf(&sb, "Response type: %s — assumed Success expectedOutput value: %s\n", f.ResponseType, responseLiteral(sc, sc.fixtures, f.ResponseType))
 	sb.WriteString("\nRules: the error case must exercise the store error path; the Success case must assert the exact mapped output (assert.Equal(t, <the value the call returned>, testCase.expectedOutput)); every EXPECT sits behind an `if testCase.<input> != nil` guard with gomock.Any() as the ctx matcher.")
 	if len(notes) > 0 {
 		sb.WriteString("\n\nEarlier attempts failed these gate checks — fix every listed problem:\n")
