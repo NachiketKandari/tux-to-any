@@ -29,6 +29,7 @@ func runPlan(ctx context.Context, args []string) error {
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
 	ledgerDir := fs.String("ledger", "", "Ledger directory for plan.json/plan.md (default: paths.ledger from config)")
 	fragment := fs.Bool("fragment", false, "Force fragment mode on a single-file input (PF-3.1)")
+	noInline := fs.Bool("no-inline-fns", false, "Do not materialize cross-file fn_* helpers into their caller (directory mode only; they keep the legacy stub/TODO handling)")
 
 	flagArgs, positional := reorderArgs(args)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -79,6 +80,17 @@ func runPlan(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("plan: read source %s: %w", main.Path, err)
 	}
+	// Cross-file fn helpers become local definitions first, so plan.Build
+	// sees them as same-file helpers (KindFnHelper, fixed signature) and
+	// convert renders their bodies into controller/fns.go. The expanded
+	// SOURCE matters as much as the IR: plan slices each helper's body out
+	// of Options.Source, so passing the un-expanded text would slice the
+	// wrong lines.
+	mainIR, mainSrc, err := expandFns(ctx, main, files, string(src), *noInline)
+	if err != nil {
+		return err
+	}
+	main, src = mainIR, []byte(mainSrc)
 	wiring := newWiring(ctx, cfg)
 	p, err := plan.Build(plan.Options{Main: main, Source: string(src), FnFiles: files, Mapping: mapping, Budget: wiring.budget})
 	if err != nil {

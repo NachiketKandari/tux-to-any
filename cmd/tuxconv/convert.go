@@ -40,6 +40,7 @@ func runConvert(ctx context.Context, args []string) error {
 	baseDir := fs.String("base", "", "Output base directory override (default: target module root when paths.mainGo resolves, else paths.staged; dir fan-out appends each service name)")
 	noLLM := fs.Bool("no-llm", false, "Deterministic-only run: controllers render deterministic best-effort bodies (overrides run.llm)")
 	fragment := fs.Bool("fragment", false, "Force fragment mode on a single-file input (PF-3.1)")
+	noInline := fs.Bool("no-inline-fns", false, "Do not materialize cross-file fn_* helpers into their caller (directory mode only; they keep the legacy stub/TODO handling)")
 	retryRepair := fs.Bool("retry-repair", false, "Retry methodology A/B: rejected LLM attempts are sent back as an assistant turn for patching instead of regenerated (default off)")
 	templatesDir := fs.String("templates", "", "Directory of <template_id>.tmpl overrides (flag > templates.dir config; missing ids keep the embedded set)")
 
@@ -119,7 +120,7 @@ func runConvert(ctx context.Context, args []string) error {
 	// directory (per-service yamls) so the excluded services' mappings can
 	// be exempted from the orphan check deliberately.
 	if len(mains) > 1 || len(excluded) > 0 {
-		return runConvertFanout(ctx, w, target, mains, files, excluded, mappingPath, baseRoot, degrade)
+		return runConvertFanout(ctx, w, target, mains, files, excluded, mappingPath, baseRoot, degrade, *noInline)
 	}
 
 	// A directory mapping for a single-entry target: pick the yaml whose
@@ -147,7 +148,7 @@ func runConvert(ctx context.Context, args []string) error {
 	if mapping.Module == mapping.Service {
 		base = filepath.Join(base, mapping.Service)
 	}
-	res, led, err := convertOneService(ctx, w, mains[0], files, mapping, base, cfg.Concurrency.Workers)
+	res, led, err := convertOneService(ctx, w, mains[0], files, mapping, base, cfg.Concurrency.Workers, *noInline)
 	if err != nil {
 		return err
 	}
@@ -271,7 +272,14 @@ func resolveBaseRoot(baseFlag string, cfg *config.Config) (root, degrade string)
 // ledger audit copy, and mock regeneration. base is this service's isolated
 // output root (the shared baseRoot in single-service mode, a per-service
 // subtree in dir fan-out); workers sizes the inner DB-render pool.
-func convertOneService(ctx context.Context, w *convertWiring, main *ir.File, files []*ir.File, mapping *plan.Mapping, base string, workers int) (*convert.Result, *ledger.Ledger, error) {
+//
+// Cross-file fn_* helpers are materialized into this service first (see
+// inline.go), so they plan as KindFnHelper units and their bodies render
+// into controller/fns.go for the controller to call — instead of arriving
+// as a stub plus a "TODO external fn call" at the call site. The expanded
+// IR and source are threaded into BOTH plan.Build and convert.Run: they must
+// agree, because each slices helper bodies out of the source text.
+func convertOneService(ctx context.Context, w *convertWiring, main *ir.File, files []*ir.File, mapping *plan.Mapping, base string, workers int, noInline bool) (*convert.Result, *ledger.Ledger, error) {
 	log := telemetry.Log(ctx)
 	start := time.Now()
 	log.Info("convert service started", "service", mapping.Service, "source", main.Path, "base", base)
@@ -283,6 +291,11 @@ func convertOneService(ctx context.Context, w *convertWiring, main *ir.File, fil
 	if err != nil {
 		return nil, nil, fmt.Errorf("convert: read source: %w", err)
 	}
+	mainIR, mainSrc, err := expandFns(ctx, main, files, string(src), noInline)
+	if err != nil {
+		return nil, nil, err
+	}
+	main, src = mainIR, []byte(mainSrc)
 	p, err := plan.Build(plan.Options{Main: main, Source: string(src), FnFiles: files, Mapping: mapping, Budget: w.budget})
 	if err != nil {
 		return nil, nil, err

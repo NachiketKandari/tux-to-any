@@ -11,6 +11,7 @@ import (
 
 	"tux-to-any/internal/audit"
 	"tux-to-any/internal/config"
+	"tux-to-any/internal/inline"
 	"tux-to-any/internal/ir"
 	"tux-to-any/internal/llm"
 	"tux-to-any/internal/plan"
@@ -37,6 +38,7 @@ func runExtract(ctx context.Context, args []string) error {
 	outPath := fs.String("out", "", "Write the IR JSON to this path (single-file mode defaults to stdout)")
 	configPath := fs.String("config", "", "Path to .tuxgo.yaml (default: ./.tuxgo.yaml when present, else defaults)")
 	fragment := fs.Bool("fragment", false, "Force fragment mode on a single file (PF-3.1: detection is otherwise automatic)")
+	noInline := fs.Bool("no-inline-fns", false, "Do not materialize cross-file fn_* helpers into their caller (directory mode only; they keep the legacy stub/TODO handling)")
 
 	flagArgs, positional := reorderArgs(args)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -68,7 +70,19 @@ func runExtract(ctx context.Context, args []string) error {
 			fmt.Fprintf(os.Stderr, "no .pc or .pcf files found in %s\n", target)
 			return nil
 		}
-		return writeDirIR(ctx, cfg, *outPath, files)
+		// Cross-file fn helpers are materialized into their caller before
+		// the IR is written, so the archive the user inspects is the IR the
+		// conversion actually runs on (see inline.go).
+		expanded, results, err := expandCorpusFns(ctx, files, *noInline)
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			if e, ok := expanded[f.Path]; ok {
+				*f = *e
+			}
+		}
+		return writeDirIR(ctx, cfg, *outPath, files, results)
 	}
 
 	file, err := ir.ExtractFileOpts(target, irOpts)
@@ -299,7 +313,7 @@ func logConfigRouting(ctx context.Context, cfg *config.Config, source string) {
 	)
 }
 
-func writeDirIR(ctx context.Context, cfg *config.Config, outPath string, files []*ir.File) error {
+func writeDirIR(ctx context.Context, cfg *config.Config, outPath string, files []*ir.File, inlineResults map[string]*inline.Result) error {
 	log := telemetry.Log(ctx)
 	// Flag > config (C1): -out redirects the directory-mode IR state dir —
 	// pre-fix the flag was silently ignored here (engine-wiring audit
@@ -333,9 +347,10 @@ func writeDirIR(ctx context.Context, cfg *config.Config, outPath string, files [
 				unresolved++
 			}
 		}
-		fmt.Printf("%s: entry=%s conditions=%d queries=%d unique=%d external_fns=%d unresolved=%d unbalanced=%d → %s\n",
+		fmt.Printf("%s: entry=%s conditions=%d queries=%d unique=%d external_fns=%d unresolved=%d unbalanced=%d%s → %s\n",
 			filepath.Base(file.Path), orDash(file.Entry), len(file.Conditions),
-			len(file.Queries), len(file.UniqueQueries()), len(file.ExternalFns), unresolved, len(file.Unbalanced), path)
+			len(file.Queries), len(file.UniqueQueries()), len(file.ExternalFns), unresolved, len(file.Unbalanced),
+			inlineSummary(inlineResults[file.Path]), path)
 	}
 	log.Info("extraction complete", "files", len(files), "state_dir", stateDir)
 	return nil

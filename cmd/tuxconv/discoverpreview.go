@@ -19,24 +19,24 @@ import (
 // never prints. The frontend renders this verbatim — no expression parsing
 // in the browser.
 type FilterPreviewJSON struct {
-	Entry      string     `json:"entry"`
-	Filter     string     `json:"filter"`
-	MergedKey  string     `json:"mergedKey"`
-	Matched    []string   `json:"matched"`
-	Pruned     []string   `json:"pruned,omitempty"`
-	Blocks     [][2]int   `json:"blocks"`
-	BlockLines int        `json:"blockLines"`
-	Kept       int        `json:"kept"`
-	Dropped    int        `json:"dropped"`
-	Unfolded   int        `json:"unfolded"`
-	Reads      []string   `json:"reads"`
-	Writes     []string   `json:"writes"`
-	Queries    []string   `json:"queries"`
-	Tx         []string   `json:"tx,omitempty"`
-	Residue    []string   `json:"residue,omitempty"`
-	LogicOnly  bool       `json:"logicOnly"`
-	Flattened  string     `json:"flattened"`
-	Error      string     `json:"error,omitempty"`
+	Entry      string   `json:"entry"`
+	Filter     string   `json:"filter"`
+	MergedKey  string   `json:"mergedKey"`
+	Matched    []string `json:"matched"`
+	Pruned     []string `json:"pruned,omitempty"`
+	Blocks     [][2]int `json:"blocks"`
+	BlockLines int      `json:"blockLines"`
+	Kept       int      `json:"kept"`
+	Dropped    int      `json:"dropped"`
+	Unfolded   int      `json:"unfolded"`
+	Reads      []string `json:"reads"`
+	Writes     []string `json:"writes"`
+	Queries    []string `json:"queries"`
+	Tx         []string `json:"tx,omitempty"`
+	Residue    []string `json:"residue,omitempty"`
+	LogicOnly  bool     `json:"logicOnly"`
+	Flattened  string   `json:"flattened"`
+	Error      string   `json:"error,omitempty"`
 }
 
 // FilterPreviewFile is the -filter-json document: one preview per entry

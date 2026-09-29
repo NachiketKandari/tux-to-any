@@ -26,7 +26,7 @@ func pruneOldRuns(logDir, auditDir string, keep int) int {
 }
 
 type entryAge struct {
-	path string
+	path  string
 	mtime int64
 }
 

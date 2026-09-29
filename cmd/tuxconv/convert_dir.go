@@ -42,7 +42,7 @@ type serviceOutcome struct {
 // every service writes under baseRoot/<service>. excluded carries the entry
 // basenames convert.fileFilter dropped — mappings declaring those sources
 // are deliberate skips (WARN), not orphan drift.
-func runConvertFanout(ctx context.Context, w *convertWiring, target string, mains []*ir.File, files []*ir.File, excluded []string, mappingPath, baseRoot, degrade string) error {
+func runConvertFanout(ctx context.Context, w *convertWiring, target string, mains []*ir.File, files []*ir.File, excluded []string, mappingPath, baseRoot, degrade string, noInline bool) error {
 	log := telemetry.Log(ctx)
 	if fi, err := os.Stat(mappingPath); err != nil || !fi.IsDir() {
 		return fmt.Errorf("convert: %s holds %d service(s) (fileFilter may exclude entries) — pass a mapping directory (one yaml per service, each with source: <entry file>), not %q",
@@ -77,7 +77,7 @@ func runConvertFanout(ctx context.Context, w *convertWiring, target string, main
 		// The inner DB-render pool stays at 1 — the outer pool already
 		// bounds the run's goroutines (nested pools would multiply).
 		base := filepath.Join(baseRoot, mapping.Service)
-		res, led, err := convertOneService(ctx, w, main, files, mapping, base, 1)
+		res, led, err := convertOneService(ctx, w, main, files, mapping, base, 1, noInline)
 		results[i] = serviceOutcome{service: mapping.Service, base: base, res: res, led: led, err: err}
 	})
 
