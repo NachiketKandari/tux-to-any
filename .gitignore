@@ -32,6 +32,10 @@ tuxExamples/
 moreExamples/
 batchExamples/
 examples/
+# local-only pipeline data/notes (internal endpoints, runtime log, diagrams)
+/riskPipelineTest/
+/excalidraw_notes/
+/EntireGoPipeline.excalidraw
 # locally regenerated scenario goldens (derived from the corpus when present)
 testdata/scen/
 # gentest run artifacts — mockgen regenerates mocks into the fixture tree

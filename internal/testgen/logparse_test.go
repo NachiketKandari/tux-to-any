@@ -1,16 +1,23 @@
 package testgen
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // logCorpus is the real riskprofile runtime log shipped with the plan
-// (docs/gt7-log-fixtures-plan.md "Log corpus").
+// (docs/gt7-log-fixtures-plan.md "Log corpus"). The corpus is local-only —
+// it carries internal endpoints and runtime data — so a missing copy skips
+// the corpus pin instead of failing a fresh clone.
 func logCorpus(t *testing.T) *LogData {
 	t.Helper()
-	data, err := ParseLogFile(filepath.Join("..", "..", "riskPipelineTest", "logfile.txt"))
+	path := filepath.Join("..", "..", "riskPipelineTest", "logfile.txt")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("local corpus not present (%v)", err)
+	}
+	data, err := ParseLogFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
