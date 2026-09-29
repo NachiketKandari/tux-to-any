@@ -132,6 +132,14 @@ const (
 	// SkipUnbalanced: the definition's braces never close, so there is no
 	// trustworthy span to lift.
 	SkipUnbalanced SkipCode = "unbalanced"
+	// SkipCycle: the helper is already on the chain that pulled it in
+	// (fn_a → fn_b → fn_a). Lifting it would recurse forever; the chain
+	// is reported so the cycle is visible rather than merely bounded away.
+	SkipCycle SkipCode = "cycle"
+	// SkipGlobalSpan: a file-scope declaration the callee needs is written
+	// across several lines, so it cannot be lifted whole. Recorded rather
+	// than half-spliced.
+	SkipGlobalSpan SkipCode = "global-declaration-span"
 )
 
 // Skip records one refusal, with the reason a reader needs and no more.
