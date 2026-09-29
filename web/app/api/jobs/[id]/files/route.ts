@@ -9,13 +9,20 @@ function inside(jobDir: string, abs: string): boolean {
   return back !== "" && !back.startsWith("..");
 }
 
-// GET /api/jobs/:id/files?path=<root-relative> — read one converted file.
+// GET /api/jobs/:id/files?path=<root-relative>&tree=target|gentest — read
+// one converted file, or one file from the gentest -out snapshot.
 export async function GET(req: Request, { params }: { params: { id: string } }) {
   const job = getJob(params.id);
   if (!job) return NextResponse.json({ error: "unknown job" }, { status: 404 });
   if (!job.converted) return NextResponse.json({ error: "nothing converted yet" }, { status: 400 });
-  const rel = new URL(req.url).searchParams.get("path") ?? "";
-  const abs = join(job.converted.root, rel);
+  const url = new URL(req.url);
+  const rel = url.searchParams.get("path") ?? "";
+  const tree = url.searchParams.get("tree") === "gentest" ? "gentest" : "target";
+  const root = tree === "gentest" ? job.gentestOutRoot : job.converted.root;
+  if (!root) {
+    return NextResponse.json({ error: "no gentest snapshot staged yet" }, { status: 400 });
+  }
+  const abs = join(root, rel);
   if (!inside(job.dir, abs)) {
     return NextResponse.json({ error: "path escapes the job directory" }, { status: 400 });
   }

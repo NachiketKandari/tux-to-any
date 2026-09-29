@@ -108,6 +108,29 @@ func runGentest(ctx context.Context, args []string) error {
 		if err := rep.WriteText(os.Stdout); err != nil {
 			return err
 		}
+		// Check-only also honors -log-file: the log is parsed and its
+		// fixture coverage is reported (which methods carry real values,
+		// which fall back to assumed) without writing anything. This is
+		// the preflight the web Tests step shows before a generate run.
+		if *logFile != "" {
+			logData, err := testgen.ParseLogFile(*logFile)
+			if err != nil {
+				return err
+			}
+			log.Info("gentest log parsed", "path", logData.Path, "traces", len(logData.Traces),
+				"skipped_null", logData.SkippedNull, "stack_lines", logData.StackLines, "warnings", len(logData.Warnings))
+			complete := 0
+			for _, tr := range logData.Traces {
+				if tr.Complete() {
+					complete++
+				}
+			}
+			fmt.Printf("log: %s — %d lines, %d traces (%d complete), %d warnings, %d requestID:null skipped, %d stack lines\n",
+				logData.Path, logData.Lines, len(logData.Traces), complete, len(logData.Warnings), logData.SkippedNull, logData.StackLines)
+			cov := testgen.CoverLog(rep, logData)
+			fmt.Printf("log: fixtures — %d scanned functions with log values, %d assumed (of %d)\n",
+				cov.FromLog, cov.Assumed, len(cov.Entries))
+		}
 		fmt.Println("check-only: no test files written")
 		archiveGapReport(ctx, rep)
 		return nil

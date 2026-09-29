@@ -103,18 +103,54 @@ export async function convert(
   return { job, note: data.note, drafts: data.drafts };
 }
 
-export async function gentest(jobId: string, mode: "check" | "generate", useLLM = false): Promise<JobState> {
+export interface GentestOptions {
+  useLLM?: boolean;
+  /** GT-7: --nice-names (literals-only LLM polish; needs useLLM). */
+  niceNames?: boolean;
+  /** GT-7: stage a complete -out snapshot and run the full test gate there. */
+  staged?: boolean;
+  /** GT-7: attach the job's runtime log (-log-file) for real fixture values. */
+  withLog?: boolean;
+}
+
+export async function gentest(
+  jobId: string,
+  mode: "check" | "generate",
+  opts: GentestOptions = {}
+): Promise<JobState> {
   const r = await fetch(`/api/jobs/${jobId}/gentest`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode, useLLM }),
+    body: JSON.stringify({ mode, ...opts }),
   });
   await json(r);
   return fetchJob(jobId);
 }
 
-export async function readConvertedFile(jobId: string, path: string): Promise<string> {
-  const r = await fetch(`/api/jobs/${jobId}/files?path=${encodeURIComponent(path)}`);
+/** GT-7: attach a runtime log (.txt/.log) to the job — tmpdir-only. */
+export async function uploadGentestLog(jobId: string, file: File): Promise<JobState> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const r = await fetch(`/api/jobs/${jobId}/gentest/log`, { method: "POST", body: fd });
+  await json(r);
+  return fetchJob(jobId);
+}
+
+/** GT-7: detach the attached runtime log. */
+export async function clearGentestLog(jobId: string): Promise<JobState> {
+  const r = await fetch(`/api/jobs/${jobId}/gentest/log`, { method: "DELETE" });
+  await json(r);
+  return fetchJob(jobId);
+}
+
+export async function readConvertedFile(
+  jobId: string,
+  path: string,
+  tree: "target" | "gentest" = "target"
+): Promise<string> {
+  const r = await fetch(
+    `/api/jobs/${jobId}/files?path=${encodeURIComponent(path)}&tree=${tree}`
+  );
   const d = await json<{ content: string }>(r);
   return d.content;
 }
@@ -157,8 +193,8 @@ export async function fetchLLMStatus(): Promise<LLMStatus> {
   return json(r);
 }
 
-export function downloadArchiveUrl(jobId: string): string {
-  return `/api/jobs/${jobId}/archive`;
+export function downloadArchiveUrl(jobId: string, tree?: "gentest"): string {
+  return `/api/jobs/${jobId}/archive${tree ? `?tree=${tree}` : ""}`;
 }
 
 export async function loadSample(path: string): Promise<{ id: string }> {

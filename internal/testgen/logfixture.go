@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"tux-to-any/internal/testscan"
 )
 
 // ScopedFixtureSource is the GT-7 seam: a fixture source that can scope
@@ -159,6 +161,59 @@ func (l *LogFixtureSource) Provenance() string {
 // assumed falls back to the deterministic placeholder source.
 func (l *LogFixtureSource) assumed() *AssumedFixtureSource {
 	return &AssumedFixtureSource{Models: l.Models}
+}
+
+// LogCoverageEntry is one scanned function's log-fixture provenance:
+// "log <short-id>" when a complete trace supplied its values, "assumed"
+// when the log had no hit (same tagging the generator writes per method).
+type LogCoverageEntry struct {
+	Service string `json:"service"`
+	Layer   string `json:"layer"`
+	Func    string `json:"func"`
+	Source  string `json:"source"`
+}
+
+// LogCoverage summarizes how a parsed log covers a scan report.
+type LogCoverage struct {
+	Entries []LogCoverageEntry `json:"entries"`
+	FromLog int                `json:"from_log"`
+	Assumed int                `json:"assumed"`
+}
+
+// CoverLog computes per-function fixture provenance for a scan report
+// without rendering anything — the preflight behind
+// `gentest -check-only -log-file`. It mirrors LogFixtureSource.Provenance
+// (success trace first, failed trace as fallback) so the counts match what
+// a generate run would tag. Models-layer directories are skipped: they are
+// never a test target.
+func CoverLog(rep *testscan.Report, data *LogData) LogCoverage {
+	cov := LogCoverage{}
+	if rep == nil || data == nil {
+		return cov
+	}
+	for _, svc := range rep.Services {
+		src := NewLogFixtureSource(data, nil, svc.Name)
+		for _, lr := range svc.Layers {
+			if lr.Layer == testscan.LayerModels {
+				continue
+			}
+			for _, fn := range lr.Funcs {
+				tag := "assumed"
+				if scoped, ok := src.ForUnit(svc.Name, string(lr.Layer), fn.Name).(MethodLogValues); ok {
+					tag = scoped.Provenance()
+				}
+				cov.Entries = append(cov.Entries, LogCoverageEntry{
+					Service: svc.Name, Layer: string(lr.Layer), Func: fn.Name, Source: tag,
+				})
+				if tag == "assumed" {
+					cov.Assumed++
+				} else {
+					cov.FromLog++
+				}
+			}
+		}
+	}
+	return cov
 }
 
 // RowValues implements FixtureSource: logged values by db column, assumption

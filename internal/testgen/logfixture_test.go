@@ -3,6 +3,8 @@ package testgen
 import (
 	"strings"
 	"testing"
+
+	"tux-to-any/internal/testscan"
 )
 
 // TestLogFixtureSourceValues pins the per-method value mapping: request and
@@ -133,5 +135,52 @@ func TestLogFixturePrimitives(t *testing.T) {
 	}
 	if got := goStringBody("a \"quoted\"\nline"); got != `a \"quoted\"\nline` {
 		t.Errorf("escaped body = %q", got)
+	}
+}
+
+// TestCoverLog pins the check-only preflight: scanned functions with a
+// complete trace report "log <short-id>", functions with no complete trace
+// report "assumed", and models-layer entries are skipped (never a target).
+func TestCoverLog(t *testing.T) {
+	logText := `09-29-2026 14:58:15 DEBUG riskprofile.go:16 demo-be/pkg/services/svc/handler.(*handler).Fetch SERVICE-START {"requestID": "aaaa1111-0000-4000-8000-000000000000", "matchAccount": null}
+09-29-2026 14:58:15 INFO custom_logger.go:53 demo-be/pkg/middlewares.CustomLogger.func1 API Call End {"requestID": "aaaa1111-0000-4000-8000-000000000000", "matchAccount": null, "path": "/svc/fetch", "status": 200, "method": "POST", "requestBody": "", "responseBody": ""}
+09-29-2026 15:04:06 DEBUG riskprofile.go:50 demo-be/pkg/services/svc/handler.(*handler).Incomplete SERVICE-START {"requestID": "cccc3333-0000-4000-8000-000000000000", "matchAccount": null}
+`
+	data := ParseLog("coverage.log", []byte(logText))
+	rep := &testscan.Report{
+		Target: "/svc", Mode: testscan.ModeService,
+		Services: []testscan.ServiceReport{{
+			Name: "svc", Dir: "/svc",
+			Layers: []testscan.LayerReport{
+				{Layer: testscan.LayerDB, Dir: "/svc/db", Funcs: []testscan.Func{
+					{Name: "Fetch"},
+					{Name: "Missing"},
+				}},
+				{Layer: testscan.LayerModels, Dir: "/svc/models", Funcs: []testscan.Func{
+					{Name: "Row"},
+				}},
+			},
+		}},
+	}
+	cov := CoverLog(rep, data)
+	if len(cov.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2 (models skipped): %+v", len(cov.Entries), cov.Entries)
+	}
+	if cov.FromLog != 1 || cov.Assumed != 1 {
+		t.Errorf("coverage fromLog=%d assumed=%d, want 1/1", cov.FromLog, cov.Assumed)
+	}
+	got := map[string]string{}
+	for _, e := range cov.Entries {
+		got[e.Func] = e.Source
+	}
+	if got["Fetch"] != "log aaaa1111" {
+		t.Errorf("Fetch source = %q, want log aaaa1111", got["Fetch"])
+	}
+	if got["Missing"] != "assumed" {
+		t.Errorf("Missing source = %q, want assumed", got["Missing"])
+	}
+	// A nil log/report is empty, never a panic.
+	if empty := CoverLog(nil, nil); len(empty.Entries) != 0 || empty.FromLog != 0 {
+		t.Errorf("nil coverage = %+v", empty)
 	}
 }

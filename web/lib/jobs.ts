@@ -86,6 +86,52 @@ export interface AnalysisRow {
   reasons: string;
 }
 
+/** GT-7: one attached runtime log (job-tmpdir only, never leaves the machine). */
+export interface GentestLogInfo {
+  name: string;
+  bytes: number;
+  savedAt: string;
+}
+
+/** GT-7: log-fixture coverage from the check-only preflight. */
+export interface GentestPreflight {
+  path: string;
+  lines: number;
+  traces: number;
+  complete: number;
+  warnings: number;
+  fromLog: number;
+  assumed: number;
+}
+
+/** GT-7: one generated function's fixture provenance. */
+export interface GentestFixture {
+  service: string;
+  layer: string;
+  func: string;
+  /** "log <short-id>" when a complete trace supplied values, "assumed" otherwise. */
+  source: string;
+}
+
+/** GT-7: one file written/staged by a generate run, rooted in the target
+ * tree ("target") or the -out snapshot ("gentest"). */
+export interface GentestFileEntry {
+  path: string;
+  tree: "target" | "gentest";
+}
+
+/** GT-7: the parsed gentest_summary.json of the newest generate run. */
+export interface GentestSummary {
+  fixtures: GentestFixture[];
+  gates: string[];
+  testsFailed: boolean;
+  llmCalls: number;
+  files: GentestFileEntry[];
+  staged: string[];
+  fromLog: number;
+  assumed: number;
+}
+
 export interface Job {
   id: string;
   name: string;
@@ -119,6 +165,22 @@ export interface Job {
   converted?: ConvertedTree;
   gentestGap?: string;
   gentestFiles?: string[];
+  /** GT-7: attached runtime log (job tmpdir only). */
+  gentestLog?: GentestLogInfo;
+  /** GT-7: log-fixture coverage from the last check-only preflight. */
+  gentestPreflight?: GentestPreflight;
+  /** GT-7: structured outcome of the last generate run (audit summary). */
+  gentestSummary?: GentestSummary;
+  /** GT-7: whether the run requested --nice-names. */
+  gentestNiceNames?: boolean;
+  /** GT-7: whether the run requested the LLM seam (false = -no-llm). */
+  gentestLLM?: boolean;
+  /** GT-7: whether the run actually made LLM calls. */
+  gentestLLMEffective?: boolean;
+  /** GT-7: human-readable note explaining the effective mode. */
+  gentestLLMNote?: string;
+  /** GT-7: -out snapshot root when the last run staged one. */
+  gentestOutRoot?: string;
   logs: string[];
 }
 

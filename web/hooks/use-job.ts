@@ -1,7 +1,14 @@
 "use client";
 
 import * as React from "react";
-import type { FlowReport, ScenarioBundle, AnalysisRow } from "@/lib/jobs";
+import type {
+  FlowReport,
+  ScenarioBundle,
+  AnalysisRow,
+  GentestLogInfo,
+  GentestPreflight,
+  GentestSummary,
+} from "@/lib/jobs";
 
 export interface JobState {
   id: string;
@@ -27,6 +34,14 @@ export interface JobState {
   converted?: { target: string; root: string; files: string[]; summary: string; llm?: boolean; llmEffective?: boolean; llmNote?: string; llmCalls?: number };
   gentestGap?: string;
   gentestFiles?: string[];
+  gentestLog?: GentestLogInfo;
+  gentestPreflight?: GentestPreflight;
+  gentestSummary?: GentestSummary;
+  gentestNiceNames?: boolean;
+  gentestLLM?: boolean;
+  gentestLLMEffective?: boolean;
+  gentestLLMNote?: string;
+  gentestOutRoot?: string;
 }
 
 export function useJob(jobId: string | null) {

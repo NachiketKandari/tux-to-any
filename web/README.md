@@ -5,7 +5,8 @@ total) or pick a bundled sample and watch the batch break down:
 
 Upload batch → Overview dashboard + Analyze triage (LOW/MEDIUM/HIGH effort) → IR tables → flow
 coverage → dispatch-axis scenarios + scenarioFilter playground → editable mapping drafts → converted
-tree (**Tux → Go · Python · C#**) → gentest gap report + generated tests → live CLI logs.
+tree (**Tux → Go · Python · C#**) → log-driven gentest (gap report + fixture preflight, generated tests,
+nice names, verified snapshot) → live CLI logs.
 
 The 6-step wizard (Upload → Overview → Scenarios → Mapping → Convert → Tests) collapses the old
 11-tab sprawl: IR / Flow / Source live as Overview sub-tabs, Trace / Logs as Convert sub-tabs,
@@ -54,8 +55,10 @@ This viewer is a local tool. Runtime network behavior, verified:
   `apiBase` only — same egress contract as the CLI. The Go
   `internal/telemetry` package is local `slog` file logging
   (`conversion_logs/logs/`) despite the name.
-- Uploaded `.pc` files stay in disposable tmpdirs (`tux-web-*`) on your
-  machine; nothing leaves it.
+- Uploaded `.pc` files and attached runtime logs stay in disposable tmpdirs
+  (`tux-web-*`) on your machine; nothing leaves it. Logs are capped at 5MB,
+  never bundled into the Download .zip, and only their numeric fixture
+  counts reach the master metrics log.
 
 Next.js anonymous telemetry (build counts, not your code) is disabled
 three ways — any one suffices, all three are set so clones/CI/containers
@@ -149,6 +152,38 @@ a broken toggle:
 - C# drafts are deterministic-only by design — the mapping toggle is a
   documented no-op there.
 
+## GT-7 — runtime-log fixtures in the Tests step
+
+The Tests step exposes the shipped GT-7 CLI surface end-to-end:
+
+- **Attach a runtime log** — drag the edited app's `.txt`/`.log` (or paste it).
+  It is stored at `<job>/gentest/runtime.log`, capped at 5MB, and used with
+  `gentest -log-file`. **Gap report** then prints a *fixture preflight* before
+  anything is generated: `N from log · M assumed`, trace/line/warning counts.
+- **Fixture provenance** — after a generate run the panel parses the newest
+  `conversion_logs/audit/<run-id>/gentest_summary.json` into a filterable
+  `service · layer · func · source` table (`log <short-id>` vs `assumed`),
+  plus the gate lines. Generated files carry `// fixture: …` comments and open
+  in an inline viewer (Convert-tree files and snapshot files alike).
+- **Nice names** — `--nice-names` is available when the LLM toggle is on;
+  requested-vs-effective is reported (no key → names stay deterministic).
+  The log path itself needs no LLM: controller fixtures are derived from the
+  trace, so a keyless run is still log-driven.
+- **Verified snapshot** — `-out <job>/go-gentest` stages non-test sources +
+  generated tests and runs the full `go test` gate inside the snapshot; the
+  converted tree is untouched. Download it via the summary strip
+  (`GET /api/jobs/:id/archive?tree=gentest`). On module-less converted trees
+  the CLI records `gate: skipped (… outside any Go module)` visibly instead of
+  pretending the gate ran.
+- **In-place (default)** — without the snapshot checkbox the browser passes
+  `-in-place`, so tests land next to the converted code and appear in the
+  Convert tree even for module-less trees.
+
+Privacy: a runtime log can carry request bodies and internal endpoints, so it
+stays in the disposable job tmpdir, is never echoed into
+`conversion_logs/web-metrics.jsonl` (only numeric fixture counts are), and is
+never bundled into the Download .zip.
+
 ## Where converted files live + Download .zip
 
 Per job (server-local, disposable):
@@ -192,7 +227,8 @@ web/
       jobs/[id]/mapping/            # PUT save edited draft
       jobs/[id]/convert/            # POST convertgo / convertbatchpy / convertcs
       jobs/[id]/lineage/            # GET source→output trace (this part became that part)
-      jobs/[id]/gentest/            # POST gap report / generate
+      jobs/[id]/gentest/            # POST gap report / generate (GT-7 options)
+      jobs/[id]/gentest/log/        # POST attach / DELETE runtime log (GT-7)
       jobs/[id]/files|logs|route    # file read, log tail, job fetch
       jobs/[id]/archive/            # GET whole converted tree + mapping as .zip
       llm-status/route.ts           # GET LLM key presence (booleans only)
@@ -212,7 +248,8 @@ web/
     mapping-editor.tsx    # draft Go/C#, edit, save & continue
     convert-panel.tsx     # Tux→Go/Python/C# target cards + file tree + code view + provenance banner
     lineage-explorer.tsx  # Trace tab: pick a source part → see every file it became, with evidence
-    tests-panel.tsx       # gap report / generate (Go trees)
+    tests-panel.tsx       # GT-7 Tests step: log attach + fixture preflight,
+                          # generate options, provenance table, gates, viewer
     files.tsx             # filterable file tree + copy/download code view
   hooks/use-job.ts        # job + log polling
   hooks/use-lineage.ts    # source→output trace fetch (refetches per converted tree)
@@ -228,8 +265,9 @@ web/
 ```
 
 Every button runs something real: upload, sample, draft, build scenarios,
-filter preview, save mapping, convert (per target), gap report, generate,
-file open, copy/download, download-all-.zip, log tail. Busy states disable actions; errors
-surface inline; draft-and-stop converts bounce you to the Mapping tab.
-Requested-vs-effective LLM badges (plus `/api/llm-status`) explain every
-deterministic fallback.
+filter preview, save mapping, convert (per target), attach/clear runtime log,
+gap report (with fixture preflight), generate (log fixtures / nice names /
+verified snapshot), file open, copy/download, download-all-.zip, log tail.
+Busy states disable actions; errors surface inline; draft-and-stop converts
+bounce you to the Mapping tab. Requested-vs-effective LLM badges (plus
+`/api/llm-status`) explain every deterministic fallback.

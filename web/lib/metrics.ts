@@ -27,6 +27,14 @@ export interface MetricEvent {
   tests?: number;
   /** Scenario slices built (scenarios). */
   scenarios?: number;
+  /** GT-7: gentest methods whose fixtures came from a runtime log. */
+  fixturesFromLog?: number;
+  /** GT-7: gentest methods that fell back to assumed placeholders. */
+  fixturesAssumed?: number;
+  /** GT-7: whether the gentest run requested --nice-names. */
+  niceNames?: boolean;
+  /** GT-7: whether the gentest run staged a -out snapshot. */
+  staged?: boolean;
   note?: string;
 }
 

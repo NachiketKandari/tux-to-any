@@ -52,12 +52,15 @@ import {
   saveMapping,
   convert,
   gentest,
+  uploadGentestLog,
+  clearGentestLog,
   runAnalysis,
   readConvertedFile,
   saveConvertedFile,
   fetchDbStatus,
   fetchLLMStatus,
   type LLMStatus,
+  type GentestOptions,
 } from "@/lib/api-client";
 import type { ConvertTarget } from "@/lib/targets";
 
@@ -221,9 +224,21 @@ export default function Home() {
     }
   }
 
-  async function handleGentest(mode: "check" | "generate") {
+  async function handleGentest(mode: "check" | "generate", opts?: GentestOptions) {
     if (!job) return;
-    const j = await run(() => gentest(job.id, mode));
+    const j = await run(() => gentest(job.id, mode, opts));
+    if (j) setJob(j);
+  }
+
+  async function handleUploadLog(file: File) {
+    if (!job) return;
+    const j = await run(() => uploadGentestLog(job.id, file));
+    if (j) setJob(j);
+  }
+
+  async function handleClearLog() {
+    if (!job) return;
+    const j = await run(() => clearGentestLog(job.id));
     if (j) setJob(j);
   }
 
@@ -668,13 +683,21 @@ export default function Home() {
               </TabsList>
               <TabsContent value="tests">
                 <TestsPanel
+                  jobId={job.id}
                   busy={busy}
                   canRun={job.converted?.target === "go"}
                   gap={job.gentestGap}
                   testFiles={job.gentestFiles}
-                  onGap={() => handleGentest("check")}
-                  onGenerate={() => handleGentest("generate")}
+                  log={job.gentestLog}
+                  preflight={job.gentestPreflight}
+                  summary={job.gentestSummary}
+                  hasSnapshot={!!job.gentestOutRoot}
+                  llmKeyOk={llmStatus?.anyKey}
+                  onGap={(opts) => handleGentest("check", opts)}
+                  onGenerate={(opts) => handleGentest("generate", opts)}
                   onGoConvert={() => setStep("convert")}
+                  onUploadLog={handleUploadLog}
+                  onClearLog={handleClearLog}
                 />
               </TabsContent>
               <TabsContent value="metrics">

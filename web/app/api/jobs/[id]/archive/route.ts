@@ -113,14 +113,21 @@ async function walk(root: string, out: { rel: string; abs: string }[]): Promise<
   await rec(root);
 }
 
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(req: Request, { params }: { params: { id: string } }) {
   const job = getJob(params.id);
   if (!job) return NextResponse.json({ error: "unknown job" }, { status: 404 });
   if (!job.converted) return NextResponse.json({ error: "nothing converted yet" }, { status: 400 });
-  const root = job.converted.root;
+  // ?tree=gentest downloads the staged -out snapshot (sources + tests +
+  // gates) instead of the converted tree; provenance lives in the summary.
+  const gentestTree = new URL(req.url).searchParams.get("tree") === "gentest";
+  const root = gentestTree ? job.gentestOutRoot : job.converted.root;
+  if (!root) {
+    return NextResponse.json({ error: "no gentest snapshot staged yet — generate with 'staged' on" }, { status: 400 });
+  }
+  const prefix = gentestTree ? "gentest" : job.converted.target;
   const relRoot = relative(job.dir, root);
   if (relRoot === "" || relRoot.startsWith("..")) {
-    return NextResponse.json({ error: "converted tree escapes the job directory" }, { status: 400 });
+    return NextResponse.json({ error: "tree escapes the job directory" }, { status: 400 });
   }
 
   const found: { rel: string; abs: string }[] = [];
@@ -133,7 +140,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
   const entries: { name: string; data: Buffer }[] = [];
   for (const f of found) {
-    const name = safeName(`${job.converted.target}/${f.rel}`);
+    const name = safeName(`${prefix}/${f.rel}`);
     if (!name) continue;
     try {
       const st = await fs.stat(f.abs);
@@ -164,21 +171,29 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   }
 
   const summary = [
-    `tux-to-any conversion bundle`,
+    `tux-to-any ${gentestTree ? "gentest snapshot" : "conversion"} bundle`,
     `job: ${job.name} (id ${job.id})`,
     `target: ${job.converted.target}`,
+    `tree: ${gentestTree ? "gentest -out snapshot (sources + tests)" : "converted tree"}`,
     `files: ${entries.length}`,
     `llm: requested=${job.converted.llm ? "on" : "off"} effective=${job.converted.llmEffective ? "on" : "off"}${job.converted.llmCalls != null ? ` (${job.converted.llmCalls} calls)` : ""}`,
-    job.converted.llmNote ? `llm note: ${job.converted.llmNote}` : "",
+    job.converted.llmNote ? `llm note: ${job.converted.llmNote}` : null,
+    job.gentestSummary
+      ? `fixtures: ${job.gentestSummary.fromLog} from log, ${job.gentestSummary.assumed} assumed (of ${job.gentestSummary.fixtures.length})`
+      : null,
+    job.gentestSummary ? `nice-names: requested=${job.gentestNiceNames ? "on" : "off"} effective=${job.gentestLLMEffective ? "on" : "off"}` : null,
+    job.gentestSummary?.gates.length ? `gates: ${job.gentestSummary.gates.join(" | ")}` : null,
+    job.gentestSummary?.testsFailed ? `tests: FAILED (see gates — non-fatal by design)` : job.gentestSummary ? `tests: passed (or not run)` : null,
     ``,
-    `Converted files live on the server under a disposable tmpdir and vanish`,
-    `on restart — this zip is the durable copy.`,
+    `Attached runtime logs are never bundled: they stay in the disposable job`,
+    `tmpdir. Converted files vanish on server restart — this zip is the`,
+    `durable copy.`,
     ``,
-  ].join("\n");
+  ].filter((l): l is string => l !== null).join("\n");
   entries.push({ name: "tux-to-any-summary.txt", data: Buffer.from(summary, "utf8") });
 
   const zip = buildZip(entries);
-  const fname = `${job.name.replace(/[^\w.-]+/g, "_")}-${job.converted.target}.zip`;
+  const fname = `${job.name.replace(/[^\w.-]+/g, "_")}-${prefix}.zip`;
   return new Response(new Uint8Array(zip), {
     headers: {
       "Content-Type": "application/zip",
