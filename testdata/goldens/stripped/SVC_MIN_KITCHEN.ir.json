@@ -172,6 +172,26 @@
           "line": 83
         }
       ],
+      "send_fields": [
+        {
+          "field": "FML_AMT",
+          "target": "li_amt",
+          "line": 78
+        },
+        {
+          "field": "FML_USER_ID",
+          "target": "c_user_id",
+          "line": 77
+        }
+      ],
+      "recv_fields": [
+        {
+          "field": "FML_ACC_ID",
+          "target": "li_id",
+          "line": 83,
+          "unchecked": true
+        }
+      ],
       "start_line": 79,
       "end_line": 83,
       "function": "SVC_MIN_KITCHEN"
@@ -271,7 +291,7 @@
     {
       "name": "fn_min_check",
       "resolved": true,
-      "defined_in": "testdata/stripped/fn_min_lib.pc",
+      "defined_in": "/Users/harshita/workspace/tux-to-any/testdata/fixtures/stripped/fn_min_lib.pc",
       "has_sql": true,
       "callsites": [
         55

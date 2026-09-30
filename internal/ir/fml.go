@@ -6,15 +6,17 @@ import (
 	"tux-to-any/internal/tsscan"
 )
 
-// allFmlOps classifies every Fget32/Fadd32/Foccur32 call into an ordered
-// FmlOp list. Foccur32/Foccur presence checks join as Get-kind ops (the
-// counted field belongs to the request contract even when the arm never
-// Fget-reads it — the existence test is the read).
+// allFmlOps classifies every Fget32/Fadd32/Fdel32/Foccur32 call into an ordered
+// FmlOp list, in source order. Foccur32/Foccur presence checks join as Get-kind
+// ops (the counted field belongs to the request contract even when the arm
+// never Fget-reads it — the existence test is the read); Fdel32 joins as a
+// Del-kind op so a removed field stops being reported as part of a buffer's
+// contents.
 func allFmlOps(facts *tsscan.SourceFacts, f *File, opts Options) []FmlOp {
 	out := make([]FmlOp, 0, 8)
 	for i := range facts.Calls {
 		c := &facts.Calls[i]
-		if c.Name != "Fget32" && c.Name != "Fadd32" &&
+		if c.Name != "Fget32" && c.Name != "Fadd32" && !isFdelCallName(c.Name) &&
 			!isFoccurCallName(c.Name) {
 			continue
 		}
@@ -26,6 +28,13 @@ func allFmlOps(facts *tsscan.SourceFacts, f *File, opts Options) []FmlOp {
 		return nil
 	}
 	return out
+}
+
+// isFdelCallName reports the field-removal spellings. Fdel32 is the FML32
+// form; Fdel is the shorthand, matched case-insensitively because the
+// corpus varies — same posture as isFoccurCallName.
+func isFdelCallName(name string) bool {
+	return name == "Fdel32" || strings.EqualFold(name, "Fdel")
 }
 
 // isFoccurCallName reports the FML occurrence-count spellings:
@@ -48,11 +57,15 @@ func FmlOpOf(call *tsscan.FunctionCall, facts *tsscan.SourceFacts) (FmlOp, bool)
 		return foccurOpOf(call)
 	}
 	var kind FmlOpKind
-	switch call.Name {
-	case "Fget32":
+	switch {
+	case call.Name == "Fget32":
 		kind = FmlGet
-	case "Fadd32":
+	case call.Name == "Fadd32":
 		kind = FmlAdd
+	case isFdelCallName(call.Name):
+		// Fdel32(buf, field) has no value operand; it is classified by
+		// its own shape (2 args, no target).
+		return fdelOpOf(call)
 	default:
 		return FmlOp{}, false
 	}
@@ -76,6 +89,7 @@ func FmlOpOf(call *tsscan.FunctionCall, facts *tsscan.SourceFacts) (FmlOp, bool)
 	}
 	if targetIdx < len(args) {
 		op.Target = baseIdent(args[targetIdx])
+		op.Composite = isCompositeArg(args[targetIdx])
 	}
 	if kind == FmlGet {
 		op.Optional = fnotpresGuarded(facts, call)
@@ -84,6 +98,47 @@ func FmlOpOf(call *tsscan.FunctionCall, facts *tsscan.SourceFacts) (FmlOp, bool)
 	if kind == FmlAdd {
 		op.Code = harvestCode(facts, call, op.Target)
 	}
+	return op, true
+}
+
+// isCompositeArg reports whether an FML value/destination argument is an
+// expression rather than a bare host variable or a string literal. A
+// literal is excluded deliberately — its value is known outright, so nothing
+// about it is partial. `(char*)&x` and `x` are bare once the cast is
+// stripped, so only real expressions (`c_buf[i]`, `*p`, `f(x)`) count, and
+// for those Target holds only the leading identifier.
+func isCompositeArg(arg string) bool {
+	if stringLit(arg) != "" {
+		return false
+	}
+	if _, ok := identifierArg(arg); ok {
+		return false
+	}
+	return true
+}
+
+// fdelOpOf classifies Fdel32(buf, field): the field leaves the buffer. Like
+// the Foccur shape it needs only 2 args, and like an add it carries no host
+// variable — the removal's whole effect is on the buffer's state.
+func fdelOpOf(call *tsscan.FunctionCall) (FmlOp, bool) {
+	args := splitArgs(call.Args)
+	if len(args) < 2 {
+		return FmlOp{}, false
+	}
+	field := strings.TrimSpace(args[1])
+	if n, ok := identifierArg(args[1]); ok {
+		field = n
+	}
+	if field == "" {
+		return FmlOp{}, false
+	}
+	op := FmlOp{
+		Kind:   FmlDel,
+		Field:  field,
+		Buffer: baseIdent(args[0]),
+		Line:   call.Line,
+	}
+	op.Dropped = op.Field == "FML_USER_ID" || op.Field == "FML_SESSION_ID" || IsErrField(op.Field)
 	return op, true
 }
 

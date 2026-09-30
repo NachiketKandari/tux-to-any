@@ -35,7 +35,8 @@
           "field": "FML_ACC_ID",
           "target": "sql_min_acc",
           "buffer": "Obuffer",
-          "line": 15
+          "line": 15,
+          "composite": true
         }
       ],
       "query_ids": [

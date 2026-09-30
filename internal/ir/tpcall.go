@@ -48,7 +48,11 @@ func buildTPCalls(facts *tsscan.SourceFacts, f *File, ops []FmlOp, opts Options)
 		for _, op := range ops {
 			switch {
 			case op.Line < c.Line && op.Line >= lo && op.Buffer != "" && op.Buffer == tc.SendBuffer:
-				if op.Kind == FmlAdd {
+				// Adds AND deletes are send-side facts. Recording only
+				// the adds would make the log disagree with the source
+				// exactly where it matters — a field the caller removed
+				// before calling.
+				if op.Kind == FmlAdd || op.Kind == FmlDel {
 					tc.SendFML = append(tc.SendFML, op)
 				}
 			// Sync only: async recv correlates from the tpgetrply line
@@ -65,6 +69,13 @@ func buildTPCalls(facts *tsscan.SourceFacts, f *File, ops []FmlOp, opts Options)
 		}
 		tc.Ambiguous = tc.SendBuffer != "" && tc.RecvBuffer != "" &&
 			len(tc.SendFML) == 0 && len(tc.RecvFML) == 0
+		// The folded buffer state at the call line, over the same window
+		// the op logs above cover. This is the view a service-call
+		// inliner binds against: SendFields says what actually crosses
+		// the call, RecvFields what the caller takes back and whether
+		// each read was checked. See srwindow.go.
+		tc.SendFields = sendFields(facts, ops, tc.SendBuffer, lo, c.Line)
+		tc.RecvFields = recvFields(facts, ops, tc.RecvBuffer, c.Line, hi)
 		out = append(out, tc)
 	}
 	return out

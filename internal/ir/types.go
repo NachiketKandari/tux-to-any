@@ -104,12 +104,18 @@ func containsFieldToken(field, token string) bool {
 }
 
 // FmlOpKind splits FML traffic by direction: Fget32 reads the request in,
-// Fadd32 writes the response out.
+// Fadd32 writes the response out, Fdel32 takes a field back OUT of a buffer.
+//
+// Fdel is a first-class kind rather than an omission because a buffer's
+// contents are not the list of adds that precede it — a deleted field is
+// absent, and reporting it as present would hand a callee a value the
+// caller never sent. See TPField for the folded buffer state.
 type FmlOpKind string
 
 const (
 	FmlGet FmlOpKind = "get"
 	FmlAdd FmlOpKind = "add"
+	FmlDel FmlOpKind = "del"
 )
 
 // FmlOp is one FML field access. Target is the host variable written (add)
@@ -117,16 +123,22 @@ const (
 // the errlog/strcpy/sprintf writer convention; Optional marks an
 // FNOTPRES-guarded read; Dropped marks fields the conversion deliberately
 // drops (session/error plumbing).
+//
+// Composite marks an access whose value/destination is not a bare host
+// variable — `c_buf[i]`, `*p`, a call. Target then carries only the leading
+// identifier, so a consumer must not read it as the whole expression. A
+// string literal is NOT composite: its value is fully known.
 type FmlOp struct {
-	Kind     FmlOpKind `json:"kind"`
-	Field    string    `json:"field"`
-	Target   string    `json:"target,omitempty"`
-	Buffer   string    `json:"buffer,omitempty"`
-	Line     int       `json:"line"`
-	Code     string    `json:"code,omitempty"`
-	Optional bool      `json:"optional,omitempty"`
-	Dropped  bool      `json:"dropped,omitempty"`
-	Error    bool      `json:"error,omitempty"`
+	Kind      FmlOpKind `json:"kind"`
+	Field     string    `json:"field"`
+	Target    string    `json:"target,omitempty"`
+	Buffer    string    `json:"buffer,omitempty"`
+	Line      int       `json:"line"`
+	Code      string    `json:"code,omitempty"`
+	Optional  bool      `json:"optional,omitempty"`
+	Dropped   bool      `json:"dropped,omitempty"`
+	Error     bool      `json:"error,omitempty"`
+	Composite bool      `json:"composite,omitempty"`
 }
 
 // FmlBufferRole is the resolved role of an FML buffer variable.
@@ -147,6 +159,49 @@ type BufferRole struct {
 	Role FmlBufferRole `json:"role"`
 }
 
+// TPField is one field in a tpcall buffer AT THE CALL LINE — the answer to
+// "what is in the S buffer when tpcall runs" and "what does the caller take
+// out of the R buffer, into what".
+//
+// This is the folded view over the SendFML/RecvFML op log, in the same
+// relationship UniqueQueries has to Query: the log stays factual and
+// duplicate-preserving (every add, every read, as written), the field list
+// is the state. The fold is a REPLAY, not a filter, because FML buffers are
+// last-write-wins per field and Fdel32 removes a field outright — so the
+// contents at the call line are not the adds that precede it. Two
+// consequences the log alone cannot express:
+//
+//   - A field added, deleted, then re-added carries only the re-add.
+//   - A buffer tpfree'd or memset between two calls starts EMPTY at the
+//     second call; the adds that fed the first are not in it.
+//
+// That replay is what makes the list trustworthy enough to bind a callee's
+// parameters against, which is the whole prerequisite for inlining a service
+// call rather than stubbing it.
+type TPField struct {
+	Field string `json:"field"`
+	// Target is the host variable on the other side of the call: the
+	// source expression's variable for a send field, the destination
+	// variable for a recv field. This is the binding an inline rewrite
+	// needs — the callee's parameter becomes the caller's Target.
+	Target string `json:"target,omitempty"`
+	Line   int    `json:"line"`
+	// Composite mirrors FmlOp.Composite: Target is only the leading
+	// identifier of a larger expression, so the binding is partial.
+	Composite bool `json:"composite,omitempty"`
+	// Optional marks an FNOTPRES-guarded read (recv side only).
+	Optional bool `json:"optional,omitempty"`
+	// Unchecked marks a recv read whose FML error the caller never
+	// tested. The field may be absent, leaving Target at whatever it
+	// held before — a real hazard for a caller that feeds Target into
+	// SQL or a response, and one a bare Fget32 statement makes silently.
+	Unchecked bool `json:"unchecked,omitempty"`
+	// Note: there is deliberately no Error field here. FmlOp.Error looks
+	// like the obvious thing to mirror, but it is never populated by
+	// FmlOpOf, so mirroring it would add a second always-false flag. The
+	// underlying gap is in the classifier, not here.
+}
+
 // TPCall is one correlated service call: the service, the buffers handed
 // across it, and the FML contracts on both sides gathered from the
 // surrounding block. Empty contracts with identified buffers are ambiguous
@@ -158,8 +213,14 @@ type TPCall struct {
 	RecvBuffer  string  `json:"recv_buffer,omitempty"`
 	SendFML     []FmlOp `json:"send_fml,omitempty"`
 	RecvFML     []FmlOp `json:"recv_fml,omitempty"`
-	StartLine   int     `json:"start_line"`
-	EndLine     int     `json:"end_line"`
+	// SendFields/RecvFields are the buffer states at StartLine, folded
+	// from the op logs above (see TPField). A consumer that needs to know
+	// what actually crosses the call reads these; the FML logs stay the
+	// audit trail of the ops that produced them.
+	SendFields []TPField `json:"send_fields,omitempty"`
+	RecvFields []TPField `json:"recv_fields,omitempty"`
+	StartLine  int       `json:"start_line"`
+	EndLine    int       `json:"end_line"`
 	// Async marks the tpacall (async, no inline reply) variant. Sync
 	// tpcall carries service+send+recv buffers; tpacall carries
 	// service+send only and the reply arrives via a later tpgetrply,

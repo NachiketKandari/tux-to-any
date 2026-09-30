@@ -158,6 +158,30 @@
           "line": 40
         }
       ],
+      "send_fields": [
+        {
+          "field": "FML_COMP_CD",
+          "line": 33
+        },
+        {
+          "field": "FML_SCHEME_CD",
+          "line": 34
+        }
+      ],
+      "recv_fields": [
+        {
+          "field": "FML_NAV_DATE",
+          "target": "sql_nav_date",
+          "line": 39,
+          "unchecked": true
+        },
+        {
+          "field": "FML_NAV_NAV",
+          "target": "lnav",
+          "line": 40,
+          "unchecked": true
+        }
+      ],
       "start_line": 35,
       "end_line": 40,
       "function": "SVC_TP_DEMO"

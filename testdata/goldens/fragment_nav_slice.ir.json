@@ -42,14 +42,16 @@
           "field": "FML_NAV_DATE",
           "target": "sql_nav_date",
           "buffer": "Obuffer",
-          "line": 26
+          "line": 26,
+          "composite": true
         },
         {
           "kind": "add",
           "field": "FML_NAV_VALUE",
           "target": "sql_nav_nav",
           "buffer": "Obuffer",
-          "line": 27
+          "line": 27,
+          "composite": true
         }
       ],
       "query_ids": [

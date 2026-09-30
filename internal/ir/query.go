@@ -222,7 +222,7 @@ func intoNames(s string) []string {
 				continue
 			}
 			start := k
-			name := s[start : j]
+			name := s[start:j]
 			for j+1 < len(s) && s[j] == '.' && isIdentByteFor(s[j+1]) {
 				k := j + 1
 				for k < len(s) && isIdentByteFor(s[k]) {
@@ -341,7 +341,7 @@ func scanHostRefs(s string, from, to int) []string {
 		if j == k {
 			continue
 		}
-		name := s[k : j]
+		name := s[k:j]
 		if j < to && s[j] == '[' {
 			k := j
 			for k < to && s[k] != ']' {

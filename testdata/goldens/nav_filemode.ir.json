@@ -67,7 +67,8 @@
           "field": "FML_SCHEME_CD",
           "target": "sql_demo_scheme_cd",
           "buffer": "ptr_fml_Ibuffer",
-          "line": 190
+          "line": 190,
+          "composite": true
         },
         {
           "kind": "add",
@@ -135,28 +136,32 @@
           "field": "FML_COMP_NAME",
           "target": "sql_demo_co_name",
           "buffer": "ptr_fml_Obuffer",
-          "line": 323
+          "line": 323,
+          "composite": true
         },
         {
           "kind": "add",
           "field": "FML_SCHEME_CD",
           "target": "sql_demo_scheme_cd",
           "buffer": "ptr_fml_Obuffer",
-          "line": 324
+          "line": 324,
+          "composite": true
         },
         {
           "kind": "add",
           "field": "FML_SCHEME_DESC",
           "target": "sql_demo_scheme_desc",
           "buffer": "ptr_fml_Obuffer",
-          "line": 325
+          "line": 325,
+          "composite": true
         },
         {
           "kind": "add",
           "field": "FML_PRICE_DATE",
           "target": "sql_demo_date",
           "buffer": "ptr_fml_Obuffer",
-          "line": 326
+          "line": 326,
+          "composite": true
         },
         {
           "kind": "add",
@@ -233,7 +238,8 @@
           "field": "FML_ACCOUNT",
           "target": "ls_demo_acc",
           "buffer": "ptr_fml_Ibuffer",
-          "line": 372
+          "line": 372,
+          "composite": true
         },
         {
           "kind": "add",
@@ -310,21 +316,24 @@
           "field": "FML_SCHEME_CD",
           "target": "sql_demo_scheme_cd",
           "buffer": "ptr_fml_Obuffer",
-          "line": 549
+          "line": 549,
+          "composite": true
         },
         {
           "kind": "add",
           "field": "FML_SCHEME_DESC",
           "target": "sql_demo_scheme_desc",
           "buffer": "ptr_fml_Obuffer",
-          "line": 550
+          "line": 550,
+          "composite": true
         },
         {
           "kind": "add",
           "field": "FML_PRICE_DATE",
           "target": "sql_demo_date",
           "buffer": "ptr_fml_Obuffer",
-          "line": 551
+          "line": 551,
+          "composite": true
         },
         {
           "kind": "add",
@@ -345,7 +354,8 @@
           "field": "FML_LABEL",
           "target": "str_desc",
           "buffer": "ptr_fml_Obuffer",
-          "line": 554
+          "line": 554,
+          "composite": true
         },
         {
           "kind": "add",
@@ -415,7 +425,8 @@
           "field": "FML_ACCOUNT",
           "target": "ls_demo_acc",
           "buffer": "ptr_fml_Ibuffer",
-          "line": 605
+          "line": 605,
+          "composite": true
         },
         {
           "kind": "add",
@@ -492,21 +503,24 @@
           "field": "FML_SCHEME_CD",
           "target": "sql_demo_scheme_cd",
           "buffer": "ptr_fml_Obuffer",
-          "line": 780
+          "line": 780,
+          "composite": true
         },
         {
           "kind": "add",
           "field": "FML_SCHEME_DESC",
           "target": "sql_demo_scheme_desc",
           "buffer": "ptr_fml_Obuffer",
-          "line": 781
+          "line": 781,
+          "composite": true
         },
         {
           "kind": "add",
           "field": "FML_PRICE_DATE",
           "target": "sql_demo_date",
           "buffer": "ptr_fml_Obuffer",
-          "line": 782
+          "line": 782,
+          "composite": true
         },
         {
           "kind": "add",
@@ -625,28 +639,32 @@
           "field": "FML_COMP_NAME",
           "target": "sql_demo_co_name",
           "buffer": "ptr_fml_Obuffer",
-          "line": 945
+          "line": 945,
+          "composite": true
         },
         {
           "kind": "add",
           "field": "FML_SCHEME_CD",
           "target": "sql_demo_scheme_cd",
           "buffer": "ptr_fml_Obuffer",
-          "line": 946
+          "line": 946,
+          "composite": true
         },
         {
           "kind": "add",
           "field": "FML_SCHEME_DESC",
           "target": "sql_demo_scheme_desc",
           "buffer": "ptr_fml_Obuffer",
-          "line": 947
+          "line": 947,
+          "composite": true
         },
         {
           "kind": "add",
           "field": "FML_PRICE_DATE",
           "target": "sql_demo_date",
           "buffer": "ptr_fml_Obuffer",
-          "line": 948
+          "line": 948,
+          "composite": true
         },
         {
           "kind": "add",
