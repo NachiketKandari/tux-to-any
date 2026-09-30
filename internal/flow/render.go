@@ -448,6 +448,14 @@ func exprGo(e *pred.Expr) string {
 		}
 		return ident + ` == ""`
 	}
+	// `strcmp(V, "LIT") == 0` is the corpus's dispatch idiom and is exactly
+	// a Go string comparison, so it is checked before the Kind switch —
+	// the cmp case would otherwise assemble it as
+	// `V == "LIT" == 0`, because the call and the trailing 0 are two
+	// separate nodes and neither is transpilable alone.
+	if s, ok := strcmpEquality(e); ok {
+		return s
+	}
 	switch e.Kind {
 	case "and", "or":
 		sep := " && "
@@ -499,6 +507,98 @@ func charLitToGo(t string) (string, bool) {
 		return `"` + t[1:len(t)-1] + `"`, true
 	}
 	return "", false
+}
+
+// strcmpEquality renders the corpus's dispatch idiom — `strcmp(V, "LIT") == 0`
+// and its `!= 0` negation — as the Go string comparison it is exactly
+// equivalent to. C's strcmp returns 0 iff the two strings are byte-equal; Go's
+// `==` on strings is byte-equal. Nothing is approximated.
+//
+// It is deliberately stricter than the axis harvester, which matches
+// `strn?cmp` with one regex (internal/flow/scenario.go strcmpSiteRe). For
+// harvest that is right — strncmp(a,"CSH",3) and strcmp(a,"CSH") do select the
+// same dispatch value — but for CODE it would be a silent bug: strncmp stops
+// at a length, so `strncmp(a,"CSH",3)==0` is not `a == "CSH"`, and rendering
+// it as one would compile, run, and pick the wrong arm for every longer value.
+// Same for strcasecmp. So the callee must be exactly "strcmp".
+//
+// The `== 0` matters too. `strcmp(a,b) < 0` is an ordering test that Go's `==`
+// cannot express, so anything other than a comparison against literal 0 is
+// declined and stays a TODO.
+func strcmpEquality(e *pred.Expr) (string, bool) {
+	if e == nil || e.Kind != pred.KindCmp {
+		return "", false
+	}
+	if e.Op != "==" && e.Op != "!=" {
+		return "", false
+	}
+	if e.L == nil || e.L.Kind != pred.KindCall || e.L.Name != "strcmp" {
+		return "", false
+	}
+	if e.R == nil || e.R.Kind != pred.KindLit || strings.TrimSpace(e.R.Text) != "0" {
+		return "", false
+	}
+	if len(e.L.Args) != 2 {
+		return "", false
+	}
+	lhs, ok := strcmpOperand(e.L.Args[0])
+	if !ok {
+		return "", false
+	}
+	rhs, ok := strcmpOperand(e.L.Args[1])
+	if !ok {
+		return "", false
+	}
+	return lhs + " " + e.Op + " " + rhs, true
+}
+
+// strcmpOperand renders one strcmp argument: a bare identifier or a string
+// literal, and nothing else.
+//
+// A member access (`sql_ovp_lvl1_desc.arr`) is declined rather than
+// best-effort rendered. `.arr` is a Tuxedo struct member, not a Go field, so
+// the Go spelling of the operand depends on the target struct's shape — which
+// is exactly the kind of fact this project refuses to guess. Declining leaves
+// an honest TODO; rendering `sql_ovp_lvl1_desc.arr` would not compile, and
+// rendering `sql_ovp_lvl1_desc` would compile and be wrong.
+func strcmpOperand(arg string) (string, bool) {
+	a := strings.TrimSpace(arg)
+	if a == "" || strings.ContainsAny(a, "()[]*&+-/ ") {
+		return "", false
+	}
+	if strings.HasPrefix(a, `"`) {
+		if !strings.HasSuffix(a, `"`) || len(a) < 2 {
+			return "", false
+		}
+		return a, true
+	}
+	if v, ok := charLitToGo(a); ok {
+		return v, true
+	}
+	if !isGoIdent(a) {
+		return "", false
+	}
+	return a, true
+}
+
+// isGoIdent reports whether s is a plain Go identifier: a letter or underscore
+// followed by letters, digits, and underscores. Dots are excluded on purpose —
+// a member access is not an identifier (see strcmpOperand).
+func isGoIdent(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '_':
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return s != ""
 }
 
 // goLit maps C literals to Go: char literals become strings, numbers pass.
