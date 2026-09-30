@@ -27,10 +27,14 @@ const (
 	rowMatchList = `response fields without row match (zero values): PointType, UsrUsrNm`
 	// responseRole: 39 on the corpus, the per-call form.
 	responseRole = `getUacUsrAccnts (UacUsrAccnts) has no response-field match — kept for its error check; LLM maps its role`
+	// nestedHelperArg: 5 on the corpus, FnInsertIntoUra's arguments seen from
+	// inside FnSaveRiskProfile's body. Only reachable once P2 rendered that
+	// body; the census surfaced it as R-UNCLASSIFIED first.
+	nestedHelperArg = `FnInsertIntoUra(c_ura_user_id): no helper-param provenance — zero value passed; LLM maps it`
 	// noStoreCalls: 1 on the corpus, FnFindRiskProfile's empty body. It did
-	// not exist as a marker until this change — before, the same helper
-	// rendered a bare `return 0` and the census could not see it at all,
-	// which is the silence P0 exists to end.
+	// not exist as a marker until P0 — before, the same helper rendered a
+	// bare `return 0` and the census could not see it at all, which is the
+	// silence P0 exists to end.
 	noStoreCalls = `R-NO-STORE-CALLS: FnFindRiskProfile — the helper body rendered empty; its statements are not represented in this method`
 )
 
@@ -45,6 +49,7 @@ func TestClassifyPinsEveryCorpusShape(t *testing.T) {
 		{"store bind", storeArg, ReasonStoreArgUnresolved},
 		{"row match list", rowMatchList, ReasonResponseFieldUnresolved},
 		{"response role", responseRole, ReasonResponseFieldUnresolved},
+		{"nested helper arg", nestedHelperArg, ReasonNestedHelperArgUnresolved},
 		{"no store calls", noStoreCalls, ReasonNoStoreCalls},
 		{"leading whitespace", "  " + storeArg, ReasonStoreArgUnresolved},
 	}
@@ -72,6 +77,23 @@ func TestReasonCodeAloneStillClassifies(t *testing.T) {
 	// text must not be claimed.
 	if got := Classify("R-NO-STORE-CALLS are documented elsewhere"); got != ReasonNoStoreCalls {
 		t.Errorf("Classify accepted prose starting with the code: %q", got)
+	}
+}
+
+// TestNestedHelperArgIsNotTheCallerSideOne is the distinction P2 depends on.
+// The two messages have the same shape — GoName(param): … provenance … — and
+// differ only in the last phrase, so a census that matched on the prefix would
+// merge them. P2 fixes detFnCallArgs; P1 fixed detHelperCalls. A merged bucket
+// would let P2 report a drop that is really only one of the two.
+func TestNestedHelperArgIsNotTheCallerSideOne(t *testing.T) {
+	nested := Classify(nestedHelperArg)
+	caller := Classify(helperArg)
+	if nested == caller {
+		t.Fatalf("nested and caller-side helper args both classified %q — "+
+			"P1 and P2 fix different code paths and need them apart", nested)
+	}
+	if nested != ReasonNestedHelperArgUnresolved {
+		t.Errorf("nested helper arg = %q, want %q", nested, ReasonNestedHelperArgUnresolved)
 	}
 }
 
@@ -123,7 +145,7 @@ func TestEveryReasonHasAMatch(t *testing.T) {
 			continue
 		}
 		hit := false
-		for _, msg := range []string{helperArg, helperArgAll15, storeArg, rowMatchList, responseRole, noStoreCalls} {
+		for _, msg := range []string{helperArg, helperArgAll15, storeArg, rowMatchList, responseRole, nestedHelperArg, noStoreCalls} {
 			if Classify(msg) == code {
 				hit = true
 				break

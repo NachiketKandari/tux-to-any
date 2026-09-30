@@ -1065,7 +1065,16 @@ func detEmitFnStoreCall(sb *strings.Builder, dc *detCall, outs []plan.FnParam, v
 	sb.WriteString(detZeroOuts(outs, "\t"))
 	sb.WriteString(detFnErrReturn(voidRet, inClosure, "\t") + "\n}")
 	if dc.shape == "rows" || dc.shape == "single" || dc.shape == "scalar" {
-		sb.WriteString("\n_ = " + dc.capture)
+		// Both newlines. The leading one separates this from the error
+		// check above; the trailing one is what keeps the NEXT statement
+		// off this line. Without it a store call followed by anything else
+		// fused into `_ = capcapturename := ...`, which does not parse —
+		// and because a rejected helper is dropped rather than emitted,
+		// that surfaced as the whole method missing from fns.go while the
+		// caller still called it. It only ever bit when the store call was
+		// NOT the last statement, which is why a single-call helper looked
+		// fine.
+		sb.WriteString("\n_ = " + dc.capture + "\n")
 	}
 }
 

@@ -463,8 +463,22 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 				}
 				body, derr := deterministicFnHelper(ctx, opts, svc, u.Name)
 				if derr != nil {
-					opts.Ledger.Set(u.ID, ledger.StatusSkipped, "llm disabled (run.llm: false)")
+					// A deterministic helper that fails its gates used to
+					// vanish from fns.go here while tux.go kept calling
+					// it — the emitted package then did not compile, with
+					// nothing in the tree saying so. Emit a compiling
+					// placeholder carrying the prescribed signature (which
+					// the caller was generated against) and a reason-coded
+					// TODO, the same posture appendRejectedFnHelper takes on
+					// the LLM path. The census then counts it like any
+					// other gap instead of the file losing a method.
+					if perr := appendPlaceholderFnHelper(ctx, opts, res, svc, u, fnFilePath, derr); perr != nil {
+						telemetry.Log(ctx).Warn("gated-out helper placeholder not written",
+							"unit", u.Name, "error", perr.Error())
+					}
+					opts.Ledger.Set(u.ID, ledger.StatusSkipped, "llm disabled (run.llm: false); deterministic body failed its gates")
 					res.Skipped = append(res.Skipped, u.Name)
+					res.Warnings = append(res.Warnings, u.Name+" deterministic body failed its gates — a compiling placeholder with the prescribed signature is in fns.go")
 					continue
 				}
 				if err := appendFnHelper(ctx, opts, res, svc, fnFilePath, u.Name, body); err != nil {
@@ -1108,6 +1122,75 @@ func writeFnArtifact(ctx context.Context, opts Options, res *Result, svc *gen.Se
 	}
 	res.Files = append(res.Files, path)
 	return true, nil
+}
+
+// appendPlaceholderFnHelper writes a helper method that carries the prescribed
+// signature and does nothing, so a caller generated against that signature
+// still compiles.
+//
+// It exists because the deterministic path had no equivalent of
+// appendRejectedFnHelper's placeholder. A deterministic helper that failed its
+// gates was simply skipped, and since the caller in tux.go is generated against
+// the signature rather than against what survived, the emitted package stopped
+// compiling with no marker anywhere explaining why. Silence here is the
+// failure mode; a placeholder that says so is not.
+//
+// The body returns the legacy failure status rather than panicking: this is a
+// deterministic gap the LLM resume is expected to fill, not a rejected
+// human-authored attempt, and a panic would take the whole service down on a
+// path the operator believes compiles.
+func appendPlaceholderFnHelper(ctx context.Context, opts Options, res *Result, svc *gen.Service, u plan.Unit, path string, cause error) error {
+	h, ok := fnHelperOf(opts.Plan, u.Name)
+	if !ok || !h.Fixed {
+		// Fn-lib helpers have no in-tree callers, so a placeholder with a
+		// prescribed signature buys nothing; keep the legacy skip.
+		return nil
+	}
+	structName := common.LowerFirst(svc.Mapping.Service) + "Controller"
+	method := placeholderFnHelperMethod(h, structName, cause)
+	_, err := writeFnArtifact(ctx, opts, res, svc, path, h.GoName, method)
+	if err != nil {
+		return err
+	}
+	telemetry.Log(ctx).Info("gated-out helper kept as a compiling placeholder",
+		"unit", u.Name, "path", path, "reason", cause.Error())
+	return nil
+}
+
+// placeholderFnHelperMethod renders the placeholder's Go method. It is
+// separated from the file write so its shape — and especially that it parses
+// — is testable without a pipeline.
+func placeholderFnHelperMethod(h plan.FnHelper, structName string, cause error) string {
+	var b strings.Builder
+	b.WriteString("\t// tuxgo:TODO " + gen.NoStoreCallsMark + ": " + h.GoName +
+		" — the deterministic body failed its gates and was not emitted.\n")
+	// The reason is a goast parse error, so it is already newline-free by
+	// construction — but oneLine keeps that a property of the renderer
+	// rather than a property of its current caller.
+	b.WriteString("\t// Reason: " + oneLine(cause.Error()) + "\n")
+	// Zero the out-params so a caller that passes addresses gets defined
+	// values rather than whatever it held, matching the int-status contract
+	// the real bodies implement on their error paths.
+	for _, p := range h.Params {
+		if !strings.HasPrefix(strings.TrimSpace(p.Type), "*") {
+			continue
+		}
+		b.WriteString("\tif " + p.Name + " != nil {\n\t\t*" + p.Name + " = 0\n\t}\n")
+	}
+	if h.Return == "" {
+		b.WriteString("\treturn\n")
+	} else {
+		b.WriteString("\treturn -1\n")
+	}
+	return fnHelperDecl(h, structName) + " {\n" + b.String() + "}\n"
+}
+
+// oneLine collapses a message to a single line so it can sit in a Go comment
+// without breaking the file's parse.
+func oneLine(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.TrimSpace(s)
 }
 
 // appendRejectedFnHelper keeps a failed service helper's last rejected

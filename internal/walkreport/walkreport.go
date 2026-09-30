@@ -83,6 +83,22 @@ const (
 	// measure of how many helpers are stubs.
 	ReasonNoStoreCalls = "R-NO-STORE-CALLS"
 
+	// ReasonNestedHelperArgUnresolved is an argument to a helper called FROM
+	// another helper's body, passed a zero because nothing established where
+	// it came from. detFnCallArgs emits these; detHelperCalls emits the
+	// caller-side equivalent above.
+	//
+	// Separate from ReasonHelperArgUnresolved for the same reason P1 split
+	// helper-arg from store-arg: the two are fixed by different code paths
+	// (detFnCallArgs vs detHelperCalls), so a merged bucket would let P2
+	// report a drop that is really only one of the two.
+	//
+	// These only appeared once P2 rendered FnSaveRiskProfile's body — before
+	// that the nested call was invisible, so this code had no population at
+	// all. The census surfaced the shape as R-UNCLASSIFIED rather than
+	// quietly absorbing it, which is the escape hatch earning its keep.
+	ReasonNestedHelperArgUnresolved = "R-NESTED-HELPER-ARG-UNRESOLVED"
+
 	// ReasonUnclassified is the escape hatch, and it is deliberately not a
 	// bucket to make the total come out even. A TODO whose shape matches no
 	// registered pattern lands here, so adding a new emitter gap without
@@ -100,6 +116,7 @@ var AllReasons = []string{
 	ReasonHelperArgUnresolved,
 	ReasonStoreArgUnresolved,
 	ReasonResponseFieldUnresolved,
+	ReasonNestedHelperArgUnresolved,
 	ReasonNoStoreCalls,
 	ReasonUnclassified,
 }
@@ -136,16 +153,25 @@ var (
 	// after it: the prose is the human-readable half and may be reworded
 	// without the gap changing, whereas the code is what the census tracks.
 	noStoreCallsRe = regexp.MustCompile(`^` + ReasonNoStoreCalls + `\b`)
+
+	// nestedHelperArgRe matches "FnInsertIntoUra(c_ura_user_id): no
+	// helper-param provenance — zero value passed; LLM maps it". It is the
+	// nested-call counterpart of helperArgRe and differs only in that last
+	// phrase, which is deliberate: the emitter distinguishes the two sites
+	// in the message, so the census must as well.
+	nestedHelperArgRe = regexp.MustCompile(
+		`^[A-Za-z][A-Za-z0-9_]*\([a-zA-Z][a-zA-Z0-9_]*\): no helper-param provenance`)
 )
 
 // patterns maps a reason code to the message shapes that carry it. The four
 // shapes are mutually exclusive, so map order is irrelevant to matching;
 // Classify still walks AllReasons so the reporting order is deterministic.
 var patterns = map[string][]*regexp.Regexp{
-	ReasonHelperArgUnresolved:     {helperArgRe},
-	ReasonStoreArgUnresolved:      {storeArgRe},
-	ReasonResponseFieldUnresolved: {rowMatchRe, responseRoleRe},
-	ReasonNoStoreCalls:            {noStoreCallsRe},
+	ReasonHelperArgUnresolved:       {helperArgRe},
+	ReasonStoreArgUnresolved:        {storeArgRe},
+	ReasonResponseFieldUnresolved:   {rowMatchRe, responseRoleRe},
+	ReasonNoStoreCalls:              {noStoreCallsRe},
+	ReasonNestedHelperArgUnresolved: {nestedHelperArgRe},
 }
 
 // TODOPrefix is the marker every emitted gap comment carries. It is the

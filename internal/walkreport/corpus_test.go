@@ -31,28 +31,33 @@ type corpusShape struct {
 }
 
 var corpusBaseline = corpusShape{
-	// 329 after P1's first slice (was 424 at the P0 baseline, 423 in the
-	// plan). The 95 that left R-HELPER-ARG-UNRESOLVED are c_user_id and
-	// c_match_accnt on both helpers, across every endpoint: they resolve
-	// through the FML_GET provenance map, which is what detHelperCalls
-	// should have been consulting from the start.
-	total: 329,
+	// 334 after P2's first slice. Two movements, in opposite directions:
+	//
+	//   -5  P2's newline fix. FnSaveRiskProfile now renders its SQL read
+	//       and its nested FnInsertIntoUra call, so it stops being a body
+	//       that fails its gate. It never counted before — a dropped method
+	//       is invisible to a census — so this is new population, not a
+	//       drop: 5 new R-NESTED-HELPER-ARG-UNRESOLVED for the nested call's
+	//       arguments, which were previously unemitted entirely.
+	//
+	// P1's slice is what took R-HELPER-ARG-UNRESOLVED from 345 to 250.
+	total: 334,
 	byCode: map[string]int{
-		ReasonHelperArgUnresolved:     250,
-		ReasonStoreArgUnresolved:      20,
-		ReasonResponseFieldUnresolved: 58, // 39 response-role + 19 row-match
-		ReasonNoStoreCalls:            1,  // FnFindRiskProfile's empty body
-		ReasonUnclassified:            0,
+		ReasonHelperArgUnresolved:       250,
+		ReasonStoreArgUnresolved:        20,
+		ReasonResponseFieldUnresolved:   58, // 39 response-role + 19 row-match
+		ReasonNestedHelperArgUnresolved: 5,  // FnInsertIntoUra's args, seen from inside FnSaveRiskProfile
+		ReasonNoStoreCalls:              1,  // FnFindRiskProfile: FML + tpcall, no SQL
+		ReasonUnclassified:              0,
 	},
 	byMethod: map[string]int{
 		// The endpoint gaps are spread across the 23 emitted endpoint
 		// methods. GetPointTypeD is the heaviest at 24 (its helper args plus
 		// its own store binds and shaping gaps); GetViewSavedRiskAnalizer
-		// has the fewest at 14. Both fell by exactly 5 in P1's first slice,
-		// which is the uniform shape to expect from a fix that applies to
-		// every endpoint equally — a lopsided drop would mean the fix only
-		// reached some branches, and these two spot-checks are here to
-		// catch that without freezing all 23 numbers.
+		// has the fewest at 14. Both fell by exactly 5 in P1's slice, which
+		// is the uniform shape to expect from a fix that applies to every
+		// endpoint equally — a lopsided drop would mean the fix only reached
+		// some branches.
 		"GetPointTypeD":            24,
 		"GetViewSavedRiskAnalizer": 14,
 	},
@@ -85,15 +90,30 @@ func TestCorpusCensusMatchesTheBaseline(t *testing.T) {
 			t.Errorf("method %s = %d gaps, want %d", method, got, want)
 		}
 	}
-	// Exactly one gap belongs in fns.go, and it must be the empty-helper
-	// marker. This is the file-level half of the R-NO-STORE-CALLS contract:
-	// FnFindRiskProfile's C body is FML plus tpcall with no SQL, so it is the
-	// one helper the deterministic path cannot project. A second gap here
-	// would mean another helper started rendering empty, and a gap of any
-	// other code would mean the marker was misattributed.
+	// fns.go carries exactly two codes, and the split between them is the
+	// whole of P2's first slice: FnFindRiskProfile renders empty (FML +
+	// tpcall, no SQL, so nothing to project) while FnSaveRiskProfile renders
+	// its read and its nested call, whose arguments are the remaining gap.
+	// A third code here, or a gap that is neither, means the split stopped
+	// meaning what it says.
+	inFns := map[string]int{}
 	for _, g := range c.Gaps {
-		if g.File == "fns.go" && g.Reason != ReasonNoStoreCalls {
-			t.Errorf("fns.go carries %s at line %d: %s", g.Reason, g.Line, g.Message)
+		if g.File == "fns.go" {
+			inFns[g.Reason]++
+		}
+	}
+	want := map[string]int{ReasonNoStoreCalls: 1, ReasonNestedHelperArgUnresolved: 5}
+	if len(inFns) != len(want) {
+		t.Errorf("fns.go carries %d distinct code(s) %v, want %d", len(inFns), inFns, len(want))
+	}
+	for code, n := range want {
+		if inFns[code] != n {
+			t.Errorf("fns.go %s = %d, want %d", code, inFns[code], n)
+		}
+	}
+	for code := range inFns {
+		if _, ok := want[code]; !ok {
+			t.Errorf("fns.go carries an unexpected code %s", code)
 		}
 	}
 
