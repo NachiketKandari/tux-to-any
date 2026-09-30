@@ -47,7 +47,7 @@ var droppedCallees = map[string]bool{
 // RenderSpan renders the nodes whose span sits inside [from, to] — one
 // endpoint's condition slice — at the given indent level (1-based tabs).
 func RenderSpan(tree *Tree, res Resolver, from, to, indent int) Render {
-	r := &renderer{res: res, indent: indent}
+	r := &renderer{res: res, indent: indent, introduced: map[string]bool{}}
 	r.nodes(tree.Root, from, to)
 	if r.elided > 0 {
 		r.linef("// %d C declarations/buffer-management/logging constructs elided", r.elided)
@@ -63,6 +63,12 @@ type renderer struct {
 	todos      []string
 	conds      []CensusCond
 	fetchDepth int
+
+	// introduced records every name this render has already declared with
+	// `:=`. It is flat across the whole render, not per-scope, on purpose —
+	// see assignOp. A later assignment to a name in here is `=`, which is
+	// what stops a nested-scope assignment from silently shadowing.
+	introduced map[string]bool
 }
 
 func (r *renderer) linef(format string, args ...any) {
@@ -294,7 +300,7 @@ func (r *renderer) stmtLine(line string, n *Node) {
 	}
 	if hasTopLevelAssign(line) {
 		lhs, rhs := splitAssign(line)
-		r.linef("%s := %s", lhs, goLitRHS(rhs))
+		r.linef("%s %s %s", lhs, r.assignOp(lhs), goLitRHS(rhs))
 		return
 	}
 	if isCall {
@@ -309,6 +315,43 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// assignOp picks the Go assignment operator for one C assignment.
+//
+// The renderer's design elides the C declaration (KindDecl: "the Go method
+// template owns locals") and lets the variable's first assignment introduce
+// it, so `:=` is correct for exactly one assignment per name. Emitting it for
+// all of them was wrong in two distinct ways, and the second is the one that
+// matters:
+//
+//   - a second assignment in the SAME scope is a redeclaration — a compile
+//     error, loud and harmless.
+//   - a second assignment in a NESTED scope is not an error at all. Go
+//     happily declares a new variable that shadows the outer one, so
+//     `d_tot_amt := d_tot_amt + val` inside the CSH branch compiles, runs,
+//     and throws the accumulation away. The risk-profile totals would be
+//     permanently zero, and nothing anywhere would say so.
+//
+// That second case is the reason this is a correctness fix and not a
+// cosmetic one, and the reason the tracking below is flat across the whole
+// render rather than per-scope: once a name exists, no later assignment may
+// re-declare it. Being flat can only ever turn a shadow into a compile error,
+// never the reverse.
+//
+// A non-identifier lhs is never `:=`. Go cannot declare through a deref
+// (`*out = 0` is an assignment) or through a field or index
+// (`row.Field = x` likewise), so those are always `=`.
+func (r *renderer) assignOp(lhs string) string {
+	name := strings.TrimSpace(lhs)
+	if !isGoIdent(name) {
+		return "="
+	}
+	if r.introduced[name] {
+		return "="
+	}
+	r.introduced[name] = true
+	return ":="
 }
 
 // codeComment renders the legacy error codes the node's FML ops carry
