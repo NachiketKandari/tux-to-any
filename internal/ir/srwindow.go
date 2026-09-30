@@ -34,10 +34,10 @@ const (
 
 // sendFields is the send buffer's contents when tpcall runs, replayed from
 // lo..callLine. The window's lower bound is raised to the last buffer reset
-// (see lastBufferReset) so a reused buffer does not inherit the previous
+// (see raisePastReset) so a reused buffer does not inherit the previous
 // call's fields.
-func sendFields(facts *tsscan.SourceFacts, ops []FmlOp, buf string, lo, callLine int) []TPField {
-	lo = raisePastReset(facts, buf, lo, callLine)
+func sendFields(facts *tsscan.SourceFacts, ops []FmlOp, lines []string, buf string, lo, callLine int) []TPField {
+	lo = raisePastReset(facts, lines, buf, lo, callLine)
 	return replayFields(facts, ops, buf, lo, callLine, dirSend)
 }
 
@@ -110,43 +110,138 @@ func replayFields(facts *tsscan.SourceFacts, ops []FmlOp, buf string, lo, hi int
 }
 
 // raisePastReset moves a window's lower bound past the last time the buffer
-// was emptied wholesale. tpfree and memset(b,0,len) both leave the buffer
-// with no fields, so anything added before them is gone by the call — and
-// without this the second tpcall on a reused send buffer would report the
-// first call's fields as its own.
+// was emptied. Three things do that, and all three are recognised here
+// rather than in the scanner:
 //
-// Deliberate limitation: `sbuffer = tpalloc(...)` is NOT a detected reset.
-// The scanner records tpalloc's arguments, not the variable its result is
-// assigned to, so binding a reset to a buffer name would need an assignment
-// fact the fact vocabulary does not carry. The corpus idiom pairs every
-// tpalloc with a tpfree, so tpfree covers it in practice; a reallocation
-// that leaks the previous buffer is a bug in the source, and its fields
-// genuinely are still in the buffer. Adding assignment tracking is the fix
-// if that stops being true, and it belongs in tsscan, not here.
-func raisePastReset(facts *tsscan.SourceFacts, buf string, lo, before int) int {
+//   - tpfree(buf) and a zeroing memset(buf, 0, n) name the buffer directly,
+//     so the call facts are enough.
+//   - `buf = tpalloc(...)` does NOT name the buffer — tpalloc's arguments are
+//     the type, the sub-type and the length. Binding the reset to a buffer
+//     name is a statement shape, not a call shape, which is why this needs
+//     the raw line (assignedBufferVar) rather than a new scanner fact.
+//
+// Without the tpalloc case, a service that reallocates one variable twice
+// would carry the first allocation's fields into the second call, and a
+// callee would be handed values the caller never sent on that pass. The
+// corpus pairs each tpalloc with a tpfree so nothing there regresses, but a
+// leaked reallocation is exactly the case that would be wrong.
+func raisePastReset(facts *tsscan.SourceFacts, lines []string, buf string, lo, before int) int {
 	best := lo - 1
 	for i := range facts.Calls {
 		c := &facts.Calls[i]
 		if c.Line < lo || c.Line > before {
 			continue
 		}
-		if !isBufferResetCall(c.Name) {
-			continue
-		}
-		args := splitArgs(c.Args)
-		if len(args) == 0 {
-			continue
-		}
-		// tpfree empties unconditionally; memset only in its zeroing
-		// form (see isBufferResetCall).
-		if c.Name == "memset" && (len(args) < 2 || !isZeroFillArg(args[1])) {
-			continue
-		}
-		if baseIdent(args[0]) == buf && c.Line > best {
-			best = c.Line
+		switch {
+		case c.Name == "tpalloc":
+			// `x = tpalloc(...)`: the reset binds to the assignment
+			// target, which the call args cannot tell us.
+			if assignedBufferVar(lineAt(lines, c.Line), "tpalloc") == buf && c.Line > best {
+				best = c.Line
+			}
+		case isBufferResetCall(c.Name):
+			args := splitArgs(c.Args)
+			if len(args) == 0 {
+				continue
+			}
+			// tpfree empties unconditionally; memset only in its zeroing
+			// form (see isBufferResetCall).
+			if c.Name == "memset" && (len(args) < 2 || !isZeroFillArg(args[1])) {
+				continue
+			}
+			if baseIdent(args[0]) == buf && c.Line > best {
+				best = c.Line
+			}
 		}
 	}
 	return best + 1
+}
+
+// lineAt returns 1-indexed source line n, or "" when the source is absent or
+// shorter than the scanner's line numbering claims. Returning "" makes every
+// line-shape check below decline, which is the safe direction: the field
+// list can then only be staler, never confidently wrong.
+func lineAt(lines []string, n int) string {
+	if n < 1 || n > len(lines) {
+		return ""
+	}
+	return lines[n-1]
+}
+
+// assignedBufferVar reports the variable a call's result is assigned to on
+// the same source line, or "" when the call is not the right-hand side of a
+// simple assignment.
+//
+// This is deliberately narrow — it recognises exactly one shape, the Tuxedo
+// allocation idiom `sbuffer = (char *)tpalloc("FML32",NULL,1024);`, and
+// declines everything else. That is the right trade for a rule whose failure
+// modes are asymmetric: a false positive resets a buffer that was not reset
+// and silently DROPS a field the caller really does send, while a false
+// negative keeps a stale field and is caught downstream as a loud mismatch.
+// Erring toward the second is the only safe direction, so anything not
+// clearly a plain assignment returns "".
+//
+// Two near-misses are excluded explicitly, and both would have been live bugs
+// in the first draft of this function:
+//
+//   - `x == tpalloc(...)` is a test, not an assignment. The `=` that starts
+//     the operator is preceded by whitespace, so a "look at the previous
+//     char" test alone accepts it; the following char has to be checked too.
+//   - The name is read as the identifier ENDING at the `=`, not the one
+//     starting at the beginning of the line. `if((sbuffer = tpalloc(...)))`
+//     is a real idiom, and reading left-to-right from the line start yields
+//     the prefix "if".
+func assignedBufferVar(line, callee string) string {
+	at := strings.Index(line, callee+"(")
+	if at < 0 {
+		return ""
+	}
+	lhs := line[:at]
+	// The rightmost `=` that is a real assignment is the one that assigns
+	// to this call. Skip any `=` belonging to ==, !=, <= or >=, which is
+	// why BOTH neighbours are examined: in `a == b` the operator's first
+	// `=` is preceded by a space and its second by `=`.
+	eq := -1
+	for i := len(lhs) - 1; i >= 0; i-- {
+		if lhs[i] != '=' {
+			continue
+		}
+		if i > 0 {
+			switch lhs[i-1] {
+			case '=', '!', '<', '>':
+				continue
+			}
+		}
+		if i+1 < len(lhs) && lhs[i+1] == '=' {
+			continue
+		}
+		eq = i
+		break
+	}
+	if eq < 0 {
+		return ""
+	}
+	// Walk left from the `=` over the name. Whitespace first: C spaces
+	// around `=`, so `sbuffer = tpalloc(...)` puts a blank immediately
+	// before the operator, and reading the identifier without skipping it
+	// finds nothing adjacent and declines.
+	j := eq
+	for j > 0 && (lhs[j-1] == ' ' || lhs[j-1] == '\t') {
+		j--
+	}
+	start := j
+	for j > 0 && isIdentByteFor(lhs[j-1]) {
+		j--
+	}
+	if j == start {
+		return "" // nothing adjacent to the `=` — not an `x = f()` shape
+	}
+	// A member assignment (`s.arena = tpalloc(...)`) names a struct field,
+	// not a buffer variable the FML ops could ever refer to.
+	if j > 0 && (lhs[j-1] == '.' || lhs[j-1] == '>') {
+		return ""
+	}
+	return lhs[j:start]
 }
 
 // isBufferResetCall reports the calls that can empty a buffer. memset is

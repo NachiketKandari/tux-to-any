@@ -53,18 +53,35 @@ func ExtractFileOpts(path string, opts Options) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The raw lines are needed by one narrow consumer only — recognising
+	// `buf = tpalloc(...)` as a buffer reset, which is a statement shape
+	// rather than a call shape, so the call facts cannot express it. Read
+	// once here and thread down; nil-safe for every other builder.
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := sourceLines(src)
 	if opts.ForceFragment || isFragmentFacts(facts) {
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
 		fragFacts, err := tsscan.ScanFragment(src, path)
 		if err != nil {
 			return nil, err
 		}
-		return build(fragFacts, opts), nil
+		return build(fragFacts, opts, lines), nil
 	}
-	return build(facts, opts), nil
+	return build(facts, opts, lines), nil
+}
+
+// sourceLines splits source into 1-indexed-addressable lines: index i is
+// source line i+1, matching every Line field the scanner reports. A trailing
+// newline yields no extra empty line, so len(lines) is the file's line count.
+func sourceLines(src []byte) []string {
+	s := string(src)
+	if s == "" {
+		return nil
+	}
+	s = strings.TrimSuffix(s, "\n")
+	return strings.Split(s, "\n")
 }
 
 // ExtractSourceOpts extracts IR from source text already in memory, using
@@ -79,14 +96,15 @@ func ExtractSourceOpts(src []byte, path string, opts Options) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+	lines := sourceLines(src)
 	if !opts.dirMode && (opts.ForceFragment || isFragmentFacts(facts)) {
 		fragFacts, err := tsscan.ScanFragment(src, path)
 		if err != nil {
 			return nil, err
 		}
-		return build(fragFacts, opts), nil
+		return build(fragFacts, opts, lines), nil
 	}
-	return build(facts, opts), nil
+	return build(facts, opts, lines), nil
 }
 
 // ExtractDir walks a directory for .pc/.pcf files and extracts each in
@@ -126,7 +144,11 @@ func ExtractDirOpts(dir string, opts Options) ([]*File, error) {
 			return nil, err
 		}
 		factsByFile[p] = facts
-		files = append(files, build(facts, opts))
+		src, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, build(facts, opts, sourceLines(src)))
 	}
 
 	// External fn resolution: a fn_*/chk_* symbol resolves against any
@@ -245,7 +267,7 @@ func anyComment(facts *tsscan.SourceFacts) bool {
 }
 
 // build folds facts into the File IR.
-func build(rawFacts *tsscan.SourceFacts, opts Options) *File {
+func build(rawFacts *tsscan.SourceFacts, opts Options, lines []string) *File {
 	facts := LiveFacts(rawFacts)
 
 	f := &File{Path: facts.Path, Fragment: facts.Fragment, HostVars: []HostVar{}}
@@ -273,7 +295,7 @@ func build(rawFacts *tsscan.SourceFacts, opts Options) *File {
 	f.Defines = buildDefines(facts)
 	f.FmlOps = preambleOps(facts, f, ops)
 	f.Buffers = buildBuffers(facts, f, ops, opts)
-	f.TPCalls = buildTPCalls(facts, f, ops, opts)
+	f.TPCalls = buildTPCalls(facts, f, ops, opts, lines)
 	f.HostVars = buildHostVars(facts, f)
 	f.ExternalFns = buildExternalFns(facts)
 	return f

@@ -14,7 +14,11 @@ import (
 // tpgetrply(cd, data, len, flags) in the same function, so the recv side
 // correlates Fget32-from-tpgetrply-buffer ops after the tpgetrply line.
 // No tpgetrply after the call leaves the recv side empty by construction.
-func buildTPCalls(facts *tsscan.SourceFacts, f *File, ops []FmlOp, opts Options) []TPCall {
+//
+// lines is the raw source, needed only to recognise `buf = tpalloc(...)` as
+// a buffer reset (see assignedBufferVar); nil disables that and leaves the
+// other two resets — tpfree and a zeroing memset — fully in force.
+func buildTPCalls(facts *tsscan.SourceFacts, f *File, ops []FmlOp, opts Options, lines []string) []TPCall {
 	var out []TPCall
 	for i := range facts.Calls {
 		c := &facts.Calls[i]
@@ -74,7 +78,7 @@ func buildTPCalls(facts *tsscan.SourceFacts, f *File, ops []FmlOp, opts Options)
 		// inliner binds against: SendFields says what actually crosses
 		// the call, RecvFields what the caller takes back and whether
 		// each read was checked. See srwindow.go.
-		tc.SendFields = sendFields(facts, ops, tc.SendBuffer, lo, c.Line)
+		tc.SendFields = sendFields(facts, ops, lines, tc.SendBuffer, lo, c.Line)
 		tc.RecvFields = recvFields(facts, ops, tc.RecvBuffer, c.Line, hi)
 		out = append(out, tc)
 	}
