@@ -116,5 +116,12 @@
       "nullable": true,
       "in_declare_section": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_ADV_SQLCASE",
+      "body_start": 12,
+      "body_end": 43
+    }
   ]
 }

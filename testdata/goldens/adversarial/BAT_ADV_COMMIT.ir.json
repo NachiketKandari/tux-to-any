@@ -43,5 +43,12 @@
       "dedup_key": "UPDATE MIN_BAT_Q SET BAT_ST = 'X' WHERE BAT_ST = 'P'"
     }
   ],
-  "host_vars": []
+  "host_vars": [],
+  "function_spans": [
+    {
+      "name": "main",
+      "body_start": 8,
+      "body_end": 20
+    }
+  ]
 }

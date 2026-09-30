@@ -107,5 +107,12 @@
       "name": "c_errmsg",
       "from_header": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_DEMO_MERGE",
+      "body_start": 8,
+      "body_end": 40
+    }
   ]
 }

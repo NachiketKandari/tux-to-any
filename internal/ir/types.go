@@ -228,6 +228,113 @@ type TPCall struct {
 	Async     bool   `json:"async,omitempty"`
 	Function  string `json:"function,omitempty"`
 	Ambiguous bool   `json:"ambiguous,omitempty"`
+	// Callee is the resolved callee's own contract, joined against the
+	// buffers above on FML field name (see TPCallee, tpcalljoin.go). It is
+	// nil unless exactly ONE corpus file defined the service: a nil Callee
+	// is the signal that the KindTPCall placeholder is the right output,
+	// and it is what every tpcall in the tracked corpus produces today.
+	Callee *TPCallee `json:"callee,omitempty"`
+	// JoinRefusal is set when a callee file WAS located but the join could
+	// not be made sound (see TPJoinRefusal). A tpcall with no callee file
+	// at all sets neither field: that is the long-standing placeholder
+	// path, not a refusal, and its output stays byte-identical.
+	JoinRefusal TPJoinRefusal `json:"join_refusal,omitempty"`
+}
+
+// TPJoinRefusal is why the cross-call join declined to run for a tpcall
+// whose callee file was found. Every code here means the corpus is
+// ambiguous or the callee could not be understood — never that the two sides
+// disagree, which is a TPIssue instead. The distinction matters: a refusal
+// says "look at this by hand", an issue says "here is what the code does".
+type TPJoinRefusal string
+
+const (
+	// RefuseAmbiguousCallee: two or more corpus files define the service
+	// (entry name or base name). Picking one would be a guess.
+	RefuseAmbiguousCallee TPJoinRefusal = "ambiguous_callee"
+	// RefuseCalleeNoEntry: the matched file has no SVC_ entry function, so
+	// its ops cannot be attributed to the service — they may belong to a
+	// helper. Scoping them to "the whole file" is exactly the wrong answer.
+	RefuseCalleeNoEntry TPJoinRefusal = "callee_has_no_entry_function"
+	// RefuseCalleeNoBuffers: the callee resolves no input or output FML
+	// buffer role, so which ops are reads and which are writes is unknown.
+	RefuseCalleeNoBuffers TPJoinRefusal = "callee_buffer_roles_unresolved"
+)
+
+// TPIssueCode classifies one cross-call join finding.
+//
+// The two FNOTPRES codes are NOT errors, and the distinction is load-bearing:
+// an absent field in an FML buffer does not produce garbage, it produces a
+// FNOTPRES and an untouched destination. See fnotpresNote in tpcalljoin.go
+// for the mechanism, which is attached to both as their Note.
+type TPIssueCode string
+
+const (
+	// IssueCalleeExpectsUnsent: the callee Fget32's a field the caller's
+	// send buffer does not carry at the call line.
+	IssueCalleeExpectsUnsent TPIssueCode = "callee_expects_unsent"
+	// IssueCallerReadsUnwritten: the caller Fget32's a reply field the
+	// callee never writes.
+	IssueCallerReadsUnwritten TPIssueCode = "caller_reads_unwritten"
+	// IssueSentUnread: the caller sends a field the callee never reads.
+	// Dead traffic, not a fault.
+	IssueSentUnread TPIssueCode = "sent_unread"
+	// IssueWrittenUnread: the callee writes a field the caller never reads.
+	// Dead traffic, not a fault.
+	IssueWrittenUnread TPIssueCode = "written_unread"
+	// IssueFieldSplitTarget: one side touches the field through more than
+	// one variable, so there is no single binding to report. Recorded
+	// rather than silently resolved to the first one in source order.
+	IssueFieldSplitTarget TPIssueCode = "field_split_across_targets"
+)
+
+// TPBinding is one FML field both sides touch, joined on the FIELD NAME.
+//
+// The field name is the only exact key available. The host variable is a
+// lossy projection of the source expression — `(char*)sql_nav_date.arr`
+// becomes `sql_nav_date`, a varchar whose payload lives in `.arr` — so
+// joining on it would bind unrelated values whenever the two sides happened
+// to reuse a name, or miss every binding whenever they did not. The field
+// name is identical on both sides or it is not a binding at all.
+type TPBinding struct {
+	Field     string `json:"field"`
+	CallerVar string `json:"caller_var,omitempty"`
+	CalleeVar string `json:"callee_var,omitempty"`
+	// Direction is "in" (caller writes, callee reads), "out" (callee
+	// writes, caller reads) or "inout" (both).
+	Direction string `json:"direction"`
+	// CallerUnchecked carries the caller's own TPField.Unchecked for a
+	// reply field: present, but consumed without testing Ferror32.
+	CallerUnchecked bool `json:"caller_unchecked,omitempty"`
+	// Composite marks either side as a partial projection of a larger
+	// expression, so the binding is not a whole-variable rename.
+	Composite bool `json:"composite,omitempty"`
+}
+
+// TPIssue is one finding from the join. Note always carries the MECHANISM,
+// never just a label, so a consumer can act on it without re-deriving the
+// FML semantics.
+type TPIssue struct {
+	Code      TPIssueCode `json:"code"`
+	Field     string      `json:"field,omitempty"`
+	CallerVar string      `json:"caller_var,omitempty"`
+	CalleeVar string      `json:"callee_var,omitempty"`
+	Note      string      `json:"note"`
+}
+
+// TPCallee is the callee's own contract, projected from its IR and joined
+// against the caller's buffers. Expects is every field the callee's entry
+// function reads out of an input buffer; Produces every field it writes into
+// an output buffer. Both are unions over the entry function's body, not a
+// replay: a service "expects" a field if ANY path in it reads that field.
+type TPCallee struct {
+	Service  string      `json:"service"`
+	Path     string      `json:"path"`
+	Entry    string      `json:"entry"`
+	Expects  []TPField   `json:"expects,omitempty"`
+	Produces []TPField   `json:"produces,omitempty"`
+	Bindings []TPBinding `json:"bindings,omitempty"`
+	Issues   []TPIssue   `json:"issues,omitempty"`
 }
 
 // HostVar is a host variable referenced by queries or FML traffic, typed
@@ -347,6 +454,15 @@ type File struct {
 	HostVars        []HostVar    `json:"host_vars"`
 	ExternalFns     []ExternalFn `json:"external_fns,omitempty"`
 	Unbalanced      []Unbalanced `json:"unbalanced,omitempty"`
+	// FunctionSpans gives each declared function's body line range.
+	// Functions is the name list and stays as it is; this is the span, and
+	// it exists because FmlOp records no owning function. Anything that has
+	// to reason about ONE function's ops — the cross-call join projecting a
+	// callee's contract — has to bound them by line instead. Scoping to
+	// "the whole file" is not a safe approximation: a helper's Fget32 would
+	// be reported as something the service expects, and a binding could
+	// name the wrong variable.
+	FunctionSpans []FuncSpan `json:"function_spans,omitempty"`
 	// ParseErrors carries the grammar's recovery nodes — source the parser
 	// could not fully understand (engine-wiring audit Tier-2: the scanner
 	// computed them, no stage surfaced them; "never a silent drop" is a
@@ -361,6 +477,15 @@ type ParseError struct {
 	Node string `json:"node"`
 	Line int    `json:"line"`
 	Col  int    `json:"col"`
+}
+
+// FuncSpan is one function's body line range, inclusive. A zero BodyEnd
+// means the scanner never closed the body; treat the span as open rather
+// than as empty, since a zero-width span would silently drop real ops.
+type FuncSpan struct {
+	Name      string `json:"name"`
+	BodyStart int    `json:"body_start"`
+	BodyEnd   int    `json:"body_end"`
 }
 
 // Condition returns the condition with the given 1-based index — the one

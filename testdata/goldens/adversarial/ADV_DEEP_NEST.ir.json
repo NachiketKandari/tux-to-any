@@ -106,5 +106,12 @@
       "nullable": true,
       "in_declare_section": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_ADV_DEEP",
+      "body_start": 11,
+      "body_end": 63
+    }
   ]
 }

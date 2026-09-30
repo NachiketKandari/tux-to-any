@@ -1,0 +1,51 @@
+/* SVC_SVC_CALLER — the caller half of the svccall fixture. It tpcalls
+ * SVC_SVC_CALLEE, which is in the same scanned directory, so the call is a
+ * BINDING the inline pass records rather than an opaque stub.
+ *
+ * The fixture carries no external fn_* on purpose: the pass used to skip a
+ * file outright in that case, which is exactly the gap — a service whose only
+ * cross-file relationship is a service call would never be recorded.
+ *
+ * The send/recv fields deliberately straddle the callee's contract:
+ * FML_MODE_FLG is sent but never read, and FML_LST_UPD is read back but
+ * never written. */
+#include <atmi.h>
+#include <fml32.h>
+#include <sqlca.h>
+
+void SVC_SVC_CALLER(TPSVCINFO* rqst)
+{
+    FBFR32 *ptr_fml_Ibuffer;
+    char c_flag;
+    char c_amt[19];
+    long i_min_acc;
+    char *sbuffer;
+    char **rbuffer;
+    long llen;
+
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data;
+
+    Fget32(ptr_fml_Ibuffer,FML_MODE_FLG,0,(char*)&c_flag,0);
+    Fget32(ptr_fml_Ibuffer,FML_AMT,0,(char*)c_amt,0);
+
+    if(c_flag == 'D')
+    {
+        sbuffer = (char *)tpalloc("FML32",NULL,1024);
+        Fadd32((FBFR32*)sbuffer,FML_USER_ID,(char *)"U1",0);
+        Fadd32((FBFR32*)sbuffer,FML_AMT,(char *)c_amt,0);
+        Fadd32((FBFR32*)sbuffer,FML_MODE_FLG,(char *)&c_flag,0);
+        if(tpcall("SVC_SVC_CALLEE",sbuffer,0,&rbuffer,&llen,TPNOTRANS) == -1)
+        {
+            userlog("callee failed");
+        }
+        Fget32((FBFR32*)rbuffer,FML_ACC_ID,0,(char *)&i_min_acc,0);
+        Fget32((FBFR32*)rbuffer,FML_LST_UPD,0,(char *)&i_min_acc,0);
+
+        EXEC SQL
+        UPDATE MIN_ACCOUNTS
+        SET    MIN_ACC_AMT = :c_amt
+        WHERE  MIN_ACC_ID  = :i_min_acc;
+    }
+
+    tpreturn(TPSUCCESS,0L,0L,0L,0);
+}

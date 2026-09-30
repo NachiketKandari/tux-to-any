@@ -7,5 +7,12 @@
   "branch_count": 0,
   "branching_factor": 0,
   "queries": null,
-  "host_vars": []
+  "host_vars": [],
+  "function_spans": [
+    {
+      "name": "SVC_ADV_BARE",
+      "body_start": 5,
+      "body_end": 7
+    }
+  ]
 }

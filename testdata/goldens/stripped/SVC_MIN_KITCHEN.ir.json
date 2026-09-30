@@ -300,5 +300,12 @@
         "q1"
       ]
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_MIN_KITCHEN",
+      "body_start": 21,
+      "body_end": 97
+    }
   ]
 }

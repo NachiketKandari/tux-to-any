@@ -1,0 +1,38 @@
+/* SVC_SVC_CALLEE — the callee half of the svccall fixture. It exists so a
+ * tpcall target is INSIDE the scanned corpus: the inline pass then has a
+ * service definition to bind against, and records the two-sided contract
+ * (the caller's buffer state at the call line vs this service's own inbound
+ * gets and outbound adds).
+ *
+ * The contract deliberately does NOT cover everything the caller sends or
+ * reads, so the recording has real gaps to report: this service never reads
+ * FML_MODE_FLG, and never writes FML_LST_UPD. */
+#include <atmi.h>
+#include <fml32.h>
+#include <sqlca.h>
+
+void SVC_SVC_CALLEE(TPSVCINFO* rqst)
+{
+    FBFR32 *ptr_fml_Ibuffer;
+    FBFR32 *ptr_fml_Obuffer;
+    char c_user_id[33];
+    char c_amt[19];
+    long i_min_acc;
+
+    ptr_fml_Ibuffer = (FBFR32*)rqst->data;
+    ptr_fml_Obuffer = (FBFR32*)rqst->data;
+
+    Fget32(ptr_fml_Ibuffer,FML_USER_ID,0,(char*)c_user_id,0);
+    Fget32(ptr_fml_Ibuffer,FML_AMT,0,(char*)c_amt,0);
+
+    EXEC SQL
+    SELECT MIN_ACC_ID
+    INTO   :i_min_acc
+    FROM   MIN_ACCOUNTS
+    WHERE  MIN_CUST_ID = :c_user_id;
+
+    Fadd32(ptr_fml_Obuffer,FML_ACC_ID,(char*)&i_min_acc,0);
+    Fadd32(ptr_fml_Obuffer,FML_ERR_MSG,"SVCCAL01",0);
+
+    tpreturn(TPSUCCESS,0L,0L,0L,0);
+}

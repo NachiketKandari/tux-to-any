@@ -38,5 +38,12 @@
       "nullable": true,
       "in_declare_section": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_ADV_NOSEMI",
+      "body_start": 5,
+      "body_end": 17
+    }
   ]
 }

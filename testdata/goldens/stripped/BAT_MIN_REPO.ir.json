@@ -116,5 +116,12 @@
       "array": true,
       "nullable": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "main",
+      "body_start": 18,
+      "body_end": 68
+    }
   ]
 }

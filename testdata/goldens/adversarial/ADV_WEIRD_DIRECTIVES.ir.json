@@ -48,5 +48,12 @@
       "name": "sql_min_acc",
       "from_header": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_ADV_WEIRD",
+      "body_start": 11,
+      "body_end": 19
+    }
   ]
 }

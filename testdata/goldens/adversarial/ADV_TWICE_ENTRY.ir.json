@@ -35,5 +35,17 @@
       "name": "sql_min_acc",
       "from_header": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_ADV_FIRST",
+      "body_start": 7,
+      "body_end": 9
+    },
+    {
+      "name": "SVC_ADV_SECOND",
+      "body_start": 12,
+      "body_end": 20
+    }
   ]
 }

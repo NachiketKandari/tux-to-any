@@ -233,5 +233,12 @@
       "array": true,
       "nullable": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_TP_DEMO",
+      "body_start": 13,
+      "body_end": 48
+    }
   ]
 }

@@ -19,5 +19,12 @@
       "line": 4,
       "col": 1
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_BROKEN",
+      "body_start": 4,
+      "body_end": 0
+    }
   ]
 }

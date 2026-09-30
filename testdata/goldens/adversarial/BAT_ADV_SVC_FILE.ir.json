@@ -34,5 +34,12 @@
       "name": "sql_min_acc",
       "from_header": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_ADV_WRONGPIPE",
+      "body_start": 9,
+      "body_end": 17
+    }
   ]
 }

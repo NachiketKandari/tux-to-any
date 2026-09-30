@@ -93,5 +93,12 @@
       "c_type": "char",
       "go_hint": "string"
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_ADV_GHOST",
+      "body_start": 9,
+      "body_end": 35
+    }
   ]
 }

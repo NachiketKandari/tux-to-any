@@ -78,5 +78,12 @@
       "c_type": "char",
       "go_hint": "string"
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_ADV_TPNOFML",
+      "body_start": 10,
+      "body_end": 35
+    }
   ]
 }

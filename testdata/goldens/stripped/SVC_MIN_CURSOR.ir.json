@@ -141,5 +141,12 @@
       "go_hint": "int64",
       "in_declare_section": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_MIN_CURSOR",
+      "body_start": 15,
+      "body_end": 68
+    }
   ]
 }

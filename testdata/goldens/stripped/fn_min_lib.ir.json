@@ -42,5 +42,17 @@
       "c_type": "char",
       "go_hint": "string"
     }
+  ],
+  "function_spans": [
+    {
+      "name": "fn_min_check",
+      "body_start": 16,
+      "body_end": 34
+    },
+    {
+      "name": "fn_min_scale",
+      "body_start": 37,
+      "body_end": 43
+    }
   ]
 }

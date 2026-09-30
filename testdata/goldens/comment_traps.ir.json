@@ -89,5 +89,12 @@
       "c_type": "int",
       "go_hint": "int"
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_TRAPS",
+      "body_start": 8,
+      "body_end": 29
+    }
   ]
 }

@@ -41,5 +41,12 @@
       "line": 5,
       "col": 1
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_ADV_BRACE",
+      "body_start": 5,
+      "body_end": 0
+    }
   ]
 }

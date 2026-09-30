@@ -6,5 +6,12 @@
   "branch_count": 0,
   "branching_factor": 0,
   "queries": null,
-  "host_vars": []
+  "host_vars": [],
+  "function_spans": [
+    {
+      "name": "main",
+      "body_start": 8,
+      "body_end": 10
+    }
+  ]
 }

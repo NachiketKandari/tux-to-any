@@ -44,5 +44,12 @@
       "array": true,
       "nullable": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "main",
+      "body_start": 7,
+      "body_end": 24
+    }
   ]
 }

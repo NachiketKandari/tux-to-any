@@ -42,5 +42,12 @@
       "c_type": "char",
       "go_hint": "string"
     }
+  ],
+  "function_spans": [
+    {
+      "name": "fn_is_demo_active",
+      "body_start": 30,
+      "body_end": 51
+    }
   ]
 }

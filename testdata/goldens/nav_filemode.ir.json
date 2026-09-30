@@ -1095,5 +1095,12 @@
         931
       ]
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_DEMO_LIST",
+      "body_start": 72,
+      "body_end": 982
+    }
   ]
 }

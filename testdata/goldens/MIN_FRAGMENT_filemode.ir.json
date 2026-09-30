@@ -103,5 +103,12 @@
       "array": true,
       "nullable": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "__fragment",
+      "body_start": 1,
+      "body_end": 20
+    }
   ]
 }

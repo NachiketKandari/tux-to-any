@@ -195,6 +195,12 @@ func ExtractDirOpts(dir string, opts Options) ([]*File, error) {
 			f.TPCalls[i].ServiceFile = strings.Join(matches, ",")
 		}
 	}
+	// The cross-call join needs every ServiceFile resolved first, since it
+	// looks the callee up by path — hence its own pass rather than being
+	// folded into the loop above. Directory mode only: single-file mode has
+	// no corpus to join against, which is exactly why every tpcall there
+	// keeps a nil Callee and the placeholder path.
+	joinTPCalls(files)
 	return files, nil
 }
 
@@ -273,6 +279,11 @@ func build(rawFacts *tsscan.SourceFacts, opts Options, lines []string) *File {
 	f := &File{Path: facts.Path, Fragment: facts.Fragment, HostVars: []HostVar{}}
 	for _, fn := range facts.Functions {
 		f.Functions = append(f.Functions, fn.Name)
+		f.FunctionSpans = append(f.FunctionSpans, FuncSpan{
+			Name:      fn.Name,
+			BodyStart: fn.BodyStartLine,
+			BodyEnd:   fn.BodyEndLine,
+		})
 		if f.Entry == "" && strings.HasPrefix(fn.Name, "SVC_") {
 			f.Entry = fn.Name
 		}

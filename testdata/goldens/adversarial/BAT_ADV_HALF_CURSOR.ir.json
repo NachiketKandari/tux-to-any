@@ -27,5 +27,12 @@
       "dedup_key": "SELECT BAT_ID FROM MIN_BAT_Q WHERE BAT_ST = 'N'"
     }
   ],
-  "host_vars": []
+  "host_vars": [],
+  "function_spans": [
+    {
+      "name": "main",
+      "body_start": 7,
+      "body_end": 14
+    }
+  ]
 }

@@ -152,5 +152,12 @@
       "nullable": true,
       "in_declare_section": true
     }
+  ],
+  "function_spans": [
+    {
+      "name": "SVC_MIN_DEDUP",
+      "body_start": 16,
+      "body_end": 55
+    }
   ]
 }
