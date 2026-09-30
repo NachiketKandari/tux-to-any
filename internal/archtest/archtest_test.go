@@ -174,6 +174,37 @@ func TestProfilesLiveAboveSharedCore(t *testing.T) {
 // an emitter (Go, Python-batch, or C#). The one sanctioned upward edge is
 // none — emitters project from the stack, never the reverse.
 //
+// (uniform-ir plan §3.2) continues below with TestParseStackNeverLooksUp.
+//
+// walkreport is NOT in the stack and is listed here only to keep it out. It
+// reads EMITTED ARTIFACTS — the tuxgo:TODO comments in a generated
+// controller tree — as text, so it is downstream of every emitter by
+// construction. The day it imports gen or convert to ask them what they
+// emitted, the census stops being a measurement and becomes a restatement of
+// the emitter's own claim, which is the one thing it exists to check.
+func TestWalkreportNeverImportsAnEmitter(t *testing.T) {
+	d := loadDeps(t)
+	found := false
+	for pkg, imps := range d {
+		if internalPkg(pkg) != "walkreport" {
+			continue
+		}
+		found = true
+		for _, imp := range imps {
+			if base := internalPkg(imp); base == "gen" || base == "convert" {
+				t.Errorf("walkreport imports %s — it must read the emitted tree, not ask the emitter", base)
+			}
+		}
+	}
+	// A law whose subject does not exist is not a passing law, it is a
+	// deleted one. Without this the rule would keep reporting green after
+	// internal/walkreport was renamed or removed, which is the same
+	// inspect-nothing failure mode the loader above guards against.
+	if !found {
+		t.Error("internal/walkreport is not in the module — this rule is guarding nothing")
+	}
+}
+
 // inline is in the stack: it resolves cross-file helpers and re-folds the
 // expanded source into IR, which is the same language-neutral position, one
 // step above ir. It is listed here so the law covers it rather than leaving
