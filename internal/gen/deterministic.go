@@ -251,6 +251,15 @@ func (s *Service) DeterministicFnHelperBody(goName string, p *plan.Plan) (string
 	for _, t := range s.detFnControlFlow(h, ordered, nested).TODOs(goName) {
 		sb.WriteString(t + "\n")
 	}
+	// tpcall accounting (P4, Option A). The entry-scoped placeholder path
+	// never sees a helper's tpcalls, so without this the call into the other
+	// service reaches the emitted tree as nothing at all. Each site becomes
+	// a counted gap, and detFnTPCallTail below makes the helper return the
+	// failure status so the gap cannot be mistaken for a success.
+	tps := s.tpcallsFor(h.Name)
+	for _, t := range detFnTPCallTODOs(goName, tps) {
+		sb.WriteString(t + "\n")
+	}
 
 	inner := &strings.Builder{}
 	detEmitFnEvents(inner, ordered, nested, outs, voidRet, false)
@@ -275,9 +284,19 @@ func (s *Service) DeterministicFnHelperBody(goName string, p *plan.Plan) (string
 			NoStoreCallsMark, goName)
 	}
 
+	// The tail is where a skipped tpcall becomes a behavioural fact rather
+	// than only a comment. Callers test the legacy status convention, so a
+	// helper that did not make its inter-service call must not report the
+	// legacy success value — see detFnTPCallTail for why the alternative
+	// persists bad data.
+	tail := detFnTail(fnSrc, h)
+	if len(tps) > 0 {
+		tail = detFnTPCallTail(h)
+	}
+
 	if !detHasTx(ordered) {
 		sb.WriteString(body + "\n")
-		sb.WriteString(detFnTail(fnSrc, h) + "\n}")
+		sb.WriteString(tail + "\n}")
 		return sb.String(), nil
 	}
 	sb.WriteString("err := utils.ExecTransaction(c, s.store.GetDB(), func(tx *sqlx.Tx) error {\n")
@@ -289,7 +308,7 @@ func (s *Service) DeterministicFnHelperBody(goName string, p *plan.Plan) (string
 	sb.WriteString("return nil\n})")
 	sb.WriteString("\nif err != nil {\n")
 	sb.WriteString(detFnErrTail(h))
-	sb.WriteString("\n}\n" + detFnTail(fnSrc, h) + "\n}")
+	sb.WriteString("\n}\n" + tail + "\n}")
 	return sb.String(), nil
 }
 
@@ -1151,7 +1170,15 @@ func detFnSuccessRet(fnSrc string) string {
 			continue
 		}
 		rest := strings.TrimSpace(strings.TrimPrefix(t, "return"))
-		rest = strings.TrimSuffix(rest, ";")
+		rest = strings.TrimSpace(strings.TrimSuffix(rest, ";"))
+		// C writes the literal either bare or parenthesised, and this
+		// corpus uses both: `return 1;` in fn_insert_into_ura,
+		// `return(1);` in both tpcall helpers. Without this the
+		// parenthesised form fails the digit check below, contributes no
+		// value, and the function silently falls back to 0 — a status the
+		// legacy code never returns.
+		rest = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(rest, "("), ")"))
+		rest = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(rest, "("), ")"))
 		if rest == "" || rest == "-1" {
 			continue
 		}

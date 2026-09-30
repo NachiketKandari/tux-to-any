@@ -54,7 +54,14 @@ var corpusBaseline = corpusShape{
 	// The 28 unrendered constructs listed under those two summaries are
 	// unmarked detail lines, so they cost 2 gaps rather than 30 — see
 	// TestControlFlowDetailLinesAreNotGaps.
-	total: 337,
+	//
+	//   +2  P4 under Option A. Both tpcall sites are now counted as
+	//       R-TPCALL. They were not gaps before — they were ABSENT: the
+	//       tpcall placeholder path is entry-scoped and the corpus entry
+	//       has zero tpcalls, so a helper's tpcall reached the emitted tree
+	//       as no call, no TODO, and no reason code. A count is the
+	//       minimum honest record of a call that was dropped.
+	total: 339,
 	byCode: map[string]int{
 		ReasonHelperArgUnresolved:       250,
 		ReasonStoreArgUnresolved:        20,
@@ -62,6 +69,7 @@ var corpusBaseline = corpusShape{
 		ReasonNestedHelperArgUnresolved: 5,  // FnInsertIntoUra's args, seen from inside FnSaveRiskProfile
 		ReasonControlFlowNotRendered:    2,  // FnSaveRiskProfile (21 of 32) + FnFindRiskProfile (7 of 10)
 		ReasonCallOutsideItsGuard:       1,  // FnInsertIntoUra, guarded in C by c_flg_using == 'A'
+		ReasonTPCallNotRendered:         2,  // one per SVC_NETWORTH call site, both in fn helpers
 		ReasonNoStoreCalls:              1,  // FnFindRiskProfile: FML + tpcall, no SQL
 		ReasonUnclassified:              0,
 	},
@@ -105,7 +113,7 @@ func TestCorpusCensusMatchesTheBaseline(t *testing.T) {
 			t.Errorf("method %s = %d gaps, want %d", method, got, want)
 		}
 	}
-	// fns.go carries exactly four codes, and the split between them is the
+	// fns.go carries exactly five codes, and the split between them is the
 	// whole of P2. FnFindRiskProfile has no SQL to project (FML + tpcall), so
 	// it renders empty and is the one R-NO-STORE-CALLS. FnSaveRiskProfile
 	// renders its read and its nested call: the nested call's arguments are
@@ -136,6 +144,7 @@ func TestCorpusCensusMatchesTheBaseline(t *testing.T) {
 		ReasonNestedHelperArgUnresolved: 5,
 		ReasonControlFlowNotRendered:    2,
 		ReasonCallOutsideItsGuard:       1,
+		ReasonTPCallNotRendered:         2,
 	}
 	if len(inFns) != len(want) {
 		t.Errorf("fns.go carries %d distinct code(s) %v, want %d", len(inFns), inFns, len(want))
@@ -156,11 +165,13 @@ func TestCorpusCensusMatchesTheBaseline(t *testing.T) {
 		"FnFindRiskProfile": {
 			ReasonNoStoreCalls:           1,
 			ReasonControlFlowNotRendered: 1,
+			ReasonTPCallNotRendered:      1,
 		},
 		"FnSaveRiskProfile": {
 			ReasonNestedHelperArgUnresolved: 5,
 			ReasonControlFlowNotRendered:    1,
 			ReasonCallOutsideItsGuard:       1,
+			ReasonTPCallNotRendered:         1,
 		},
 	}
 	for helper, codes := range wantPerHelper {
@@ -368,5 +379,69 @@ func TestControlFlowDetailLinesAreNotGaps(t *testing.T) {
 	}
 	if summaries != 2 {
 		t.Errorf("corpus has %d control-flow summaries, want 2 (one per helper)", summaries)
+	}
+}
+
+// TestNoHelperClaimsSuccessWithAnUnrenderedTPCall is the safety property that
+// gives P4's Option A its weight, checked against real emitted output rather
+// than only a fixture.
+//
+// A tpcall is how the other service's data arrives. A helper that skipped it
+// has not done its work, so it must return the legacy FAILURE status. The
+// corpus's generated callers test `== -1`, so a helper returning anything else
+// lets execution walk past the check — and in GetPointTypeD the next statement
+// is UpdateRpdRiskProfileDevationq59, which writes the risk profile to the
+// database. A stub that silently succeeds and persists data it never fetched
+// is the failure mode this closes.
+//
+// This is a whole-file scan rather than a census assertion on purpose: the
+// census counts gaps, and this is about the code those gaps produced. A count
+// cannot tell you the return value is wrong.
+func TestNoHelperClaimsSuccessWithAnUnrenderedTPCall(t *testing.T) {
+	if _, err := os.Stat(corpusTree); err != nil {
+		t.Skip("no emitted corpus; run a -no-llm convertgo first")
+	}
+	body, err := os.ReadFile(filepath.Join(corpusTree, "fns.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Split on method boundaries and inspect each one's own text.
+	var name string
+	var chunk []string
+	flush := func() {
+		if name == "" {
+			return
+		}
+		text := strings.Join(chunk, "\n")
+		if strings.Contains(text, ReasonTPCallNotRendered) && !strings.Contains(text, "return -1") {
+			t.Errorf("%s carries %s but never returns the failure status; its "+
+				"caller's ==-1 check would pass over a call that never happened",
+				name, ReasonTPCallNotRendered)
+		}
+		name, chunk = "", nil
+	}
+	for _, ln := range strings.Split(string(body), "\n") {
+		if strings.HasPrefix(ln, "func (s *tuxController) ") {
+			flush()
+			// Fields: ["func", "(s", "*tuxController)", "FnName(params…"].
+			// The name is glued to its first parameter, so cut at the "("
+			// rather than trimming a suffix.
+			if f := strings.Fields(ln); len(f) > 3 {
+				name = f[3]
+				if i := strings.Index(name, "("); i >= 0 {
+					name = name[:i]
+				}
+			}
+			continue
+		}
+		chunk = append(chunk, ln)
+	}
+	flush()
+
+	// And the positive half: a helper with no tpcall must NOT be forced to
+	// fail. FnInsertIntoUra is the control — over-applying the override
+	// would make the whole fn library return errors.
+	if !strings.Contains(string(body), "func (s *tuxController) FnInsertIntoUra(") {
+		t.Fatal("FnInsertIntoUra is missing from the corpus; the control case cannot be checked")
 	}
 }

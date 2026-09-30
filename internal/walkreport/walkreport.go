@@ -124,6 +124,22 @@ const (
 	// where the C does not. Severity should not hide inside a count.
 	ReasonCallOutsideItsGuard = "R-CALL-OUTSIDE-ITS-GUARD"
 
+	// ReasonTPCallNotRendered is a tpcall site — a call into another
+	// Tuxedo service — that the deterministic path does not render.
+	// internal/gen emits one per site, in the fn helper that contains it.
+	//
+	// It is the P4/Option-A code (docs/deterministic-walk-plan.md, "Pinned:
+	// TPCall is Option A"). Before it existed the site was not merely
+	// unrendered, it was absent: the tpcall placeholder path is
+	// entry-scoped and the corpus entry has zero tpcalls, so a helper's
+	// tpcall reached the emitted tree as nothing at all. A count is the
+	// minimum honest record of a call that was dropped.
+	//
+	// Option B would render these as a typed outbound client call. It is
+	// deferred because the callee's source is not in this repository, so a
+	// generated client could not be verified against a real implementation.
+	ReasonTPCallNotRendered = "R-TPCALL"
+
 	// ReasonUnclassified is the escape hatch, and it is deliberately not a
 	// bucket to make the total come out even. A TODO whose shape matches no
 	// registered pattern lands here, so adding a new emitter gap without
@@ -144,6 +160,7 @@ var AllReasons = []string{
 	ReasonNestedHelperArgUnresolved,
 	ReasonControlFlowNotRendered,
 	ReasonCallOutsideItsGuard,
+	ReasonTPCallNotRendered,
 	ReasonNoStoreCalls,
 	ReasonUnclassified,
 }
@@ -204,6 +221,12 @@ var (
 	// marker so one gap can name the specific misplacement instead of only
 	// the callee.
 	callOutsideGuardRe = regexp.MustCompile(`^` + ReasonCallOutsideItsGuard + `\b`)
+
+	// tpcallRe matches gen's `R-TPCALL: tpcall calls "SVC_NETWORTH" at legacy
+	// line 4393 — a call into another service is not rendered; …`. The callee
+	// and line ride in the message so a gap names the specific dropped call
+	// rather than only the helper it sits in.
+	tpcallRe = regexp.MustCompile(`^` + ReasonTPCallNotRendered + `\b`)
 )
 
 // patterns maps a reason code to the message shapes that carry it. The four
@@ -217,6 +240,7 @@ var patterns = map[string][]*regexp.Regexp{
 	ReasonNestedHelperArgUnresolved: {nestedHelperArgRe},
 	ReasonControlFlowNotRendered:    {controlFlowRe},
 	ReasonCallOutsideItsGuard:       {callOutsideGuardRe},
+	ReasonTPCallNotRendered:         {tpcallRe},
 }
 
 // TODOPrefix is the marker every emitted gap comment carries. It is the
