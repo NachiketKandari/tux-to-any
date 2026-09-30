@@ -135,7 +135,7 @@ func (s *Service) DeterministicControllerBody(endpoint string, p *plan.Plan) (st
 		dc.call.Args = detCallArgs(dc, reqMap, byName, producers, argTODOs)
 		detRegisterProducer(producers, dc)
 	}
-	helpers := detHelperCalls(p, branchSrc, c.StartLine, reqFields, argTODOs)
+	helpers := detHelperCalls(p, branchSrc, c.StartLine, reqMap, byName, argTODOs)
 	stubTODOs := detStubTODOs(p, branchSrc)
 	tpTODOs := detTpTODOs(p, c)
 
@@ -615,12 +615,25 @@ func detZero(typ string) string {
 
 // detHelperCalls finds the same-file helper calls a branch body needs: plan
 // helpers whose legacy name appears as a call in the branch source, ordered
-// by first occurrence. Args resolve against the request fields.
-func detHelperCalls(p *plan.Plan, branchSrc string, baseLine int, reqFields []templates.FieldSpec, todos map[string][]string) []detHelper {
+// by first occurrence.
+//
+// Args resolve against reqMap, the same normalized-host → request-field map
+// the store calls use. That matters more than it looks: a helper parameter
+// keeps its LEGACY C spelling (plan/helperSignature preserves it so the
+// helper body reads naturally), so FnFindRiskProfile's parameter is
+// `c_user_id`, not `UsrId`. Matching that against the request struct's Go
+// field names — which is what this did before — never matches anything,
+// because `c_user_id` and `UsrId` have nothing in common but their meaning.
+// The provenance map is keyed on the same legacy spelling the FML_GET target
+// uses, so the two sides line up.
+//
+// byName stays as a second attempt for the legacy shapes where a parameter
+// really is named after a Go request field. reqMap is tried first because it
+// is provenance-backed and byName is a coincidence of naming.
+func detHelperCalls(p *plan.Plan, branchSrc string, baseLine int, reqMap, byName map[string]string, todos map[string][]string) []detHelper {
 	if p == nil || branchSrc == "" {
 		return nil
 	}
-	byName := detFieldSet(reqFields)
 	lines := strings.Split(branchSrc, "\n")
 	var out []detHelper
 	used := map[string]int{}
@@ -637,6 +650,10 @@ func detHelperCalls(p *plan.Plan, branchSrc string, baseLine int, reqFields []te
 		}
 		dh := detHelper{line: line, goName: h.GoName, retInt: h.Return == "int"}
 		for _, pr := range h.Params {
+			if f, ok := reqMap[normHost(pr.Name)]; ok && f != "" {
+				dh.args = append(dh.args, "request."+f)
+				continue
+			}
 			if f, ok := byName[strings.ToLower(pr.Name)]; ok {
 				dh.args = append(dh.args, "request."+f)
 				continue

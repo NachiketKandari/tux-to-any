@@ -31,15 +31,14 @@ type corpusShape struct {
 }
 
 var corpusBaseline = corpusShape{
-	// 424, not the 423 the plan measured: the extra one is the new
-	// R-NO-STORE-CALLS marker on FnFindRiskProfile. Before that marker
-	// existed the helper rendered a bare `return 0` and the census could
-	// not see it — the count went up by one because a silent gap became a
-	// loud one, which is the only direction this number should ever move
-	// during P0.
-	total: 424,
+	// 329 after P1's first slice (was 424 at the P0 baseline, 423 in the
+	// plan). The 95 that left R-HELPER-ARG-UNRESOLVED are c_user_id and
+	// c_match_accnt on both helpers, across every endpoint: they resolve
+	// through the FML_GET provenance map, which is what detHelperCalls
+	// should have been consulting from the start.
+	total: 329,
 	byCode: map[string]int{
-		ReasonHelperArgUnresolved:     345,
+		ReasonHelperArgUnresolved:     250,
 		ReasonStoreArgUnresolved:      20,
 		ReasonResponseFieldUnresolved: 58, // 39 response-role + 19 row-match
 		ReasonNoStoreCalls:            1,  // FnFindRiskProfile's empty body
@@ -47,14 +46,15 @@ var corpusBaseline = corpusShape{
 	},
 	byMethod: map[string]int{
 		// The endpoint gaps are spread across the 23 emitted endpoint
-		// methods, each carrying its 15 helper params. GetPointTypeD is the
-		// heaviest at 29 (15 helper args plus its own store binds and
-		// shaping gaps); GetViewSavedRiskAnalizer has the fewest at 19.
-		// Spot-checking one high and one low method catches a regression in
-		// attribution without freezing all 23 numbers, which would make
-		// this test fail for unrelated emitter changes.
-		"GetPointTypeD":            29,
-		"GetViewSavedRiskAnalizer": 19,
+		// methods. GetPointTypeD is the heaviest at 24 (its helper args plus
+		// its own store binds and shaping gaps); GetViewSavedRiskAnalizer
+		// has the fewest at 14. Both fell by exactly 5 in P1's first slice,
+		// which is the uniform shape to expect from a fix that applies to
+		// every endpoint equally — a lopsided drop would mean the fix only
+		// reached some branches, and these two spot-checks are here to
+		// catch that without freezing all 23 numbers.
+		"GetPointTypeD":            24,
+		"GetViewSavedRiskAnalizer": 14,
 	},
 }
 
