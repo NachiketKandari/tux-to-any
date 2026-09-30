@@ -18,23 +18,23 @@ int svc_t(void)
 {
   EXEC SQL
     SELECT TBL_A
-    INTO   :c_ura_user_id
-    FROM   UAC_USR_ACCNTS
-    WHERE  UAC_CLM_MTCH_ACCNT = :c_match_accnt;
+    INTO   :c_cmp_id
+    FROM   TBL_CMP_ACCT
+    WHERE  CMP_ACCT_KEY = :c_acct_key;
 
-  i_ret = fn_with_tpcall("SVC_T", c_match_accnt, d_out);
+  i_ret = fn_with_tpcall("SVC_T", c_acct_key, d_out);
   i_ret = fn_no_tpcall("SVC_T");
 
   return 0;
 }
 
-int fn_with_tpcall(char *c_ServiceName, char *c_match_accnt, double *d_out)
+int fn_with_tpcall(char *c_ServiceName, char *c_acct_key, double *d_out)
 {
   EXEC SQL
     SELECT TBL_A
-    INTO   :c_ura_user_id
-    FROM   UAC_USR_ACCNTS
-    WHERE  UAC_CLM_MTCH_ACCNT = :c_match_accnt;
+    INTO   :c_cmp_id
+    FROM   TBL_CMP_ACCT
+    WHERE  CMP_ACCT_KEY = :c_acct_key;
 
   i_ch_val = tpcall("SVC_OTHER", ptr_fml_Sbuf, 0, &ptr_fml_Rbuf, &l_buf_len, TPNOTRAN);
   if (i_ch_val == -1)
