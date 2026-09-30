@@ -27,6 +27,11 @@ const (
 	rowMatchList = `response fields without row match (zero values): PointType, UsrUsrNm`
 	// responseRole: 39 on the corpus, the per-call form.
 	responseRole = `getUacUsrAccnts (UacUsrAccnts) has no response-field match — kept for its error check; LLM maps its role`
+	// noStoreCalls: 1 on the corpus, FnFindRiskProfile's empty body. It did
+	// not exist as a marker until this change — before, the same helper
+	// rendered a bare `return 0` and the census could not see it at all,
+	// which is the silence P0 exists to end.
+	noStoreCalls = `R-NO-STORE-CALLS: FnFindRiskProfile — the helper body rendered empty; its statements are not represented in this method`
 )
 
 func TestClassifyPinsEveryCorpusShape(t *testing.T) {
@@ -40,6 +45,7 @@ func TestClassifyPinsEveryCorpusShape(t *testing.T) {
 		{"store bind", storeArg, ReasonStoreArgUnresolved},
 		{"row match list", rowMatchList, ReasonResponseFieldUnresolved},
 		{"response role", responseRole, ReasonResponseFieldUnresolved},
+		{"no store calls", noStoreCalls, ReasonNoStoreCalls},
 		{"leading whitespace", "  " + storeArg, ReasonStoreArgUnresolved},
 	}
 	for _, tc := range cases {
@@ -48,6 +54,24 @@ func TestClassifyPinsEveryCorpusShape(t *testing.T) {
 				t.Errorf("Classify(%q) = %q, want %q", tc.message, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestReasonCodeAloneStillClassifies matters because a bare reason code is
+// how these are searched for day to day (`grep R-NO-STORE-CALLS`). The
+// emitter always writes "<code>: <helper> — <prose>", so the anchor has to
+// survive the trailing detail being absent.
+func TestReasonCodeAloneStillClassifies(t *testing.T) {
+	if got := Classify(ReasonNoStoreCalls); got != ReasonNoStoreCalls {
+		t.Errorf("Classify(%q) = %q, want itself", ReasonNoStoreCalls, got)
+	}
+	if got := Classify(ReasonNoStoreCalls + ": FnX — prose"); got != ReasonNoStoreCalls {
+		t.Errorf("Classify(%q) = %q, want %q", ReasonNoStoreCalls+": FnX — prose", got, ReasonNoStoreCalls)
+	}
+	// The anchor is a prefix, so a message that merely starts with similar
+	// text must not be claimed.
+	if got := Classify("R-NO-STORE-CALLS are documented elsewhere"); got != ReasonNoStoreCalls {
+		t.Errorf("Classify accepted prose starting with the code: %q", got)
 	}
 }
 
@@ -99,7 +123,7 @@ func TestEveryReasonHasAMatch(t *testing.T) {
 			continue
 		}
 		hit := false
-		for _, msg := range []string{helperArg, helperArgAll15, storeArg, rowMatchList, responseRole} {
+		for _, msg := range []string{helperArg, helperArgAll15, storeArg, rowMatchList, responseRole, noStoreCalls} {
 			if Classify(msg) == code {
 				hit = true
 				break

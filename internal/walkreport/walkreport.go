@@ -71,6 +71,18 @@ const (
 	// provenance-driven shaping targets this code.
 	ReasonResponseFieldUnresolved = "R-RESPONSE-FIELD-UNRESOLVED"
 
+	// ReasonNoStoreCalls is a fn helper whose body rendered empty: the
+	// emitter understood the helper and produced no statements for it.
+	// internal/gen emits this as NoStoreCallsMark; on the corpus it is
+	// FnFindRiskProfile, whose C body is FML plus tpcall with no SQL, so
+	// there is no store call to project and the old output was a bare
+	// `return 0` that read like an intentional no-op.
+	//
+	// P2 is what drives this to zero, by rendering the helper's statements
+	// rather than skipping them. Until then the count is the honest
+	// measure of how many helpers are stubs.
+	ReasonNoStoreCalls = "R-NO-STORE-CALLS"
+
 	// ReasonUnclassified is the escape hatch, and it is deliberately not a
 	// bucket to make the total come out even. A TODO whose shape matches no
 	// registered pattern lands here, so adding a new emitter gap without
@@ -88,6 +100,7 @@ var AllReasons = []string{
 	ReasonHelperArgUnresolved,
 	ReasonStoreArgUnresolved,
 	ReasonResponseFieldUnresolved,
+	ReasonNoStoreCalls,
 	ReasonUnclassified,
 }
 
@@ -116,6 +129,13 @@ var (
 	// responseRoleRe matches "getUacUsrAccnts (UacUsrAccnts) has no
 	// response-field match — kept for its error check; …".
 	responseRoleRe = regexp.MustCompile(`^[a-z][A-Za-z0-9]* \([A-Za-z][A-Za-z0-9]*\) has no response-field match`)
+
+	// noStoreCallsRe matches the empty-helper-body marker internal/gen emits
+	// as "R-NO-STORE-CALLS: FnFindRiskProfile — the helper body rendered
+	// empty; …". It is anchored on the code itself rather than on the prose
+	// after it: the prose is the human-readable half and may be reworded
+	// without the gap changing, whereas the code is what the census tracks.
+	noStoreCallsRe = regexp.MustCompile(`^` + ReasonNoStoreCalls + `\b`)
 )
 
 // patterns maps a reason code to the message shapes that carry it. The four
@@ -125,6 +145,7 @@ var patterns = map[string][]*regexp.Regexp{
 	ReasonHelperArgUnresolved:     {helperArgRe},
 	ReasonStoreArgUnresolved:      {storeArgRe},
 	ReasonResponseFieldUnresolved: {rowMatchRe, responseRoleRe},
+	ReasonNoStoreCalls:            {noStoreCallsRe},
 }
 
 // TODOPrefix is the marker every emitted gap comment carries. It is the

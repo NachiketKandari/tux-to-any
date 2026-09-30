@@ -25,4 +25,5 @@ var commandFlags = map[string][]string{
 	"templates":      {"out", "config", "dir"},
 	"flow":           {"out", "scenarios-dir", "config"},
 	"dbcheck":        {"config"},
+	"walkreport":     {"controller", "out", "config"},
 }

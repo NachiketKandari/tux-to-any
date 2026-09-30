@@ -73,6 +73,7 @@ func main() {
 		"retrystats":     runRetryStats,
 		"templates":      runTemplates,
 		"dbcheck":        runDBCheck,
+		"walkreport":     runWalkreport,
 	}
 	run, ok := commands[rest[0]]
 	switch {
@@ -240,6 +241,11 @@ Available Commands:
   dbcheck      Optional Oracle probe (internal/db, database/sql): reports
                enabled/driver/source without connecting; -ping verifies.
                No DSN = offline (exit 0) — conversion never needs the DB
+  walkreport   Walk-faithful progress read-out: per-function flow coverage
+               plus a census of the emitted tree's tuxgo:TODO gaps by reason
+               code (-controller DIR, default the staged tree). Read-only;
+               never calls an LLM. -json / -out for the machine form, -strict
+               to fail on a finding
   version      Print version information
 
 `)

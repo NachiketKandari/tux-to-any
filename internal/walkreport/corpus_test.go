@@ -12,16 +12,18 @@ import (
 // fixture, so every test that uses it skips when it is absent.
 const corpusTree = "../../conversion_logs/_staged/tux/controller"
 
-// corpusShape is the census the corpus produces today, measured 2026-09-30
-// against 423 TODOs in tux.go. It is the P0 baseline: P1's acceptance is a
-// drop in R-HELPER-ARG-UNRESOLVED, and that claim is only checkable against a
-// pinned starting point.
+// corpusShape is the census the corpus produces, measured 2026-09-30 by
+// running the instrument against a `-no-llm convertgo` of riskPipelineTest.
+//
+// It is the P0 baseline: P1's acceptance is a drop in
+// R-HELPER-ARG-UNRESOLVED, and P2's is R-NO-STORE-CALLS reaching zero. Both
+// claims are only checkable against a pinned starting point.
 //
 // These numbers are a contract with the emitter. If a later change moves a
-// gap from one code to another — which is what P1 and P3 are supposed to do —
-// this test is where the change is stated out loud. It is expected to fail
-// during those phases and be updated in the same commit as the change, never
-// after.
+// gap from one code to another — which is what P1, P2 and P3 are supposed to
+// do — this test is where the change gets stated out loud. It is expected to
+// fail during those phases and be updated in the same commit as the change,
+// never after.
 type corpusShape struct {
 	total    int
 	byCode   map[string]int
@@ -29,20 +31,27 @@ type corpusShape struct {
 }
 
 var corpusBaseline = corpusShape{
-	total: 423,
+	// 424, not the 423 the plan measured: the extra one is the new
+	// R-NO-STORE-CALLS marker on FnFindRiskProfile. Before that marker
+	// existed the helper rendered a bare `return 0` and the census could
+	// not see it — the count went up by one because a silent gap became a
+	// loud one, which is the only direction this number should ever move
+	// during P0.
+	total: 424,
 	byCode: map[string]int{
 		ReasonHelperArgUnresolved:     345,
 		ReasonStoreArgUnresolved:      20,
 		ReasonResponseFieldUnresolved: 58, // 39 response-role + 19 row-match
+		ReasonNoStoreCalls:            1,  // FnFindRiskProfile's empty body
 		ReasonUnclassified:            0,
 	},
 	byMethod: map[string]int{
-		// The gaps are spread across the 23 emitted endpoint methods, each
-		// carrying its 15 helper params. GetPointTypeD is the heaviest at
-		// 29 (15 helper args plus its own store binds and shaping gaps);
-		// GetViewSavedRiskAnalizer has the fewest at 19. Spot-checking one
-		// high and one low method is enough to catch a regression in
-		// attribution without freezing all 23 numbers — which would make
+		// The endpoint gaps are spread across the 23 emitted endpoint
+		// methods, each carrying its 15 helper params. GetPointTypeD is the
+		// heaviest at 29 (15 helper args plus its own store binds and
+		// shaping gaps); GetViewSavedRiskAnalizer has the fewest at 19.
+		// Spot-checking one high and one low method catches a regression in
+		// attribution without freezing all 23 numbers, which would make
 		// this test fail for unrelated emitter changes.
 		"GetPointTypeD":            29,
 		"GetViewSavedRiskAnalizer": 19,
@@ -76,11 +85,16 @@ func TestCorpusCensusMatchesTheBaseline(t *testing.T) {
 			t.Errorf("method %s = %d gaps, want %d", method, got, want)
 		}
 	}
-	// The gaps land in the endpoint methods, not in fns.go: a helper body
-	// that fails to render is a P2 concern, and P0 must not have started
-	// mixing the two populations.
-	if n := c.ByFile["fns.go"]; n != 0 {
-		t.Errorf("fns.go carries %d gaps — fn helper bodies are P2's, not P0's census", n)
+	// Exactly one gap belongs in fns.go, and it must be the empty-helper
+	// marker. This is the file-level half of the R-NO-STORE-CALLS contract:
+	// FnFindRiskProfile's C body is FML plus tpcall with no SQL, so it is the
+	// one helper the deterministic path cannot project. A second gap here
+	// would mean another helper started rendering empty, and a gap of any
+	// other code would mean the marker was misattributed.
+	for _, g := range c.Gaps {
+		if g.File == "fns.go" && g.Reason != ReasonNoStoreCalls {
+			t.Errorf("fns.go carries %s at line %d: %s", g.Reason, g.Line, g.Message)
+		}
 	}
 
 	// Every gap must be attributed to a method. A gap with an empty method

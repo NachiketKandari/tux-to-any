@@ -37,6 +37,13 @@ import (
 const (
 	DeterministicControllerMark = "tuxgo:deterministic-controller"
 	DeterministicFnHelperMark   = "tuxgo:deterministic-fnhelper"
+
+	// NoStoreCallsMark is the reason code for a fn helper whose body
+	// rendered empty. It is spelled as a reason code rather than prose
+	// because internal/walkreport censuses these markers and the code is
+	// what P2 will watch fall to zero as helper bodies start rendering.
+	// Keep it in step with walkreport.ReasonNoStoreCalls.
+	NoStoreCallsMark = "R-NO-STORE-CALLS"
 )
 
 // IsDeterministicControllerMethod reports whether src carries a
@@ -239,6 +246,25 @@ func (s *Service) DeterministicFnHelperBody(goName string, p *plan.Plan) (string
 	inner := &strings.Builder{}
 	detEmitFnEvents(inner, ordered, nested, outs, voidRet, false)
 	body := strings.TrimRight(inner.String(), "\n")
+
+	// A helper whose body came out empty is a helper we understood and could
+	// not render. Say so, with a reason code, instead of emitting a bare
+	// `return 0` that reads like an intentional no-op.
+	//
+	// The common cause is a helper whose C body is FML plus tpcall and no
+	// SQL: helperQueryIDs finds nothing, so ordered is empty and
+	// detEmitFnEvents emits nothing. That is R-NO-STORE-CALLS, not a silent
+	// success — the census in internal/walkreport counts these, and a code
+	// the corpus can produce is the whole reason R-NO-STORE-CALLS exists.
+	//
+	// The emptiness test is on the RENDERED body, not on len(ordered), so a
+	// helper whose only content was an unresolvable call still gets the
+	// marker if it genuinely produced no statements.
+	if body == "" && len(stubTODOs) == 0 && len(argTODOs) == 0 {
+		fmt.Fprintf(&sb, "// tuxgo:TODO %s: %s — the helper body rendered empty; "+
+			"its statements are not represented in this method\n",
+			NoStoreCallsMark, goName)
+	}
 
 	if !detHasTx(ordered) {
 		sb.WriteString(body + "\n")
