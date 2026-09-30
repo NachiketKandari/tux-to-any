@@ -242,6 +242,15 @@ func (s *Service) DeterministicFnHelperBody(goName string, p *plan.Plan) (string
 			sb.WriteString(t + "\n")
 		}
 	}
+	// Control-flow accounting (P2). The store-call walk above is a flat
+	// statement list, so a helper whose legacy body branches or loops
+	// rendered as just its SQL and helper calls — the branches were not
+	// missing from the parse, they were never consulted. This makes each
+	// one of them either accounted for (rendered, or elided by a named flow
+	// rule) or counted as a gap.
+	for _, t := range s.detFnControlFlow(h, ordered, nested).TODOs(goName) {
+		sb.WriteString(t + "\n")
+	}
 
 	inner := &strings.Builder{}
 	detEmitFnEvents(inner, ordered, nested, outs, voidRet, false)

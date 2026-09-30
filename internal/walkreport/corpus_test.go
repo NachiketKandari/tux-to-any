@@ -41,12 +41,27 @@ var corpusBaseline = corpusShape{
 	//       arguments, which were previously unemitted entirely.
 	//
 	// P1's slice is what took R-HELPER-ARG-UNRESOLVED from 345 to 250.
-	total: 334,
+	//
+	//   +3  P2's control-flow accounting. Two helpers gained a
+	//       R-CONTROL-FLOW-NOT-RENDERED summary (one each), and one call
+	//       gained a R-CALL-OUTSIDE-ITS-GUARD. All three are newly VISIBLE
+	//       gaps, not new work: fn_save_risk_profile is 201 classified lines
+	//       of branch and loop that the store-call walk never consulted,
+	//       and fn_insert_into_ura is called under `if (c_flg_using == 'A')`
+	//       in the C but unconditionally in the Go. Before this, neither
+	//       fact was recorded anywhere at all.
+	//
+	// The 28 unrendered constructs listed under those two summaries are
+	// unmarked detail lines, so they cost 2 gaps rather than 30 — see
+	// TestControlFlowDetailLinesAreNotGaps.
+	total: 337,
 	byCode: map[string]int{
 		ReasonHelperArgUnresolved:       250,
 		ReasonStoreArgUnresolved:        20,
 		ReasonResponseFieldUnresolved:   58, // 39 response-role + 19 row-match
 		ReasonNestedHelperArgUnresolved: 5,  // FnInsertIntoUra's args, seen from inside FnSaveRiskProfile
+		ReasonControlFlowNotRendered:    2,  // FnSaveRiskProfile (21 of 32) + FnFindRiskProfile (7 of 10)
+		ReasonCallOutsideItsGuard:       1,  // FnInsertIntoUra, guarded in C by c_flg_using == 'A'
 		ReasonNoStoreCalls:              1,  // FnFindRiskProfile: FML + tpcall, no SQL
 		ReasonUnclassified:              0,
 	},
@@ -90,19 +105,38 @@ func TestCorpusCensusMatchesTheBaseline(t *testing.T) {
 			t.Errorf("method %s = %d gaps, want %d", method, got, want)
 		}
 	}
-	// fns.go carries exactly two codes, and the split between them is the
-	// whole of P2's first slice: FnFindRiskProfile renders empty (FML +
-	// tpcall, no SQL, so nothing to project) while FnSaveRiskProfile renders
-	// its read and its nested call, whose arguments are the remaining gap.
-	// A third code here, or a gap that is neither, means the split stopped
-	// meaning what it says.
+	// fns.go carries exactly four codes, and the split between them is the
+	// whole of P2. FnFindRiskProfile has no SQL to project (FML + tpcall), so
+	// it renders empty and is the one R-NO-STORE-CALLS. FnSaveRiskProfile
+	// renders its read and its nested call: the nested call's arguments are
+	// 5 helper-arg gaps, the two helpers' unrendered branches are 2
+	// control-flow gaps, and the call the C guards with c_flg_using == 'A'
+	// but the Go does not is the single guard leak.
+	//
+	// FnInsertIntoUra is the one helper that renders completely — its only
+	// branch is the SQLCODE check, which the store call's error check already
+	// is, and its only other construct is a debug-logging if that a named
+	// flow rule elides. It therefore contributes no gap of any code, and
+	// this assertion is what records that fact rather than leaving it
+	// implied by its absence.
 	inFns := map[string]int{}
+	byMethodInFns := map[string]map[string]int{}
 	for _, g := range c.Gaps {
-		if g.File == "fns.go" {
-			inFns[g.Reason]++
+		if g.File != "fns.go" {
+			continue
 		}
+		inFns[g.Reason]++
+		if byMethodInFns[g.Method] == nil {
+			byMethodInFns[g.Method] = map[string]int{}
+		}
+		byMethodInFns[g.Method][g.Reason]++
 	}
-	want := map[string]int{ReasonNoStoreCalls: 1, ReasonNestedHelperArgUnresolved: 5}
+	want := map[string]int{
+		ReasonNoStoreCalls:              1,
+		ReasonNestedHelperArgUnresolved: 5,
+		ReasonControlFlowNotRendered:    2,
+		ReasonCallOutsideItsGuard:       1,
+	}
 	if len(inFns) != len(want) {
 		t.Errorf("fns.go carries %d distinct code(s) %v, want %d", len(inFns), inFns, len(want))
 	}
@@ -115,6 +149,35 @@ func TestCorpusCensusMatchesTheBaseline(t *testing.T) {
 		if _, ok := want[code]; !ok {
 			t.Errorf("fns.go carries an unexpected code %s", code)
 		}
+	}
+	// The per-helper attribution, which is what makes "renders completely"
+	// a checked claim about FnInsertIntoUra rather than an assumption.
+	wantPerHelper := map[string]map[string]int{
+		"FnFindRiskProfile": {
+			ReasonNoStoreCalls:           1,
+			ReasonControlFlowNotRendered: 1,
+		},
+		"FnSaveRiskProfile": {
+			ReasonNestedHelperArgUnresolved: 5,
+			ReasonControlFlowNotRendered:    1,
+			ReasonCallOutsideItsGuard:       1,
+		},
+	}
+	for helper, codes := range wantPerHelper {
+		got := byMethodInFns[helper]
+		if len(got) != len(codes) {
+			t.Errorf("%s carries %d distinct code(s) %v, want %d", helper, len(got), got, len(codes))
+		}
+		for code, n := range codes {
+			if got[code] != n {
+				t.Errorf("%s %s = %d, want %d", helper, code, got[code], n)
+			}
+		}
+	}
+	if _, ok := byMethodInFns["FnInsertIntoUra"]; ok {
+		t.Errorf("FnInsertIntoUra carries gaps %v — it was the one helper "+
+			"rendering completely, so a gap here means that stopped being true",
+			byMethodInFns["FnInsertIntoUra"])
 	}
 
 	// Every gap must be attributed to a method. A gap with an empty method
@@ -255,5 +318,55 @@ func TestReportRoundTripsThroughJSON(t *testing.T) {
 func TestCensusDirReportsAMissingTree(t *testing.T) {
 	if _, err := CensusDir(filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Error("expected an error for a missing tree")
+	}
+}
+
+// TestControlFlowDetailLinesAreNotGaps is what keeps the control-flow count
+// readable.
+//
+// internal/gen lists every unrendered construct under one summary line, and
+// those detail lines deliberately carry no tuxgo:TODO. If they did, a helper
+// missing 21 branches would report 22 gaps — the summary plus its own list —
+// and the census total would grow with the verbosity of the report rather than
+// with the amount of missing work. The count has to mean "this many methods
+// are missing control flow", so a reader can hold the whole list in their head.
+//
+// This checks the invariant on the real corpus rather than on a hand-built
+// fixture, because the emitter is what decides the marker.
+func TestControlFlowDetailLinesAreNotGaps(t *testing.T) {
+	if _, err := os.Stat(corpusTree); err != nil {
+		t.Skip("no emitted corpus; run a -no-llm convertgo first")
+	}
+	body, err := os.ReadFile(filepath.Join(corpusTree, "fns.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(body), "\n")
+	summaries, details := 0, 0
+	for _, ln := range lines {
+		if strings.Contains(ln, ReasonControlFlowNotRendered) {
+			summaries++
+		}
+		if strings.Contains(ln, "legacy branch at line") || strings.Contains(ln, "legacy loop at line") {
+			details++
+			if strings.Contains(ln, TODOPrefix) {
+				t.Errorf("a control-flow detail line carries the gap marker, so it "+
+					"would count as a gap of its own:\n%s", ln)
+			}
+		}
+	}
+	if summaries == 0 {
+		t.Fatal("no control-flow summary in the corpus; the accounting stopped emitting")
+	}
+	// 21 under FnSaveRiskProfile + 7 under FnFindRiskProfile. Pinned so that
+	// a change in how many constructs the walk finds is a stated decision
+	// rather than a silent drift — a drop means constructs are going
+	// unaccounted rather than unlisted.
+	if details != 28 {
+		t.Errorf("corpus lists %d unrendered constructs, want 28 (21 + 7) — "+
+			"the walk is finding a different number of branches/loops", details)
+	}
+	if summaries != 2 {
+		t.Errorf("corpus has %d control-flow summaries, want 2 (one per helper)", summaries)
 	}
 }

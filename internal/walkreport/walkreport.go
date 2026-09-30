@@ -99,6 +99,31 @@ const (
 	// quietly absorbing it, which is the escape hatch earning its keep.
 	ReasonNestedHelperArgUnresolved = "R-NESTED-HELPER-ARG-UNRESOLVED"
 
+	// ReasonControlFlowNotRendered is a branch or loop in a fn helper's
+	// legacy body that the deterministic path does not project as Go
+	// control flow. internal/gen emits one per construct.
+	//
+	// This code is P2's actual measure. Before it existed, a helper with a
+	// 200-line branching body rendered as its three SQL/helper calls and
+	// looked finished — the branches were not dropped by a failed parse,
+	// they were never consulted, so nothing anywhere recorded that the walk
+	// was partial. The count is what P2 drives to zero.
+	//
+	// Only constructs that no named flow rule accounts for land here; a
+	// debug-logging branch or an Fadd-result loop is elided by a rule
+	// internal/flow already states, and counting those as gaps would
+	// overstate the work.
+	ReasonControlFlowNotRendered = "R-CONTROL-FLOW-NOT-RENDERED"
+
+	// ReasonCallOutsideItsGuard is a call emitted unconditionally that the
+	// legacy source conditionally guards.
+	//
+	// Kept apart from ReasonControlFlowNotRendered because it is worse. An
+	// unrendered branch is missing work; a call hoisted out of its guard
+	// makes the emitted Go assert something the source does not — it runs
+	// where the C does not. Severity should not hide inside a count.
+	ReasonCallOutsideItsGuard = "R-CALL-OUTSIDE-ITS-GUARD"
+
 	// ReasonUnclassified is the escape hatch, and it is deliberately not a
 	// bucket to make the total come out even. A TODO whose shape matches no
 	// registered pattern lands here, so adding a new emitter gap without
@@ -117,6 +142,8 @@ var AllReasons = []string{
 	ReasonStoreArgUnresolved,
 	ReasonResponseFieldUnresolved,
 	ReasonNestedHelperArgUnresolved,
+	ReasonControlFlowNotRendered,
+	ReasonCallOutsideItsGuard,
 	ReasonNoStoreCalls,
 	ReasonUnclassified,
 }
@@ -161,6 +188,22 @@ var (
 	// in the message, so the census must as well.
 	nestedHelperArgRe = regexp.MustCompile(
 		`^[A-Za-z][A-Za-z0-9_]*\([a-zA-Z][a-zA-Z0-9_]*\): no helper-param provenance`)
+
+	// controlFlowRe matches the summary line gen emits as
+	// "R-CONTROL-FLOW-NOT-RENDERED: FnSaveRiskProfile — 21 of 32 branch/loop
+	// constructs …". The per-construct lines beneath it start with
+	// "//   legacy", so they read as detail under this one gap rather than as
+	// gaps of their own: a caller wants "this method is missing 21
+	// branches", once, and the file already says which ones.
+	controlFlowRe = regexp.MustCompile(`^` + ReasonControlFlowNotRendered + `\b`)
+
+	// callOutsideGuardRe matches gen's "R-CALL-OUTSIDE-ITS-GUARD:
+	// FnInsertIntoUra at line 4707 is emitted unconditionally, but the legacy
+	// source guards it with the branch at line 4704 (c_flg_using == 'A') …".
+	// The guard's line and condition live in the message rather than the
+	// marker so one gap can name the specific misplacement instead of only
+	// the callee.
+	callOutsideGuardRe = regexp.MustCompile(`^` + ReasonCallOutsideItsGuard + `\b`)
 )
 
 // patterns maps a reason code to the message shapes that carry it. The four
@@ -172,6 +215,8 @@ var patterns = map[string][]*regexp.Regexp{
 	ReasonResponseFieldUnresolved:   {rowMatchRe, responseRoleRe},
 	ReasonNoStoreCalls:              {noStoreCallsRe},
 	ReasonNestedHelperArgUnresolved: {nestedHelperArgRe},
+	ReasonControlFlowNotRendered:    {controlFlowRe},
+	ReasonCallOutsideItsGuard:       {callOutsideGuardRe},
 }
 
 // TODOPrefix is the marker every emitted gap comment carries. It is the

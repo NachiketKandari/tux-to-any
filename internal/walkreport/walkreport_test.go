@@ -36,6 +36,15 @@ const (
 	// bare `return 0` and the census could not see it at all, which is the
 	// silence P0 exists to end.
 	noStoreCalls = `R-NO-STORE-CALLS: FnFindRiskProfile — the helper body rendered empty; its statements are not represented in this method`
+	// controlFlow: 2 on the corpus, one per helper whose body branches or
+	// loops. Each is a single summary gap; the per-construct lines beneath it
+	// are unmarked detail, so the census reports "this method is missing 21
+	// branches" once rather than 21 times.
+	controlFlow = `R-CONTROL-FLOW-NOT-RENDERED: FnSaveRiskProfile — 21 of 32 branch/loop constructs in the legacy body are not rendered as Go control flow; the statements below are this method's whole walk, so every construct listed here is work this method does not do`
+	// guardLeak: 1 on the corpus, and the only one of its kind. The legacy
+	// source calls fn_insert_into_ura inside `if (c_flg_using == 'A')`; the
+	// emitted Go calls it unconditionally, so it runs where the C does not.
+	guardLeak = `R-CALL-OUTSIDE-ITS-GUARD: FnInsertIntoUra at line 4709 is emitted unconditionally, but the legacy source guards it with the branch at line 4704 (c_flg_using == 'A') — the call runs on paths where the C does not`
 )
 
 func TestClassifyPinsEveryCorpusShape(t *testing.T) {
@@ -51,6 +60,8 @@ func TestClassifyPinsEveryCorpusShape(t *testing.T) {
 		{"response role", responseRole, ReasonResponseFieldUnresolved},
 		{"nested helper arg", nestedHelperArg, ReasonNestedHelperArgUnresolved},
 		{"no store calls", noStoreCalls, ReasonNoStoreCalls},
+		{"control flow", controlFlow, ReasonControlFlowNotRendered},
+		{"guard leak", guardLeak, ReasonCallOutsideItsGuard},
 		{"leading whitespace", "  " + storeArg, ReasonStoreArgUnresolved},
 	}
 	for _, tc := range cases {
@@ -145,7 +156,8 @@ func TestEveryReasonHasAMatch(t *testing.T) {
 			continue
 		}
 		hit := false
-		for _, msg := range []string{helperArg, helperArgAll15, storeArg, rowMatchList, responseRole, nestedHelperArg, noStoreCalls} {
+		for _, msg := range []string{helperArg, helperArgAll15, storeArg, rowMatchList, responseRole,
+			nestedHelperArg, noStoreCalls, controlFlow, guardLeak} {
 			if Classify(msg) == code {
 				hit = true
 				break

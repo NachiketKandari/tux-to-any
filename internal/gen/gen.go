@@ -20,6 +20,7 @@ import (
 	"tux-to-any/internal/profile"
 	"tux-to-any/internal/sqltext"
 	"tux-to-any/internal/templates"
+	tsscan "tux-to-any/internal/tsscan"
 )
 
 // Options carries the generation inputs: the plan (units, naming pins), the
@@ -55,6 +56,45 @@ type Service struct {
 	scenMemo    map[string]*flow.Scenario // endpoint name → resolved scenario slice
 	prof        profile.Profile           // target conventions (nil = gonav default)
 	tpl         templates.Provider        // template set (nil-safe: always set in NewService)
+
+	// scanFacts memoizes the scanner pass over source, and fnTrees the
+	// per-helper flow trees derived from it. The entry's treeFor scans on its
+	// own; this is one further scan shared by every helper, so a file with N
+	// helpers costs two passes, not N+1.
+	scanFacts *tsscan.SourceFacts
+	fnTrees   map[string]*flow.Tree
+}
+
+// helperFlowTree returns the flow tree of a fn helper's legacy body, or nil
+// when the source is unavailable or the helper is not in it.
+//
+// The entry has treeFor; this is its per-function sibling. flow.Build already
+// accepts any function name and pickFunction resolves it from the scanner's
+// function table, so nothing new is needed from the parse stack — what was
+// missing was a caller that asked for a helper rather than the entry.
+func (s *Service) helperFlowTree(fn string) *flow.Tree {
+	if strings.TrimSpace(s.source) == "" || fn == "" {
+		return nil
+	}
+	if t, ok := s.fnTrees[fn]; ok {
+		return t
+	}
+	if s.fnTrees == nil {
+		s.fnTrees = map[string]*flow.Tree{}
+	}
+	if s.scanFacts == nil {
+		facts, err := flow.ScanForIR(s.source, s.Main)
+		if err != nil {
+			// Memoize the miss so a bad source is diagnosed once rather
+			// than once per helper.
+			s.fnTrees[fn] = nil
+			s.scanFacts = &tsscan.SourceFacts{}
+			return nil
+		}
+		s.scanFacts = facts
+	}
+	s.fnTrees[fn] = flow.Build([]byte(s.source), s.scanFacts, fn, s.Main)
+	return s.fnTrees[fn]
 }
 
 // Profile returns the service's target profile; the gonav default when
