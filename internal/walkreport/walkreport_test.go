@@ -24,7 +24,7 @@ const (
 	// storeArg: 20 on the corpus, lowerCamel param as Go.Param.
 	storeArg = `UpdateUrfUsrRiskProf.dUrfDebtPrsrvAssetPrcnt: no request-field provenance for "d_urf_debt_prsrv_asset_prcnt" — zero value passed; LLM maps it`
 	// rowMatchList: 19 on the corpus, the per-field list form.
-	rowMatchList = `response fields without row match (zero values): PointType, UsrUsrNm`
+	rowMatchList = `response fields without row source (zero values): PointType, UsrUsrNm`
 	// responseRole: 39 on the corpus, the per-call form.
 	responseRole = `getUacUsrAccnts (UacUsrAccnts) has no response-field match — kept for its error check; LLM maps its role`
 	// nestedHelperArg: 5 on the corpus, FnInsertIntoUra's arguments seen from

@@ -37,13 +37,13 @@ func (s *tuxController) MANAGE_RISK_PROFILE_VIEW(c context.Context, request Requ
 	// tuxgo:TODO getUsrUserMaster (UsrUserMaster) has no response-field match — kept for its error check; LLM maps its role
 	// tuxgo:TODO getRpqmRpQuestionMaster (RpqmRpQuestionMaster) has no response-field match — kept for its error check; LLM maps its role
 	// tuxgo:TODO getDual (Dual) has no response-field match — kept for its error check; LLM maps its role
-	// tuxgo:TODO response fields without row match (zero values): PointType
-	// tuxgo:TODO response fields without row match (zero values): PointType, UsrUsrNm
+	// tuxgo:TODO response fields without row source (zero values): PointType
+	// tuxgo:TODO response fields without row source (zero values): PointType, UsrUsrNm
 	return nil
 }
 
 func (s *tuxController) VIEW_RISK_PROFILE(c context.Context, request Request, response *Response) error {
-	// tuxgo:TODO response fields without row match (zero values): PointType, HghRt
+	// tuxgo:TODO response fields without row source (zero values): PointType, HghRt
 	// tuxgo:TODO getIcdInfoClientDtls (IcdInfoClientDtls) has no response-field match — kept for its error check; LLM maps its role
 	return nil
 }

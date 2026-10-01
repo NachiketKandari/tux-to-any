@@ -88,12 +88,39 @@ var corpusBaseline = corpusShape{
 	//       fields had been falsely riding are correctly reclassified as
 	//       feeding no response field at all. The total is unchanged
 	//       because both shapes still cost one gap each — the count was
-	//       never measuring which. P3A and P3C move these numbers.
-	total: 330,
+	//       never measuring which.
+	//
+	// P3A's slice: 330 → 338, and this is a RISE with no behaviour change.
+	// Stated plainly because the alternative is a number that looks like a
+	// regression or, worse, like a fix.
+	//
+	//   +8  response-field notes that were always true and never emitted.
+	//       The old code asked every read about every response field, so a
+	//       read that sourced nothing still looked like it sourced
+	//       something as soon as one field fuzzy-matched. The note was
+	//       gated on "this read matched at least one field", which is not
+	//       the same as "this read feeds the response". Attribution makes
+	//       the question precise, so 8 endpoints that were silently
+	//       sourcing nothing now say so.
+	//
+	//   ±0  14 rendered appends before, 14 after. P3A changes which read a
+	//       field is attributed to and how the gap is reported; it does not
+	//       change any emitted pair. That is the honest summary: P3A is
+	//       instrumentation plus a correctness precondition, not a
+	//       rendering fix.
+	//
+	// The 21 row-source notes are now one per endpoint (21 of the 23
+	// endpoints have at least one unsourced response field). Before, the
+	// same fields were reported per-read, so a field appearing under 34
+	// reads and a field appearing under 2 both produced one line each —
+	// the count never distinguished them. 45 response-role notes remain and
+	// are P3C's: most are single-read lookups that genuinely shape nothing,
+	// but some are real shaping gaps wearing that message.
+	total: 338,
 	byCode: map[string]int{
 		ReasonHelperArgUnresolved:       250,
 		ReasonStoreArgUnresolved:        11,
-		ReasonResponseFieldUnresolved:   58, // 44 response-role + 14 row-match
+		ReasonResponseFieldUnresolved:   66, // 45 response-role + 21 row-source
 		ReasonNestedHelperArgUnresolved: 5,  // FnInsertIntoUra's args, seen from inside FnSaveRiskProfile
 		ReasonControlFlowNotRendered:    2,  // FnSaveRiskProfile (21 of 32) + FnFindRiskProfile (7 of 10)
 		ReasonCallOutsideItsGuard:       1,  // FnInsertIntoUra, guarded in C by c_flg_using == 'A'
@@ -109,8 +136,8 @@ var corpusBaseline = corpusShape{
 		// is the uniform shape to expect from a fix that applies to every
 		// endpoint equally — a lopsided drop would mean the fix only reached
 		// some branches.
-		"GetPointTypeD":            23,
-		"GetViewSavedRiskAnalizer": 14,
+		"GetPointTypeD":            24,
+		"GetViewSavedRiskAnalizer": 12,
 	},
 }
 

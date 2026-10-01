@@ -29,6 +29,7 @@ import (
 	"tux-to-any/internal/ir"
 	"tux-to-any/internal/plan"
 	"tux-to-any/internal/templates"
+	"tux-to-any/internal/walk"
 )
 
 // Deterministic markers. The endpoint/Go name rides the marker line so the
@@ -164,7 +165,7 @@ func (s *Service) DeterministicControllerBody(endpoint string, p *plan.Plan) (st
 	}
 
 	inner := &strings.Builder{}
-	detEmitControllerEvents(inner, s, ordered, helpers, adds, respFields, respType)
+	detEmitControllerEvents(inner, s, ordered, helpers, adds, respFields, respType, detScope(ordered))
 
 	if !detHasTx(ordered) {
 		sb.WriteString(strings.TrimRight(inner.String(), "\n") + "\n")
@@ -420,6 +421,39 @@ func (s *Service) detResolveCall(origID string, call budget.DBCall) (*detCall, e
 		}
 	}
 	return dc, nil
+}
+
+// detScope builds the endpoint-wide provenance index over the body's reads
+// (plan P3A).
+//
+// Shaping is handed one read at a time, but a response field is a write to one
+// host variable, and that host is produced by exactly one read. Without the
+// index, every read is asked about every response field, so a field belonging
+// to read A is reported unmapped by reads B, C and D as well — the same gap
+// counted once per read in the endpoint. The index answers the question the
+// renderer actually has: which read produces this host?
+//
+// Reads are indexed in walk order, which is what makes the first-wins owner
+// rule deterministic. Reads with no row shape still take a slot so the index
+// of every other read keeps matching the call order.
+func detScope(ordered []*detCall) *walk.Scope {
+	reads := make([]walk.Read, 0, len(ordered))
+	for _, dc := range ordered {
+		r := walk.Read{
+			QueryID: dc.queryID,
+			Capture: dc.capture,
+			RowType: dc.rowName,
+			Shape:   dc.shape,
+		}
+		if dc.query != nil {
+			r.Hosts = dc.query.RowShape
+		}
+		for _, f := range dc.rowFields {
+			r.Fields = append(r.Fields, f.Name)
+		}
+		reads = append(reads, r)
+	}
+	return walk.Index(reads)
 }
 
 // detCaptureName assigns the deterministic per-body capture variable:
@@ -828,7 +862,7 @@ func detCallLine(dc *detCall) string {
 // legacy order plus the response shaping. outerErr reports whether an err
 // variable is already in scope (the controller's named return): without
 // one, the first error-only call declares it; reads always capture with :=.
-func detEmitControllerEvents(sb *strings.Builder, s *Service, ordered []*detCall, helpers []detHelper, adds []ir.FmlOp, respFields []templates.FieldSpec, respType string) {
+func detEmitControllerEvents(sb *strings.Builder, s *Service, ordered []*detCall, helpers []detHelper, adds []ir.FmlOp, respFields []templates.FieldSpec, respType string, scope *walk.Scope) {
 	type event struct {
 		line int
 		kind int // 0 = store, 1 = helper
@@ -856,7 +890,7 @@ func detEmitControllerEvents(sb *strings.Builder, s *Service, ordered []*detCall
 		}
 		detEmitStoreCall(sb, ev.dc, &errDecl, true)
 	}
-	detEmitShaping(sb, ordered, adds, respFields, respType)
+	detEmitShaping(sb, ordered, adds, respFields, respType, scope)
 }
 
 // detEmitStoreCall renders one checked store call: error-only assigns err,
@@ -894,11 +928,80 @@ func detEmitHelper(sb *strings.Builder, h *detHelper) {
 	sb.WriteString("if " + h.cap + " == -1 {\n\treturn nil, errors.New(\"" + h.goName + " failed\")\n}\n")
 }
 
+// detRowSources assigns each response field to the row that actually produces
+// its value, once for the whole endpoint (plan P3A).
+//
+// The question "which read sources this field?" has exactly one answer, and it
+// is not read-local. A field's FML write names a host variable, and the
+// provenance index says which read produces that host. The old code asked
+// every read about every field, so a field owned by read A was reported
+// unmapped by reads B, C and D too — one gap per read in the endpoint, and the
+// same list of names repeated under each.
+//
+// The returned map is field name → the read index that owns it. A field absent
+// from the map is one no read in the endpoint produces: a real gap, reported
+// once.
+func detRowSources(adds []ir.FmlOp, respFields []templates.FieldSpec, scope *walk.Scope) map[string]int {
+	owned := map[string]int{}
+	if scope == nil {
+		return owned
+	}
+	// First add wins per response name, matching the target rule the rest of
+	// shaping uses.
+	seen := map[string]bool{}
+	for _, op := range adds {
+		name := fieldFromFML(op.Field)
+		if seen[name] || op.Target == "" {
+			continue
+		}
+		seen[name] = true
+		if o, ok := scope.OwnerFor(op.Target); ok {
+			owned[name] = o.Read
+		}
+	}
+	return owned
+}
+
+// detUnsourced returns the response fields no read in the endpoint produces,
+// in response order and deduplicated. These are the endpoint's genuine shaping
+// gaps — a field whose value is written from a host that no read yields, so
+// the renderer has nothing to emit and says so once rather than once per read.
+func detUnsourced(owned map[string]int, respFields []templates.FieldSpec) []string {
+	var out []string
+	for _, rf := range respFields {
+		if _, ok := owned[rf.Name]; !ok {
+			out = append(out, rf.Name)
+		}
+	}
+	return out
+}
+
+// detReadFeedsResponse reports whether any response field is attributed to
+// this read. It is the honest form of "this read shapes something": a read
+// whose only apparent pairs came from fields another read owns feeds nothing,
+// and saying it "has no response-field match" is then true rather than a
+// side effect of losing a cross-read guess.
+func detReadFeedsResponse(dc *detCall, owned map[string]int, scope *walk.Scope) bool {
+	if dc == nil {
+		return false
+	}
+	idx, ok := scope.ReadFor(dc.capture)
+	if !ok {
+		return false
+	}
+	for _, owner := range owned {
+		if owner == idx {
+			return true
+		}
+	}
+	return false
+}
+
 // detEmitShaping renders the data appends: one range loop per multi-row
 // read, one nil-guarded append per single-row read, the scalar guess, or
-// the read-less empty append. Unmapped response fields ride a TODO (zero
-// values).
-func detEmitShaping(sb *strings.Builder, ordered []*detCall, adds []ir.FmlOp, respFields []templates.FieldSpec, respType string) {
+// the read-less empty append. A response field no read can source rides a
+// single TODO for the endpoint.
+func detEmitShaping(sb *strings.Builder, ordered []*detCall, adds []ir.FmlOp, respFields []templates.FieldSpec, respType string, scope *walk.Scope) {
 	var rows, singles []*detCall
 	var scalars []*detCall
 	for _, dc := range ordered {
@@ -915,27 +1018,38 @@ func detEmitShaping(sb *strings.Builder, ordered []*detCall, adds []ir.FmlOp, re
 		detEmitReadless(sb, ordered, respFields, respType)
 		return
 	}
+	// Endpoint-wide attribution, computed once.
+	owned := detRowSources(adds, respFields, scope)
 	for _, dc := range rows {
-		pairs, unmapped := detRowPairs(dc, adds, respFields)
-		if len(unmapped) > 0 {
-			sb.WriteString("// tuxgo:TODO response fields without row match (zero values): " + strings.Join(unmapped, ", ") + "\n")
-		}
+		pairs := detRowPairs(dc, adds, respFields, scope, owned)
 		sb.WriteString("for _, row := range " + dc.capture + " {\n")
 		sb.WriteString("\tdata = append(data, " + detLiteral(respType, pairs, "row") + ")\n")
 		sb.WriteString("}\n")
 	}
 	for _, dc := range singles {
-		pairs, unmapped := detRowPairs(dc, adds, respFields)
-		if len(pairs) == 0 {
-			// The single feeds no response field (a lookup whose result
-			// drives later args): keep it for its error check, shape
-			// nothing.
+		pairs := detRowPairs(dc, adds, respFields, scope, owned)
+		if !detReadFeedsResponse(dc, owned, scope) {
+			// No response field is attributed to this read: it is a lookup
+			// whose result drives later args or an error check, so keep it
+			// and shape nothing.
+			//
+			// The test is ATTRIBUTION, not "did any pair come out". Those
+			// differ exactly when a read's only pairs came from fields
+			// another read owns — the cross-read reading P3A exists to
+			// stop. Testing pairs would let P3A turn a silently-wrong
+			// mapping into a spurious "kept for its error check" note, and
+			// it did: this is the one gap the ownership rule added before
+			// the test was made attribution-aware.
 			sb.WriteString("// tuxgo:TODO " + dc.capture + " (" + dc.rowName + ") has no response-field match — kept for its error check; LLM maps its role\n")
 			sb.WriteString("_ = " + dc.capture + "\n")
 			continue
 		}
-		if len(unmapped) > 0 {
-			sb.WriteString("// tuxgo:TODO response fields without row match (zero values): " + strings.Join(unmapped, ", ") + "\n")
+		if len(pairs) == 0 {
+			// Attributed a field, but nothing renderable came out — this
+			// read's row shape has no host column for it. The endpoint
+			// unsourced note names the field; keep the capture used.
+			sb.WriteString("_ = " + dc.capture + "\n")
+			continue
 		}
 		sb.WriteString("if " + dc.capture + " != nil {\n")
 		sb.WriteString("\tdata = append(data, " + detLiteral(respType, pairs, dc.capture) + ")\n")
@@ -953,16 +1067,26 @@ func detEmitShaping(sb *strings.Builder, ordered []*detCall, adds []ir.FmlOp, re
 		sb.WriteString("// tuxgo:TODO scalar " + dc.capture + " unused in shaping — LLM maps its branch role\n")
 		sb.WriteString("_ = " + dc.capture + "\n")
 	}
+	// One gap for the endpoint, naming the fields nothing in the walk
+	// produces. Emitted after the appends so it reads as the summary it is.
+	if unsourced := detUnsourced(owned, respFields); len(unsourced) > 0 {
+		sb.WriteString("// tuxgo:TODO response fields without row source (zero values): " + strings.Join(unsourced, ", ") + "\n")
+	}
 }
 
-// detRowPairs maps one read's row fields onto the endpoint response fields:
-// FML-add target → row field via RowShape position, substring fallback,
-// deterministic response order. Unmapped fields return for the TODO trail.
-func detRowPairs(dc *detCall, adds []ir.FmlOp, respFields []templates.FieldSpec) ([]detFieldMap, []string) {
+// detRowPairs maps the response fields THIS read sources onto its row fields:
+// FML-add target → row field via the provenance index, substring fallback,
+// deterministic response order.
+//
+// It returns only pairs this read can actually render — a field owned by
+// another read is not this read's to emit, and is not this read's gap either.
+// The endpoint-level gap is detUnsourced's, reported once by the caller.
+func detRowPairs(dc *detCall, adds []ir.FmlOp, respFields []templates.FieldSpec, scope *walk.Scope, owned map[string]int) []detFieldMap {
 	byHost := map[string]string{}
 	if dc != nil {
 		byHost = dc.rowByHost
 	}
+	idx, _ := scope.ReadFor(dc.capture)
 	targetOf := map[string]string{} // response Go name → FML-add target
 	for _, op := range adds {
 		name := fieldFromFML(op.Field)
@@ -971,22 +1095,30 @@ func detRowPairs(dc *detCall, adds []ir.FmlOp, respFields []templates.FieldSpec)
 		}
 	}
 	var pairs []detFieldMap
-	var unmapped []string
 	for _, rf := range respFields {
+		// Attributed elsewhere: not this read's field.
+		if owner, ok := owned[rf.Name]; ok && owner != idx {
+			continue
+		}
 		rowField := ""
 		if t, ok := targetOf[rf.Name]; ok {
 			rowField = byHost[normHost(t)]
 		}
 		if rowField == "" && dc != nil {
+			// No authoritative host match. The substring fallback is the
+			// only signal left, and it is a guess — but it is the same
+			// guess the renderer always made, and removing it here would
+			// turn working field maps into gaps. What P3A removes is the
+			// fallback's reach ACROSS reads: a field already attributed to
+			// another read never reaches this line.
 			rowField = detFuzzyRowField(dc.rowFields, rf.Name)
 		}
 		if rowField == "" {
-			unmapped = append(unmapped, rf.Name)
 			continue
 		}
 		pairs = append(pairs, detFieldMap{Resp: rf.Name, Row: rowField})
 	}
-	return pairs, unmapped
+	return pairs
 }
 
 // detLiteral renders one `&models.Resp{...}` literal: mapped row fields

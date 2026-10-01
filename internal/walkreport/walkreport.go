@@ -184,8 +184,15 @@ var (
 	// anchor here silently pushed those two into R-UNCLASSIFIED.
 	storeArgRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.[A-Za-z][A-Za-z0-9_]*: no request-field provenance`)
 
-	// rowMatchRe matches "response fields without row match (zero values): …".
-	rowMatchRe = regexp.MustCompile(`^response fields without row match\b`)
+	// rowSourceRe matches "response fields without row source (zero values): …".
+	// The wording changed in P3A and the change is load-bearing: the old
+	// "without row match" was emitted once per READ, so one unsourced field
+	// was reported by every read in the endpoint that failed to produce it.
+	// "without row source" is emitted once per ENDPOINT, naming the fields no
+	// read in the walk produces. The gap is the same zero value either way,
+	// which is why the code is unchanged; the count is not, which is why the
+	// message is.
+	rowSourceRe = regexp.MustCompile(`^response fields without row source\b`)
 
 	// responseRoleRe matches "getUacUsrAccnts (UacUsrAccnts) has no
 	// response-field match — kept for its error check; …".
@@ -235,7 +242,7 @@ var (
 var patterns = map[string][]*regexp.Regexp{
 	ReasonHelperArgUnresolved:       {helperArgRe},
 	ReasonStoreArgUnresolved:        {storeArgRe},
-	ReasonResponseFieldUnresolved:   {rowMatchRe, responseRoleRe},
+	ReasonResponseFieldUnresolved:   {rowSourceRe, responseRoleRe},
 	ReasonNoStoreCalls:              {noStoreCallsRe},
 	ReasonNestedHelperArgUnresolved: {nestedHelperArgRe},
 	ReasonControlFlowNotRendered:    {controlFlowRe},
