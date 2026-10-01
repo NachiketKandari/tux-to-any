@@ -18,7 +18,15 @@ import (
 // extraction already produced before any join existed — the resolved callee
 // file, the caller's folded buffer state at the call line, and the callee's
 // own input/output traffic — so it keeps holding whatever consumes those
-// facts. What the join concludes from them is the join's own business.
+// facts. What the join concludes from them is the join's own business, and
+// tpcalljoin_test.go asserts that against the IR's own output.
+//
+// This file also used to carry the mirror-image check, that no OTHER fixture
+// resolves a callee in-corpus. TestJoinIsAbsentWithoutAnInCorpusCallee now
+// walks the same three directories and asserts strictly more (a non-nil
+// callee OR a recorded refusal both fail it, and a resolved-but-refused
+// callee is exactly the case the old check would have missed), so the
+// duplicate is gone rather than left to drift.
 
 // svccallFixture is the fixture directory, relative to this package.
 const svccallFixture = "../../testdata/svccall"
@@ -201,28 +209,5 @@ func TestSvcCallFixtureStraddlesTheContract(t *testing.T) {
 	}
 	if !read["FML_ACC_ID"] || !makes["FML_ACC_ID"] {
 		t.Error("FML_ACC_ID no longer binds callee-to-caller")
-	}
-}
-
-// TestOtherFixturesHaveNoInCorpusCallee is the other half of why svccall
-// exists, and it is the assertion that keeps this fixture honest: if a
-// fixture elsewhere grows an in-corpus callee, the "no resolvable callee
-// anywhere" assumption behind the placeholder-path goldens no longer holds,
-// and it should be said out loud rather than discovered later.
-func TestOtherFixturesHaveNoInCorpusCallee(t *testing.T) {
-	for _, dir := range []string{"stripped", "adversarial", "pf"} {
-		files, err := ExtractDir(filepath.Join("../../testdata", dir))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, f := range files {
-			for i := range f.TPCalls {
-				if f.TPCalls[i].ServiceFile != "" {
-					t.Errorf("%s/%s resolves callee %q in-corpus — the placeholder-path "+
-						"goldens for %s assume no tpcall target is ever defined in the corpus",
-						dir, filepath.Base(f.Path), f.TPCalls[i].ServiceFile, dir)
-				}
-			}
-		}
 	}
 }
