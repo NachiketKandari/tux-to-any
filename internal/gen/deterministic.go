@@ -453,7 +453,6 @@ func detScope(ordered []*detCall) *walk.Scope {
 			QueryID: dc.queryID,
 			Capture: dc.capture,
 			RowType: dc.rowName,
-			Shape:   dc.shape,
 		}
 		if dc.query != nil {
 			r.Hosts = dc.query.RowShape

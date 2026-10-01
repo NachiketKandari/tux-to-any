@@ -38,8 +38,6 @@ type Read struct {
 	Capture string
 	// RowType is the models row struct name ("GetTblcDtls").
 	RowType string
-	// Shape is the IR query type ("SELECT_SINGLE", "SELECT_MULTI").
-	Shape string
 	// Hosts are the legacy host variables of the row shape, in select-list
 	// order. Normalized on the way in.
 	Hosts []string
@@ -110,15 +108,6 @@ func (s *Scope) OwnerFor(host string) (Owner, bool) {
 	return o, ok
 }
 
-// ReadOwns reports whether the read at index i produces host. It is the
-// question the shaping renderer asks before emitting "<capture>.X": only a
-// read that owns the host can render it, because only that read's capture is
-// in scope where the append is emitted.
-func (s *Scope) ReadOwns(i int, host string) bool {
-	o, ok := s.OwnerFor(host)
-	return ok && o.Read == i
-}
-
 // ReadFor returns the index of the read whose capture is name, and whether it
 // is in scope. Captures are unique within an endpoint, so this is a lookup
 // and not a search.
@@ -140,25 +129,6 @@ func (s *Scope) Len() int {
 		return 0
 	}
 	return len(s.Reads)
-}
-
-// Unresolved returns the response targets no read in scope produces, in the
-// order given. It is the endpoint-level "nothing can source this field" answer
-// the renderer reports once, rather than once per read.
-func (s *Scope) Unresolved(hosts []string) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, h := range hosts {
-		n := NormalizeHost(h)
-		if n == "" || seen[n] {
-			continue
-		}
-		seen[n] = true
-		if _, ok := s.OwnerFor(h); !ok {
-			out = append(out, h)
-		}
-	}
-	return out
 }
 
 // NormalizeHost maps a legacy host reference to the one key every bridge in
