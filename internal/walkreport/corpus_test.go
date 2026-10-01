@@ -109,18 +109,42 @@ var corpusBaseline = corpusShape{
 	//       instrumentation plus a correctness precondition, not a
 	//       rendering fix.
 	//
-	// The 21 row-source notes are now one per endpoint (21 of the 23
-	// endpoints have at least one unsourced response field). Before, the
-	// same fields were reported per-read, so a field appearing under 34
-	// reads and a field appearing under 2 both produced one line each —
-	// the count never distinguished them. 45 response-role notes remain and
-	// are P3C's: most are single-read lookups that genuinely shape nothing,
-	// but some are real shaping gaps wearing that message.
+	// P3C's slice: same total, 66 → 21 + 45, and the split is the whole
+	// point of the phase.
+	//
+	//   The 66 was one message doing two jobs. "has no response-field match
+	//   — kept for its error check" was emitted for a single-row read that
+	//   shaped nothing, and that description fits two situations that need
+	//   opposite responses:
+	//
+	//     - 45 reads that genuinely feed no response field. Finished work.
+	//       getUacUsrAccnts is 23 of them: every endpoint reads it and then
+	//       passes getUacUsrAccnts.UrfUsrId.String into a later store call,
+	//       so the read is load-bearing and the response is not its job.
+	//       Now R-RESPONSE-READ-KEPT, and no LLM budget belongs on it.
+	//
+	//     - 21 response writes whose value EXISTS — the write names a host
+	//       some read in the walk carries — and which shaping failed to
+	//       place. These are real gaps and stay R-RESPONSE-FIELD-UNRESOLVED.
+	//
+	//   The test is whether the read's row shape carries the host an
+	//   unsourced write names (detReadCouldSourceUnsourced). Without it the
+	//   21 hid inside the 45, and a reader of the census could not tell how
+	//   much shaping work was actually left. P3A's +8 and P3C's 66 → 21+45
+	//   are the same phenomenon reported twice: gaps that were always there,
+	//   made visible.
+	//
+	// The 21 row-source notes are one per endpoint (21 of the 23 endpoints
+	// have at least one unsourced response field). Before, the same fields
+	// were reported per-read, so a field appearing under 34 reads and a
+	// field appearing under 2 both produced one line each — the count never
+	// distinguished them.
 	total: 338,
 	byCode: map[string]int{
 		ReasonHelperArgUnresolved:       250,
 		ReasonStoreArgUnresolved:        11,
-		ReasonResponseFieldUnresolved:   66, // 45 response-role + 21 row-source
+		ReasonResponseFieldUnresolved:   21, // response writes nothing in the walk could place
+		ReasonResponseReadKept:          45, // reads that feed no response field, by design
 		ReasonNestedHelperArgUnresolved: 5,  // FnInsertIntoUra's args, seen from inside FnSaveRiskProfile
 		ReasonControlFlowNotRendered:    2,  // FnSaveRiskProfile (21 of 32) + FnFindRiskProfile (7 of 10)
 		ReasonCallOutsideItsGuard:       1,  // FnInsertIntoUra, guarded in C by c_flg_using == 'A'

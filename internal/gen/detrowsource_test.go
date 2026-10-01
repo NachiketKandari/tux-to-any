@@ -138,3 +138,51 @@ func TestDetReadFeedsResponseIsAboutAttribution(t *testing.T) {
 		t.Error("nil read must not feed a response")
 	}
 }
+
+// TestDetReadCouldSourceUnsourcedIsTheP3CSplit pins the distinction P3C
+// exists to draw. Two reads both feed no response field:
+//
+//   - one whose row shape carries the host an unsourced response write names.
+//     The value exists and shaping failed to place it — a real gap.
+//   - one whose row shape does not. The read is kept for its own sake —
+//     finished work, and no LLM budget belongs on it.
+//
+// Reporting them with one message is what let 21 real gaps hide inside 45.
+func TestDetReadCouldSourceUnsourcedIsTheP3CSplit(t *testing.T) {
+	// The endpoint could not place PointType, whose write names
+	// sql_rps_c_table.
+	adds := []ir.FmlOp{
+		{Kind: ir.FmlAdd, Field: "FML_POINT_TYPE", Target: "sql_rps_c_table"},
+	}
+	unsourced := []string{"PointType"}
+
+	// This read's row DOES carry sql_rps_c_table — it could have sourced it.
+	carrier := &detCall{
+		capture: "rpsRiskProfScrn", rowName: "RpsRiskProfScrn",
+		query: &ir.Query{RowShape: []string{"sql_rps_c_table", "sql_rps_a_text"}},
+	}
+	if !detReadCouldSourceUnsourced(carrier, adds, unsourced) {
+		t.Error("read carrying sql_rps_c_table reported as unable to source PointType — this is a real gap")
+	}
+
+	// This read's row cannot: the host is not in its shape.
+	other := &detCall{
+		capture: "getDual", rowName: "Dual",
+		query: &ir.Query{RowShape: []string{"sql_ura_uniq_nmbr"}},
+	}
+	if detReadCouldSourceUnsourced(other, adds, unsourced) {
+		t.Error("read without sql_rps_c_table reported as a gap — it is finished work")
+	}
+
+	// No unsourced fields at all: nothing to place, so nothing can be a gap.
+	if detReadCouldSourceUnsourced(carrier, adds, nil) {
+		t.Error("a read cannot be a gap when no field is unsourced")
+	}
+	// A read with no IR query has no shape to check against.
+	if detReadCouldSourceUnsourced(&detCall{capture: "x"}, adds, unsourced) {
+		t.Error("a read with no query must not be reported as a gap")
+	}
+	if detReadCouldSourceUnsourced(nil, adds, unsourced) {
+		t.Error("nil read must not be reported as a gap")
+	}
+}

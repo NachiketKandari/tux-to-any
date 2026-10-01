@@ -25,8 +25,22 @@ const (
 	storeArg = `UpdateUrfUsrRiskProf.dUrfDebtPrsrvAssetPrcnt: no request-field provenance for "d_urf_debt_prsrv_asset_prcnt" — zero value passed; LLM maps it`
 	// rowMatchList: 19 on the corpus, the per-field list form.
 	rowMatchList = `response fields without row source (zero values): PointType, UsrUsrNm`
-	// responseRole: 39 on the corpus, the per-call form.
+	// responseRole: the per-call form, retired as a shape by P3C. It said
+	// "has no response-field match — kept for its error check" about two
+	// different things: a read that genuinely feeds nothing, and a read
+	// that should have fed the response and lost its value. It is replaced
+	// by responseReadKept below (finished work) and by rowMatchList's
+	// sibling responseUnplaced (a real gap). Kept here as the record of the
+	// wording that was split, so a re-emission of the old shape is still
+	// classified rather than landing in R-UNCLASSIFIED.
 	responseRole = `getUacUsrAccnts (UacUsrAccnts) has no response-field match — kept for its error check; LLM maps its role`
+	// responseReadKept: the P3C split's first half — a read the walk keeps
+	// that cannot source any unsourced field. Finished work, not a gap.
+	responseReadKept = `R-RESPONSE-READ-KEPT: getDual (Dual) feeds no response field — the walk keeps it for its own sake; LLM need not map it`
+	// responseUnplaced: the P3C split's second half — this read's row DOES
+	// carry the host an unsourced response write names, so the value exists
+	// and shaping failed to place it. A real gap, same code as the list form.
+	responseUnplaced = `response fields without row source (zero values): PointType, UsrUsrNm — getDual (Dual) carries the value but shaping did not place it`
 	// nestedHelperArg: 5 on the corpus, FnInsertIntoUra's arguments seen from
 	// inside FnSaveRiskProfile's body. Only reachable once P2 rendered that
 	// body; the census surfaced it as R-UNCLASSIFIED first.
@@ -61,7 +75,9 @@ func TestClassifyPinsEveryCorpusShape(t *testing.T) {
 		{"helper arg out-param", helperArgAll15, ReasonHelperArgUnresolved},
 		{"store bind", storeArg, ReasonStoreArgUnresolved},
 		{"row match list", rowMatchList, ReasonResponseFieldUnresolved},
-		{"response role", responseRole, ReasonResponseFieldUnresolved},
+		{"response role (retired shape)", responseRole, ReasonResponseFieldUnresolved},
+		{"response read kept", responseReadKept, ReasonResponseReadKept},
+		{"response unplaced", responseUnplaced, ReasonResponseFieldUnresolved},
 		{"nested helper arg", nestedHelperArg, ReasonNestedHelperArgUnresolved},
 		{"no store calls", noStoreCalls, ReasonNoStoreCalls},
 		{"control flow", controlFlow, ReasonControlFlowNotRendered},
@@ -162,7 +178,8 @@ func TestEveryReasonHasAMatch(t *testing.T) {
 		}
 		hit := false
 		for _, msg := range []string{helperArg, helperArgAll15, storeArg, rowMatchList, responseRole,
-			nestedHelperArg, noStoreCalls, controlFlow, guardLeak, tpcall} {
+			responseReadKept, responseUnplaced, nestedHelperArg, noStoreCalls, controlFlow,
+			guardLeak, tpcall} {
 			if Classify(msg) == code {
 				hit = true
 				break

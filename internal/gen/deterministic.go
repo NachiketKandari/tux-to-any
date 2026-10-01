@@ -45,6 +45,16 @@ const (
 	// what P2 will watch fall to zero as helper bodies start rendering.
 	// Keep it in step with walkreport.ReasonNoStoreCalls.
 	NoStoreCallsMark = "R-NO-STORE-CALLS"
+
+	// ResponseReadKeptMark is the reason code for a read the walk keeps that
+	// no response field is attributed to and that cannot source any of the
+	// endpoint's unsourced fields. It is finished work, not a gap: the read
+	// exists for its error check or to feed a later call's argument.
+	//
+	// It is a code rather than prose so the census can hold it apart from
+	// R-RESPONSE-FIELD-UNRESOLVED, which is what P3C is for.
+	// Keep it in step with walkreport.ReasonResponseReadKept.
+	ResponseReadKeptMark = "R-RESPONSE-READ-KEPT"
 )
 
 // IsDeterministicControllerMethod reports whether src carries a
@@ -997,6 +1007,55 @@ func detReadFeedsResponse(dc *detCall, owned map[string]int, scope *walk.Scope) 
 	return false
 }
 
+// detReadCouldSourceUnsourced reports whether this read's row shape carries
+// the host variable of any response field the endpoint could not source.
+//
+// It splits the reads that feed no response field into the two cases that used
+// to share one message and are not the same thing:
+//
+//   - FALSE — the read's row cannot produce any missing value, so keeping it
+//     is the whole job. getUacUsrAccnts is the corpus instance: 22 endpoints
+//     read it and every one passes getUacUsrAccnts.UrfUsrId.String into a
+//     later call, so it is finished work, reported as R-RESPONSE-READ-KEPT.
+//
+//   - TRUE — the read's row DOES carry the host an unsourced response write
+//     names, so the value exists and shaping failed to place it. That is a
+//     genuine R-RESPONSE-FIELD-UNRESOLVED and must stay in the LLM seam's
+//     queue.
+//
+// Splitting them is what makes the remaining R-RESPONSE-FIELD-UNRESOLVED count
+// mean "a response value the walk could not place" rather than "a read we
+// chose not to use".
+func detReadCouldSourceUnsourced(dc *detCall, adds []ir.FmlOp, unsourced []string) bool {
+	if dc == nil || dc.query == nil {
+		return false
+	}
+	shape := map[string]bool{}
+	for _, hv := range dc.query.RowShape {
+		shape[normHost(hv)] = true
+	}
+	if len(shape) == 0 {
+		return false
+	}
+	want := map[string]bool{}
+	for _, name := range unsourced {
+		want[name] = true
+	}
+	// First add wins per response name, the same rule attribution uses.
+	seen := map[string]bool{}
+	for _, op := range adds {
+		name := fieldFromFML(op.Field)
+		if seen[name] || op.Target == "" || !want[name] {
+			continue
+		}
+		seen[name] = true
+		if shape[normHost(op.Target)] {
+			return true
+		}
+	}
+	return false
+}
+
 // detEmitShaping renders the data appends: one range loop per multi-row
 // read, one nil-guarded append per single-row read, the scalar guess, or
 // the read-less empty append. A response field no read can source rides a
@@ -1020,6 +1079,7 @@ func detEmitShaping(sb *strings.Builder, ordered []*detCall, adds []ir.FmlOp, re
 	}
 	// Endpoint-wide attribution, computed once.
 	owned := detRowSources(adds, respFields, scope)
+	unsourced := detUnsourced(owned, respFields)
 	for _, dc := range rows {
 		pairs := detRowPairs(dc, adds, respFields, scope, owned)
 		sb.WriteString("for _, row := range " + dc.capture + " {\n")
@@ -1029,18 +1089,27 @@ func detEmitShaping(sb *strings.Builder, ordered []*detCall, adds []ir.FmlOp, re
 	for _, dc := range singles {
 		pairs := detRowPairs(dc, adds, respFields, scope, owned)
 		if !detReadFeedsResponse(dc, owned, scope) {
-			// No response field is attributed to this read: it is a lookup
-			// whose result drives later args or an error check, so keep it
-			// and shape nothing.
+			// No response field is attributed to this read. Two very
+			// different situations wear this shape, and P3C splits them:
+			// a read whose row could have carried a missing value is a
+			// real gap; a read that could not is finished work.
 			//
 			// The test is ATTRIBUTION, not "did any pair come out". Those
 			// differ exactly when a read's only pairs came from fields
 			// another read owns — the cross-read reading P3A exists to
 			// stop. Testing pairs would let P3A turn a silently-wrong
-			// mapping into a spurious "kept for its error check" note, and
-			// it did: this is the one gap the ownership rule added before
-			// the test was made attribution-aware.
-			sb.WriteString("// tuxgo:TODO " + dc.capture + " (" + dc.rowName + ") has no response-field match — kept for its error check; LLM maps its role\n")
+			// mapping into a spurious note, and it did: this is the one
+			// gap the ownership rule added before the test was made
+			// attribution-aware.
+			if detReadCouldSourceUnsourced(dc, adds, unsourced) {
+				sb.WriteString("// tuxgo:TODO response fields without row source (zero values): " +
+					strings.Join(unsourced, ", ") + " — " + dc.capture + " (" + dc.rowName +
+					") carries the value but shaping did not place it\n")
+				sb.WriteString("_ = " + dc.capture + "\n")
+				continue
+			}
+			sb.WriteString("// tuxgo:TODO " + ResponseReadKeptMark + ": " + dc.capture + " (" + dc.rowName +
+				") feeds no response field — the walk keeps it for its own sake; LLM need not map it\n")
 			sb.WriteString("_ = " + dc.capture + "\n")
 			continue
 		}
@@ -1069,7 +1138,7 @@ func detEmitShaping(sb *strings.Builder, ordered []*detCall, adds []ir.FmlOp, re
 	}
 	// One gap for the endpoint, naming the fields nothing in the walk
 	// produces. Emitted after the appends so it reads as the summary it is.
-	if unsourced := detUnsourced(owned, respFields); len(unsourced) > 0 {
+	if len(unsourced) > 0 {
 		sb.WriteString("// tuxgo:TODO response fields without row source (zero values): " + strings.Join(unsourced, ", ") + "\n")
 	}
 }

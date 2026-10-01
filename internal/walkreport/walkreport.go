@@ -140,6 +140,24 @@ const (
 	// generated client could not be verified against a real implementation.
 	ReasonTPCallNotRendered = "R-TPCALL"
 
+	// ReasonResponseReadKept is a store read the walk keeps but that no
+	// response field is attributed to, and whose row cannot source any of
+	// the endpoint's unsourced fields.
+	//
+	// It is NOT a defect. It is the honest classification of a read the C
+	// performs for its own sake: a lookup whose value feeds a later store
+	// call's argument or a helper, or whose result exists only for its
+	// error check. getUacUsrAccnts is the corpus example — 22 of the 23
+	// endpoints read it, and every one of them then passes
+	// getUacUsrAccnts.UrfUsrId.String into a later call.
+	//
+	// It exists because "has no response-field match" was doing two jobs.
+	// A read that feeds nothing looked identical to a read that should have
+	// fed the response and lost its value — the second is a real gap the
+	// LLM seam must fill, the first is finished work. P3C separates them so
+	// the remaining R-RESPONSE-FIELD-UNRESOLVED count means what it says.
+	ReasonResponseReadKept = "R-RESPONSE-READ-KEPT"
+
 	// ReasonUnclassified is the escape hatch, and it is deliberately not a
 	// bucket to make the total come out even. A TODO whose shape matches no
 	// registered pattern lands here, so adding a new emitter gap without
@@ -162,6 +180,7 @@ var AllReasons = []string{
 	ReasonCallOutsideItsGuard,
 	ReasonTPCallNotRendered,
 	ReasonNoStoreCalls,
+	ReasonResponseReadKept,
 	ReasonUnclassified,
 }
 
@@ -234,6 +253,12 @@ var (
 	// and line ride in the message so a gap names the specific dropped call
 	// rather than only the helper it sits in.
 	tpcallRe = regexp.MustCompile(`^` + ReasonTPCallNotRendered + `\b`)
+
+	// responseReadKeptRe matches gen's "R-RESPONSE-READ-KEPT: getDual
+	// (Dual) feeds no response field — the walk keeps it for its own sake;
+	// …". Anchored on the code, like the other register-marked shapes, so
+	// the prose after the colon can be reworded without moving the count.
+	responseReadKeptRe = regexp.MustCompile(`^` + ReasonResponseReadKept + `\b`)
 )
 
 // patterns maps a reason code to the message shapes that carry it. The four
@@ -244,6 +269,7 @@ var patterns = map[string][]*regexp.Regexp{
 	ReasonStoreArgUnresolved:        {storeArgRe},
 	ReasonResponseFieldUnresolved:   {rowSourceRe, responseRoleRe},
 	ReasonNoStoreCalls:              {noStoreCallsRe},
+	ReasonResponseReadKept:          {responseReadKeptRe},
 	ReasonNestedHelperArgUnresolved: {nestedHelperArgRe},
 	ReasonControlFlowNotRendered:    {controlFlowRe},
 	ReasonCallOutsideItsGuard:       {callOutsideGuardRe},
