@@ -2155,7 +2155,16 @@ func ScenarioCondition(sc *Scenario, tree *Tree) *ir.Condition {
 			if op.Line > 0 && (op.Line < n.Line || op.Line > n.EndLine) {
 				continue
 			}
-			key := string(op.Kind) + "|" + op.Field
+			// The dedup key carries the write's whole identity, not just
+			// kind+field. One FML field is written repeatedly across a
+			// scenario — the shared preamble's default plus one write per
+			// branch — and each of those is a distinct fact. Keying on
+			// kind+field alone let the preamble's
+			// `Fadd32(ptr_fml_Ibuffer, FML_POINT_TYPE, &sql_urf_mm_opt_stts_2)`
+			// claim FML_POINT_TYPE and silently discard the per-branch
+			// `Fadd32(ptr_fml_Obuffer, FML_POINT_TYPE, &sql_rpam_answer_id)`,
+			// so the response value was unrecoverable downstream (P3B).
+			key := string(op.Kind) + "|" + op.Field + "|" + op.Target + "|" + op.Buffer
 			if seen[key] {
 				continue
 			}

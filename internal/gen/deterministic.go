@@ -439,10 +439,19 @@ func detCaptureName(method, shape string, used map[string]int) string {
 }
 
 // detAdds returns the condition's contract FML adds (response drivers).
+//
+// Output-buffer only. A response field is a write to the endpoint's Obuffer;
+// an Fadd32 against the Ibuffer writes the *request* buffer, which is a read
+// guard or a default, never the response value. Admitting Ibuffer adds here
+// is what let the shared preamble's `Fadd32(ptr_fml_Ibuffer, FML_POINT_TYPE,
+// &sql_urf_mm_opt_stts_2)` shadow the real per-branch
+// `Fadd32(ptr_fml_Obuffer, FML_POINT_TYPE, &sql_rpam_answer_id)` and leave
+// PointType unmapped on every endpoint (P3B). flow.resolveResponses already
+// draws the same line (SCEN-D9); this makes the shaping path agree with it.
 func detAdds(c *ir.Condition) []ir.FmlOp {
 	var out []ir.FmlOp
 	for _, op := range c.FmlOps {
-		if op.Kind == ir.FmlAdd && !op.Dropped && !op.Error {
+		if op.Kind == ir.FmlAdd && !op.Dropped && !op.Error && strings.HasSuffix(op.Buffer, "Obuffer") {
 			out = append(out, op)
 		}
 	}

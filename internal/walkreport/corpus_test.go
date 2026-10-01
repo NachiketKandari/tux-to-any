@@ -61,11 +61,39 @@ var corpusBaseline = corpusShape{
 	//       has zero tpcalls, so a helper's tpcall reached the emitted tree
 	//       as no call, no TODO, and no reason code. A count is the
 	//       minimum honest record of a call that was dropped.
-	total: 339,
+	//
+	// P3B's slice: 339 → 330. Two movements, and net zero on the response
+	// code — stated here rather than left to look like a fix that missed.
+	//
+	//   -9  R-STORE-ARG-UNRESOLVED, 20 → 11. `ScenarioCondition` deduped
+	//       FML ops on kind+field alone, so the first write of a field
+	//       claimed the key and every later write was discarded. A field
+	//       written once per branch (the shared preamble's default, then
+	//       one write per arm) kept only the preamble's, which silently
+	//       removed the branch's target from the value it resolved to.
+	//       Keying on kind+field+target+buffer keeps every distinct write.
+	//       These 9 are store binds that were resolving against the
+	//       dropped write.
+	//
+	//   ±0  R-RESPONSE-FIELD-UNRESOLVED stays 58, but its SHAPE moved and
+	//       that is the point: 19 row-match + 39 response-role became
+	//       14 + 44. `detAdds` now admits Obuffer writes only (matching
+	//       flow.resolveResponses' own SCEN-D9 rule), which stopped the
+	//       preamble's Ibuffer `Fadd32(…, FML_POINT_TYPE, &sql_urf_mm_opt_stts_2)`
+	//       from shadowing the per-branch Obuffer
+	//       `Fadd32(…, FML_POINT_TYPE, &sql_rpam_answer_id)`. Five
+	//       endpoints' PointType now resolves to the real row field
+	//       (`GetGetQustansLst` emits `PointType: row.RpamAnswerId.String`),
+	//       which retires 5 row-match lists; the 5 single-reads those
+	//       fields had been falsely riding are correctly reclassified as
+	//       feeding no response field at all. The total is unchanged
+	//       because both shapes still cost one gap each — the count was
+	//       never measuring which. P3A and P3C move these numbers.
+	total: 330,
 	byCode: map[string]int{
 		ReasonHelperArgUnresolved:       250,
-		ReasonStoreArgUnresolved:        20,
-		ReasonResponseFieldUnresolved:   58, // 39 response-role + 19 row-match
+		ReasonStoreArgUnresolved:        11,
+		ReasonResponseFieldUnresolved:   58, // 44 response-role + 14 row-match
 		ReasonNestedHelperArgUnresolved: 5,  // FnInsertIntoUra's args, seen from inside FnSaveRiskProfile
 		ReasonControlFlowNotRendered:    2,  // FnSaveRiskProfile (21 of 32) + FnFindRiskProfile (7 of 10)
 		ReasonCallOutsideItsGuard:       1,  // FnInsertIntoUra, guarded in C by c_flg_using == 'A'
@@ -75,13 +103,13 @@ var corpusBaseline = corpusShape{
 	},
 	byMethod: map[string]int{
 		// The endpoint gaps are spread across the 23 emitted endpoint
-		// methods. GetPointTypeD is the heaviest at 24 (its helper args plus
+		// methods. GetPointTypeD is the heaviest at 23 (its helper args plus
 		// its own store binds and shaping gaps); GetViewSavedRiskAnalizer
 		// has the fewest at 14. Both fell by exactly 5 in P1's slice, which
 		// is the uniform shape to expect from a fix that applies to every
 		// endpoint equally — a lopsided drop would mean the fix only reached
 		// some branches.
-		"GetPointTypeD":            24,
+		"GetPointTypeD":            23,
 		"GetViewSavedRiskAnalizer": 14,
 	},
 }
