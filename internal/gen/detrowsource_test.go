@@ -186,3 +186,113 @@ func TestDetReadCouldSourceUnsourcedIsTheP3CSplit(t *testing.T) {
 		t.Error("nil read must not be reported as a gap")
 	}
 }
+
+// --- Guards that this corpus does not reach -------------------------------
+//
+// The tests above exercise the helpers directly. These exercise the WIRING:
+// the two branches in detEmitShaping/detRowPairs that only fire when a field's
+// provenance and its fuzzy match disagree. On riskPipelineTest they never fire
+// — toggling either one off produces a byte-identical emitted tree — so
+// without these cases the guards would be untested code that reads as tested.
+
+// TestOwnershipGuardBeatsAFuzzyMatch is the case the P3A guard exists for.
+//
+// PointType is owned by the rps read, but its NAME fuzzy-matches the tblc
+// read's RpProf ("pointtype" contains... nothing, but the reverse direction
+// does) — detFuzzyRowField matches on substring in either direction, so a read
+// whose row fields happen to contain the response field's name would claim it
+// even though another read owns it. The guard must win over the guess.
+func TestOwnershipGuardBeatsAFuzzyMatch(t *testing.T) {
+	scope := walk.Index([]walk.Read{
+		{
+			QueryID: "q4", Capture: "tblc", RowType: "GetTblcDtls",
+			Hosts: []string{"sql_rp_prof"}, Fields: []string{"PointTypeProf"},
+		},
+		{
+			QueryID: "cur_rps", Capture: "rps", RowType: "RpsRiskProfScrn",
+			Hosts: []string{"sql_rps_c_table"}, Fields: []string{"RpsCTable"},
+		},
+	})
+	adds := []ir.FmlOp{
+		{Kind: ir.FmlAdd, Field: "FML_POINT_TYPE", Target: "sql_rps_c_table"},
+	}
+	resp := []templates.FieldSpec{respField("PointType")}
+	owned := detRowSources(adds, resp, scope)
+
+	// Sanity: the fuzzy matcher WOULD have matched tblc's row field.
+	tblc := &detCall{
+		capture: "tblc", rowName: "GetTblcDtls",
+		rowByHost: map[string]string{"rp_prof": "PointTypeProf"},
+		rowFields: []templates.FieldSpec{respField("PointTypeProf")},
+	}
+	if detFuzzyRowField(tblc.rowFields, "PointType") == "" {
+		t.Fatal("fixture is not exercising the guard: the fuzzy matcher found no match")
+	}
+
+	// The guard must refuse it anyway: another read owns PointType.
+	if pairs := detRowPairs(tblc, adds, resp, scope, owned); len(pairs) != 0 {
+		t.Errorf("tblc emitted %+v — it claimed a field the rps read owns, via a fuzzy match", pairs)
+	}
+}
+
+// TestReadFeedsResponseGuardIsAttributionNotPairs is the P3C wiring case: a
+// read whose ONLY apparent pairs come from another read's fields must report
+// that it feeds nothing, not that it shaped something.
+func TestReadFeedsResponseGuardIsAttributionNotPairs(t *testing.T) {
+	scope := walk.Index([]walk.Read{
+		{
+			QueryID: "q4", Capture: "tblc", RowType: "GetTblcDtls",
+			Hosts: []string{"sql_rp_prof"}, Fields: []string{"PointTypeProf"},
+		},
+		{
+			QueryID: "cur_rps", Capture: "rps", RowType: "RpsRiskProfScrn",
+			Hosts: []string{"sql_rps_c_table"}, Fields: []string{"RpsCTable"},
+		},
+	})
+	adds := []ir.FmlOp{
+		{Kind: ir.FmlAdd, Field: "FML_POINT_TYPE", Target: "sql_rps_c_table"},
+	}
+	resp := []templates.FieldSpec{respField("PointType")}
+	owned := detRowSources(adds, resp, scope)
+
+	tblc := &detCall{
+		capture: "tblc", rowName: "GetTblcDtls",
+		rowByHost: map[string]string{"rp_prof": "PointTypeProf"},
+		rowFields: []templates.FieldSpec{respField("PointTypeProf")},
+	}
+	// It looks like it shapes something (the fuzzy match), but it does not:
+	// attribution is the question, not pairs.
+	if detReadFeedsResponse(tblc, owned, scope) {
+		t.Error("tblc reported as feeding a response on the strength of a fuzzy match " +
+			"for a field the rps read owns")
+	}
+}
+
+// TestDetReadCouldSourceUnsourcedGuardIsReachable covers the P3C branch that
+// the corpus never takes: a read that feeds no response field BUT whose row
+// carries the host an unsourced write names. That read is a real gap, not
+// finished work, and the message must say so.
+func TestDetReadCouldSourceUnsourcedGuardIsReachable(t *testing.T) {
+	adds := []ir.FmlOp{
+		{Kind: ir.FmlAdd, Field: "FML_POINT_TYPE", Target: "sql_rps_c_table"},
+	}
+	unsourced := []string{"PointType"}
+
+	// Owns nothing, but carries the host: a gap.
+	carrier := &detCall{
+		capture: "rps", rowName: "RpsRiskProfScrn",
+		query: &ir.Query{RowShape: []string{"sql_rps_c_table"}},
+	}
+	if !detReadCouldSourceUnsourced(carrier, adds, unsourced) {
+		t.Error("a read carrying the unsourced host was not reported as a gap")
+	}
+
+	// Owns nothing and cannot carry it: finished work.
+	kept := &detCall{
+		capture: "dual", rowName: "Dual",
+		query: &ir.Query{RowShape: []string{"sql_ura_uniq_nmbr"}},
+	}
+	if detReadCouldSourceUnsourced(kept, adds, unsourced) {
+		t.Error("a read that cannot carry the unsourced host was reported as a gap")
+	}
+}

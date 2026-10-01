@@ -127,12 +127,25 @@ var corpusBaseline = corpusShape{
 	//       some read in the walk carries — and which shaping failed to
 	//       place. These are real gaps and stay R-RESPONSE-FIELD-UNRESOLVED.
 	//
-	//   The test is whether the read's row shape carries the host an
-	//   unsourced write names (detReadCouldSourceUnsourced). Without it the
-	//   21 hid inside the 45, and a reader of the census could not tell how
-	//   much shaping work was actually left. P3A's +8 and P3C's 66 → 21+45
-	//   are the same phenomenon reported twice: gaps that were always there,
-	//   made visible.
+	//   The split is the EMITTER's: 45 notes now carry the registered code
+	//   R-RESPONSE-READ-KEPT, and 21 carry the row-source wording. Both
+	//   message shapes are counted exactly as before — what changed is that
+	//   they are now two codes and two sentences instead of one.
+	//
+	//   Measured, because the obvious reading is wrong. Toggling
+	//   detReadCouldSourceUnsourced off — the guard that chooses between the
+	//   two messages — produces a BYTE-IDENTICAL emitted tree on this
+	//   corpus: every read it classifies as "kept" genuinely cannot source
+	//   an unsourced field, so the guard never takes its other branch here.
+	//   It is correct by construction and carries no census weight on this
+	//   input. What moved the numbers is the rewording plus the new code.
+	//   The guard is pinned on inputs that do reach it, in
+	//   TestDetReadCouldSourceUnsourcedGuardIsReachable.
+	//
+	//   So the 21 were ALWAYS 21 and the 45 always 45. The old single code
+	//   could not say which was which, and that is the whole of what P3C
+	//   fixed: a reporting fix, not a rendering one. P3A's +8 is the same
+	//   story — gaps that were always there, made visible.
 	//
 	// The 21 row-source notes are one per endpoint (21 of the 23 endpoints
 	// have at least one unsourced response field). Before, the same fields
