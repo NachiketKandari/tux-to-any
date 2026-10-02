@@ -27,6 +27,9 @@ type DemoController interface {
 	// EXPECT into a rendered controller suite — the unconditional
 	// gomock.Any() matcher was over-arity against GetDB().
 	OrderHandle(ctx context.Context) (data *sqlx.DB, err error)
+	// OrderEdit returns only an error, mirroring riskprofile's EditMarks path:
+	// the store method has one result, so its EXPECT's Return takes one value.
+	OrderEdit(ctx context.Context, request *models.OrderRequest) (err error)
 }
 
 // NewDemoController takes TWO dependencies. The generator emitted exactly one

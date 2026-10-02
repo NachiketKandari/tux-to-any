@@ -54,7 +54,7 @@ func TestRenderTestDBMethodTxVariants(t *testing.T) {
 		SuiteName: "NavStoreSuite", StoreVar: "navStore", Name: "DeleteQnA",
 		Regex:    `(?i)^delete\\s+from\\s+RPQA_RP_QUESTION_ANS(\\s+where\\s+(.+))?$`,
 		CallArgs: []string{`"userid"`},
-		IsDML:    true, IsTx: true, DeleteTx: true,
+		IsDML:    true, IsTx: true, ToleratesNoRows: true,
 	})
 	parseTestFile(t, "delete_tx_test.go", "package db\n"+deleteTx)
 	for _, want := range []string{

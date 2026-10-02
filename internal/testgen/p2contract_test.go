@@ -363,8 +363,11 @@ func TestFieldLitKeepsSliceTypes(t *testing.T) {
 	// A slice of structs expands over the element struct's own fields, and the
 	// element type is spelled the way the test package must spell it.
 	typ, lit = fx.FieldLit("AssessQnARequest", "QnA")
-	if typ != "[]QnA" {
-		t.Errorf("type = %q, want []QnA", typ)
+	// The DECLARATION is qualified too, not just the literal. The corpus writes
+	// `QnA []QnA` (same package, unqualified) but the generated case struct
+	// lives in the handler package, where a raw `[]QnA` is "undefined: QnA".
+	if typ != "[]models.QnA" {
+		t.Errorf("type = %q, want []models.QnA — the declaration must be qualified too", typ)
 	}
 	if !strings.HasPrefix(lit, "[]models.QnA{") {
 		t.Errorf("literal = %q, want a models.QnA composite literal", lit)
@@ -563,6 +566,80 @@ func TestExtractDBIfaceReadsDeclaredShape(t *testing.T) {
 	}
 	if got := sigs["GetByCode"]; got.ArgCount != 2 {
 		t.Errorf("GetByCode arity = %d, want 2", got.ArgCount)
+	}
+}
+
+// TestHandlerExpectUsesOneCallSitesArgs pins F6/F9 against a handler that calls
+// MORE THAN ONE controller method. The corpus's ViewQuestions routes:
+//
+//	if request.RequestType == "B" { data, err = f.controller.ViewQuestions(c, &request) }
+//	if request.RequestType == "L" { data, err = f.controller.ListSection(c, &request) }
+//
+// CtrlCallArgs used to APPEND across both call sites, producing
+// ListSection(c, &request, &request) — three arguments to a method that takes
+// two, so every handler suite failed to compile. The name and the arguments
+// must describe the SAME call.
+func TestHandlerExpectUsesOneCallSitesArgs(t *testing.T) {
+	dir := t.TempDir()
+	src := "package handler\n\n" +
+		"type handler struct{ controller controllerIface }\n\n" +
+		"type controllerIface interface {\n" +
+		"\tViewQuestions(ctx context.Context, request *models.ViewQuestionsRequest) ([]*models.ListSectionResponse, error)\n" +
+		"\tListSection(ctx context.Context, request *models.ViewQuestionsRequest) ([]*models.ListSectionResponse, error)\n" +
+		"}\n\n" +
+		"func (f *handler) ViewQuestions(c *gin.Context) {\n" +
+		"\tvar request models.ViewQuestionsRequest\n" +
+		"\tvar data any\n" +
+		"\tvar err error\n" +
+		"\tif request.RequestType == \"B\" {\n" +
+		"\t\tdata, err = f.controller.ViewQuestions(c, &request)\n" +
+		"\t}\n" +
+		"\tif request.RequestType == \"L\" {\n" +
+		"\t\tdata, err = f.controller.ListSection(c, &request)\n" +
+		"\t}\n" +
+		"\t_, _ = data, err\n" +
+		"}\n"
+	if err := os.WriteFile(filepath.Join(dir, "handler.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := extractLayer(dir, "handler", nil).Handler["ViewQuestions"]
+	if f == nil {
+		t.Fatal("no handler fact")
+	}
+	// Last call site wins for the name, and its own arguments come with it.
+	if f.CtrlCall != "ListSection" {
+		t.Errorf("CtrlCall = %q, want ListSection", f.CtrlCall)
+	}
+	if len(f.CtrlCallArgs) != 1 || f.CtrlCallArgs[0] != "&request" {
+		t.Errorf("CtrlCallArgs = %v, want exactly [&request] from the named call site", f.CtrlCallArgs)
+	}
+}
+
+// TestToleratesNoRowsComesFromTheBody pins the rule the corpus run forced.
+// riskprofile's DeleteQuestion is a DELETE-tx that checks RowsAffected and
+// returns errors.New("unable to delete the question"); the old code read the
+// SQL verb, decided "tolerates zero rows", and every zero-rows case failed with
+// "Received unexpected error". A body with no zero-rows error is the only
+// thing that tolerates zero rows now — which is also what stops the tool
+// asserting a sentinel for a method like EditOrder that cannot produce one.
+func TestToleratesNoRowsComesFromTheBody(t *testing.T) {
+	// A DELETE-tx whose body states an error does NOT tolerate.
+	stated := &dbFact{Name: "D", Shape: "dml", IsTx: true, Query: "DELETE FROM T WHERE X = :1",
+		NoRowsError: "unable to delete the question"}
+	if toleratesNoRows(stated) {
+		t.Error("a body that states a zero-rows error must assert it, not tolerate")
+	}
+	// A body with no zero-rows branch tolerates — DELETE-tx or not.
+	for _, q := range []string{"DELETE FROM T WHERE X = :1", "INSERT INTO T VALUES (:1)"} {
+		silent := &dbFact{Name: "S", Shape: "dml", IsTx: true, Query: q}
+		if !toleratesNoRows(silent) {
+			t.Errorf("a body with no zero-rows branch tolerates, whatever the verb (%q)", q)
+		}
+	}
+	// The SQL verb is now irrelevant to the decision, which is the point: the
+	// corpus has a DELETE-tx that asserts an error.
+	if toleratesNoRows(stated) == toleratesNoRows(&dbFact{Name: "D3", Shape: "dml", IsTx: true, Query: "UPDATE T SET X = 1"}) {
+		t.Error("a stated error and a silent body must decide differently regardless of verb")
 	}
 }
 

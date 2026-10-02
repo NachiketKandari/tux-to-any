@@ -17,6 +17,11 @@ type DemoStore interface {
 	// controller template's unconditional gomock.Any() matcher.
 	GetDB() *sqlx.DB
 	AddOrder(ctx context.Context, compCd, compName string) error
+	// EditOrder returns ONLY an error, like riskprofile's EditMarks. Every
+	// row-shaped mock payload carries two elements (value, error), which is
+	// wrong here: the controller suite died on "wrong number of arguments to
+	// Return for MockDemoStore.EditOrder: got 2, want 1".
+	EditOrder(ctx context.Context, compCd string) error
 	DeleteOrder(ctx context.Context, tx *sqlx.Tx, compCd string) error
 }
 

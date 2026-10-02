@@ -327,7 +327,13 @@ type TestDBMethodData struct {
 	CallArgs    []string // rendered store-call args after ctx (tx excluded)
 	IsDML       bool     // Exec contract: error-only, ExpectExec + NewResult
 	IsTx        bool     // tx handle: ExpectBegin + Beginx + tx second arg
-	DeleteTx    bool     // DELETE-tx tolerates zero rows (no RowsAffected check)
+	// ToleratesNoRows selects the zero-rows branch: true emits
+	// Success-NoRows with no expected error, false emits NoRows with the
+	// method's own error. It is decided by the body's zero-rows error and
+	// nothing else — the field used to be called DeleteTx and derived from
+	// the SQL verb, which the corpus contradicts (riskprofile's DeleteQuestion
+	// is a DELETE-tx that returns an error on zero rows).
+	ToleratesNoRows bool
 	// GT-7: the first failed complete trace's row as a second case.
 	HasAlt    bool
 	AltDesc   string   // "Logged#2"

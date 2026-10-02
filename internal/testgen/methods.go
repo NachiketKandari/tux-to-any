@@ -148,28 +148,31 @@ func firstWord(s string) string {
 	return `(.+)`
 }
 
-// isDeleteTx reports whether the fact is the DELETE-tx variant: the only
-// DML shape that tolerates zero rows (DeleteQnA convention — result
-// discarded, no RowsAffected check). Every other DML shape returns
-// sql.ErrNoRows when RowsAffected == 0.
-func isDeleteTx(f *dbFact) bool {
-	if !f.IsTx || f.Shape != "dml" {
-		return false
-	}
-	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(f.Query)), "DELETE")
+// toleratesNoRows reports whether a DML method treats zero rows as success.
+//
+// The answer comes from the body and nowhere else. The tool used to decide this
+// from the SQL verb — "a DELETE-tx discards its result" — which the corpus
+// contradicts twice over: riskprofile's DeleteQuestion IS a DELETE-tx that
+// checks RowsAffected and returns errors.New("unable to delete the question"),
+// and its zero-rows cases then failed with "Received unexpected error".
+//
+// A method whose body states no zero-rows error has no code path that turns
+// zero rows into one, so the case asserts success. Asserting the sentinel for
+// it instead would be inventing an error the method cannot produce — the same
+// mistake F2 was written to stop, one level up. Every DML method in the corpus
+// that DOES check RowsAffected also returns a domain error, so this rule loses
+// no coverage; it only stops claiming errors that are not there.
+func toleratesNoRows(f *dbFact) bool {
+	return f.NoRowsError == ""
 }
 
-// dmlNoRowsError is the error a DML method's zero-rows case asserts: the
-// method's own text when its body states one, else the sentinel the template
-// asserted before bodies were read. The fallback is deliberate — an
-// unrecognised body must not silently downgrade the case to "no error",
-// because that would let a zero-rows DML method pass without exercising the
-// check it exists to verify.
+// dmlNoRowsError is the error a DML method's zero-rows case asserts. It is
+// always the method's own text: there is no fallback, because a method that
+// states no zero-rows error has no way to produce one, and asserting the
+// sentinel anyway is the invented expectation F2 exists to eliminate.
+// toleratesNoRows is what distinguishes the two template branches.
 func dmlNoRowsError(f *dbFact) string {
-	if f.NoRowsError != "" {
-		return f.NoRowsError
-	}
-	return "sql: no rows in result set"
+	return f.NoRowsError
 }
 
 // dbExpectType renders the expectedOutput Go type. Scalar reads that scan
@@ -313,14 +316,11 @@ func renderDBMethod(u *unit) (string, error) {
 			CallArgs:  dbCallArgs(sc, f),
 			IsDML:     true,
 			IsTx:      f.IsTx,
-			DeleteTx:  isDeleteTx(f),
-			// An unrecognised zero-rows branch keeps the error the template
-			// always asserted. Reading the body replaces that guess with the
-			// method's own text; it must not weaken the case to "no error",
-			// which would make a zero-rows DML method pass for the wrong
-			// reason. Only the DELETE-tx variant truly tolerates zero rows,
-			// and it has its own branch.
-			NoRowsError: dmlNoRowsError(f),
+			// The two template branches are chosen by the same fact: a body
+			// that states a zero-rows error asserts it, and a body that states
+			// none asserts success because it has no path to produce one.
+			ToleratesNoRows: toleratesNoRows(f),
+			NoRowsError:     dmlNoRowsError(f),
 		})
 	}
 	cols := dbCols(sc, f)
@@ -502,6 +502,15 @@ func mockReturnLiteral(sc *serviceCtx, method string) string {
 	df := sc.dbFacts.DB[method]
 	if df == nil {
 		return "nil"
+	}
+	// A method whose only result is `error` takes Return(nil), not
+	// Return(nil, nil). The row-shaped payloads below all carry two elements
+	// (value, error) because every read shape returns both, and that assumption
+	// is wrong for a DML method — riskprofile's EditMarks is
+	// `EditMarks(ctx, …) error`, and the suite died on "wrong number of
+	// arguments to Return for MockRiskProfileStore.EditMarks: got 2, want 1".
+	if sig, ok := sc.dbIface[method]; ok && sig.Results == 1 && sig.Result == "error" {
+		return "[]any{nil}"
 	}
 	switch df.Shape {
 	case "multi":

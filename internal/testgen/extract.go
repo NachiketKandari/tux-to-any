@@ -81,6 +81,13 @@ type storeCall struct {
 type dbIfaceSig struct {
 	ArgCount int    // declared parameter count, ctx included
 	Result   string // first result type as written (*sqlx.DB, []*models.X, …)
+	// Results is the declared result COUNT. A DML method that returns only
+	// `error` takes Return(nil), not Return(nil, nil) — the generated
+	// controller suite failed with "wrong number of arguments to Return for
+	// MockRiskProfileStore.EditMarks: got 2, want 1". The first result's TYPE
+	// cannot answer this: `error` is a type like any other, and knowing it is
+	// the only result is what the arity depends on.
+	Results int
 }
 
 // extractDBIface parses the db layer's interface declarations into per-method
@@ -118,8 +125,11 @@ func extractDBIface(serviceDir string) map[string]dbIfaceSig {
 					if ft.Params != nil {
 						sig.ArgCount = ft.Params.NumFields()
 					}
-					if ft.Results != nil && ft.Results.NumFields() > 0 {
-						sig.Result = renderExpr(ft.Results.List[0].Type, fset)
+					if ft.Results != nil {
+						sig.Results = ft.Results.NumFields()
+						if sig.Results > 0 {
+							sig.Result = renderExpr(ft.Results.List[0].Type, fset)
+						}
 					}
 					out[m.Names[0].Name] = sig
 				}
@@ -750,18 +760,20 @@ func returnedErrorLiteral(r returnStmt, fset *token.FileSet) (string, bool) {
 }
 
 // isErrNoRowsSentinel reports whether an expression names the sql.ErrNoRows
-// sentinel, whether qualified (sql.ErrNoRows) or dot-imported into the
-// package's own namespace (errNoRows). Both denote the same error, whose
-// message is fixed by database/sql.
+// sentinel. Both the qualified form and a package-level alias denote the same
+// error, whose message is fixed by database/sql.
+//
+// The alias match is case-INSENSITIVE on purpose. Converted code conventionally
+// spells it `errNoRows` — lowercase e, since it is a local — and a
+// case-sensitive HasSuffix("ErrNoRows") misses every one of those. The
+// repo's own dbtx fixture used it, so the pin for this failed before the
+// method was reached.
 func isErrNoRowsSentinel(e ast.Expr, fset *token.FileSet) bool {
-	rendered := renderExpr(e, fset)
-	if rendered == "sql.ErrNoRows" {
+	if renderExpr(e, fset) == "sql.ErrNoRows" {
 		return true
 	}
-	if id, ok := e.(*ast.Ident); ok && strings.HasSuffix(id.Name, "ErrNoRows") {
-		return true
-	}
-	return false
+	id, ok := e.(*ast.Ident)
+	return ok && strings.HasSuffix(strings.ToLower(id.Name), "norows")
 }
 
 // dbCallShape maps a sqlx / database-sql call name onto the db block shape
@@ -1072,6 +1084,20 @@ func extractHandlerFact(fd *ast.FuncDecl, fset *token.FileSet) *handlerFact {
 					// receives. A handler may bind a request and not pass
 					// it, and one that does pass it may pass something
 					// else entirely.
+					//
+					// REPLACED, not appended. A handler can route to more
+					// than one controller method:
+					//
+					//	if request.RequestType == "B" { …ViewQuestions(c, &request) }
+					//	if request.RequestType == "L" { …ListSection(c, &request) }
+					//
+					// which is in the corpus. Appending merged both call
+					// sites' arguments and produced
+					// ListSection(c, &request, &request) — three arguments
+					// to a method that takes two. Each call site's name and
+					// arguments must be overwritten together so they always
+					// describe the same call.
+					f.CtrlCallArgs = nil
 					for i, a := range x.Args {
 						if i == 0 {
 							continue // ctx

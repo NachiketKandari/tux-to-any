@@ -1,28 +1,31 @@
 gentest gap report — ../../testdata/gentest/pkg/services/demo (mode service)
 service demo (../../testdata/gentest/pkg/services/demo)
-  db — 10 functions, 0 tested, 10 gaps
+  db — 11 functions, 0 tested, 11 gaps
     gap GetOrderDetails   (no matching test name or call site)
     gap GetOrderCount     (no matching test name or call site)
     gap GetOrderMarks     (no matching test name or call site)
     gap GetOrderResponses (no matching test name or call site)
     gap GetDB             (no matching test name or call site)
     gap AddOrder          (no matching test name or call site)
+    gap EditOrder         (no matching test name or call site)
     gap DeleteOrder       (no matching test name or call site)
     gap NewDemoStore      (no matching test name or call site)
     gap NewDemoAuditStore (no matching test name or call site)
     gap RecordAudit       (no matching test name or call site)
-  controller — 7 functions, 0 tested, 7 gaps
+  controller — 8 functions, 0 tested, 8 gaps
     gap OrderList         (no matching test name or call site)
     gap OrderDirect       (no matching test name or call site)
     gap OrderMarks        (no matching test name or call site)
     gap OrderMarkList     (no matching test name or call site)
     gap OrderAudit        (no matching test name or call site)
     gap OrderHandle       (no matching test name or call site)
+    gap OrderEdit         (no matching test name or call site)
     gap NewDemoController (no matching test name or call site)
-  handler — 5 functions, 0 tested, 5 gaps
+  handler — 6 functions, 0 tested, 6 gaps
     gap OrderList       (no matching test name or call site)
     gap OrderMarksFetch (no matching test name or call site)
     gap OrderMarkList   (no matching test name or call site)
+    gap OrderEither     (no matching test name or call site)
     gap OrderAudit      (no matching test name or call site)
     gap NewDemoHandler  (no matching test name or call site)
-gentest: 22 functions, 0 tested, 22 gaps
+gentest: 25 functions, 0 tested, 25 gaps

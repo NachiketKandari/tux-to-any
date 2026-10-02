@@ -124,17 +124,24 @@ func (a *AssumedFixtureSource) FieldLit(structName, field string) (string, strin
 	case isSlice && elem == "string":
 		return typ, "[]string{" + strconv.Quote(placeholder(field)) + "}"
 	case isSlice:
+		// The TYPE is qualified too, not just the literal. The generated
+		// case struct lives in the db/controller/handler package and the
+		// models file declares its own types unqualified (`QnA []QnA`), so a
+		// raw `[]QnA` as the field declaration is "undefined: QnA" in the
+		// generated suite. Qualifying only the value would have left the
+		// declaration broken while the literal looked right.
 		q := a.qualified(elem)
+		decl := "[]" + q
 		if lit, ok := a.elemLiteral(elem, 0); ok {
-			return typ, "[]" + q + "{{" + lit + "}}"
+			return decl, decl + "{{" + lit + "}}"
 		}
-		return typ, "[]" + q + "{}"
+		return decl, decl + "{}"
 	case typ != "" && typ != "string":
 		q := a.qualified(elem)
 		if lit, ok := a.elemLiteral(elem, 0); ok {
-			return typ, q + "{" + lit + "}"
+			return q, q + "{" + lit + "}"
 		}
-		return typ, q + "{}"
+		return q, q + "{}"
 	}
 	return "", ""
 }

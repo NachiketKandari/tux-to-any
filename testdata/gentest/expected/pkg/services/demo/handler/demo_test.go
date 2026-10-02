@@ -284,6 +284,80 @@ func (suite *DemoHandlerSuite) TestOrderMarkList() {
 }
 
 // run test | debug test
+func (suite *DemoHandlerSuite) TestOrderEither() {
+	testCases := []struct {
+		desc                  string
+		CompCode              string
+		mockInput             []any
+		expectedError         string
+		expectedErrorHttpCode int
+	}{
+		{
+			desc:                  "OrderEitherError",
+			CompCode:              "fmlcompcd",
+			mockInput:             []any{nil, errors.New("error while fetching data")},
+			expectedError:         "error while fetching data",
+			expectedErrorHttpCode: http.StatusInternalServerError,
+		},
+		{
+			desc:                  "Failure",
+			CompCode:              "fmlcompcd",
+			mockInput:             []any{nil, nil},
+			expectedError:         "No Data Found",
+			expectedErrorHttpCode: http.StatusNoContent,
+		},
+		{
+			desc:          "Success",
+			CompCode:      "fmlcompcd",
+			mockInput:     []any{[]*models.OrderResponse{{CompCode: "fmlcompcd", CompName: "fmlcompname"}}, nil},
+			expectedError: "",
+		},
+	}
+
+	for _, testCase := range testCases {
+		suite.T().Run(testCase.desc, func(t *testing.T) {
+			// Mocking and Setting Expected Result
+			request := models.OrderRequest{CompCode: testCase.CompCode}
+
+			response, ctx := utils.CreateTestGinContext(http.MethodPost, request, nil, nil, nil)
+			if testCase.mockInput != nil {
+				suite.demoController.
+					EXPECT().
+					OrderDirect(ctx, &request).
+					Return(testCase.mockInput...)
+			}
+
+			// Triggering Function
+			suite.demoHandler.OrderEither(ctx)
+			if response.Code == http.StatusNoContent {
+				assert.Empty(t, response.Body.String(), "Expected empty body for 204 No Content")
+				return
+			}
+
+			var httpResponse network.HttpResponse
+			err := json.Unmarshal(response.Body.Bytes(), &httpResponse)
+			if err != nil {
+				suite.T().Errorf("unable to unmarshal response: %v\nresponse body: %s", err, response.Body.String())
+				return
+			}
+
+			// Validations
+			if testCase.expectedError != "" {
+				assert.Equal(t, response.Code, testCase.expectedErrorHttpCode)
+				assert.Equal(t, httpResponse.Status, "failure")
+				assert.Contains(t, httpResponse.Error.Description, testCase.expectedError)
+			} else {
+				assert.Equal(t, response.Code, http.StatusOK)
+				assert.Equal(t, httpResponse.Status, "success")
+
+				actualResponse, _ := utils.TypeConverter[[]*models.OrderResponse](httpResponse.Data)
+				assert.Equal(t, testCase.mockInput[0], *actualResponse)
+			}
+		})
+	}
+}
+
+// run test | debug test
 func (suite *DemoHandlerSuite) TestOrderAudit() {
 	testCases := []struct {
 		desc                  string

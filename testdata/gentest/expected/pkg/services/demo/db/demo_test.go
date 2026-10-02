@@ -201,6 +201,57 @@ func (suite *DemoStoreSuite) TestAddOrder() {
 	}
 }
 
+func (suite *DemoStoreSuite) TestEditOrder() {
+	// The store's own SQL literal, reused in every expectation below.
+	query := `UPDATE DEMO_ORDER SET DEMO_ORDER_UPD = :1 WHERE DEMO_ORDER_CO_ID = :2`
+	testCases := []struct {
+		desc          string
+		rowsAffected  int64
+		mockError     string
+		expectedError string
+	}{
+		{
+			desc:          "ExecError",
+			mockError:     "ORA Error",
+			expectedError: "ORA Error",
+		},
+		{
+			desc:          "Success-NoRows",
+			rowsAffected:  0,
+			expectedError: "",
+		},
+		{
+			desc:          "Success",
+			rowsAffected:  1,
+			expectedError: "",
+		},
+	}
+
+	for _, testCase := range testCases {
+		suite.T().Run(testCase.desc, func(t *testing.T) {
+			// Mocking and Setting Expected Result
+			if testCase.mockError != "" {
+				suite.sqlMock.
+					ExpectExec(regexp.QuoteMeta(query)).
+					WillReturnError(errors.New(testCase.mockError))
+			} else {
+				suite.sqlMock.
+					ExpectExec(regexp.QuoteMeta(query)).
+					WillReturnResult(sqlmock.NewResult(1, testCase.rowsAffected))
+			}
+			// Triggering Function
+			err := suite.demoStore.EditOrder(suite.ctx, "compcd")
+
+			// Validations
+			if testCase.expectedError != "" {
+				assert.ErrorContains(t, err, testCase.expectedError)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func (suite *DemoStoreSuite) TestDeleteOrder() {
 	// The store's own SQL literal, reused in every expectation below.
 	query := `DELETE FROM DEMO_ORDER WHERE DEMO_ORDER_CO_ID = :1`

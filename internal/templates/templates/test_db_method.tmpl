@@ -15,7 +15,7 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 			mockError:     "ORA Error",
 			expectedError: "ORA Error",
 		},
-{{- if .DeleteTx}}
+{{- if .ToleratesNoRows}}
 		{
 			desc:          "Success-NoRows",
 			rowsAffected:  0,

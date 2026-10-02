@@ -127,23 +127,39 @@ func TestRenderDBMethodNoRowsError(t *testing.T) {
 
 // TestRenderDBMethodDMLNoRowsError pins F2: a DML method's zero-rows case
 // asserts the error its own body returns — the domain message for the
-// count-check shape, the sentinel for `return sql.ErrNoRows`.
+// count-check shape, the sentinel for `return sql.ErrNoRows` — and asserts
+// success when the body states no such error.
+//
+// That last case is a change from the plan. It originally kept the hardcoded
+// sentinel for an "unrecognised body", on the reasoning that downgrading to
+// "no error" would weaken the assertion. But a body that never turns zero rows
+// into an error cannot produce one: the grown fixture's EditOrder is a DML
+// method with no RowsAffected check, and asserting the sentinel for it failed
+// with "An error is expected but got nil". Asserting an error the code cannot
+// return is the invented expectation F2 exists to remove, not a stronger test.
 func TestRenderDBMethodDMLNoRowsError(t *testing.T) {
 	models := &modelsInfo{Structs: map[string][]fieldInfo{}}
 	sc := &serviceCtx{name: "demo", models: models}
 	sc.fixtures = &AssumedFixtureSource{Models: models}
 
 	cases := []struct {
-		name       string
-		noRowsErr  string
-		wantIn     string
-		wantNotErr bool
+		name      string
+		noRowsErr string
+		wantDesc  string
+		wantErr   string
 	}{
-		{name: "domain error", noRowsErr: "unable to add the question", wantIn: "unable to add the question"},
-		{name: "sql sentinel", noRowsErr: "sql: no rows in result set", wantIn: "sql: no rows in result set"},
-		// An unrecognised body keeps the pre-existing assertion rather than
-		// silently downgrading the case to "no error".
-		{name: "unrecognised body falls back", noRowsErr: "", wantIn: "sql: no rows in result set"},
+		{
+			name: "domain error", noRowsErr: "unable to add the question",
+			wantDesc: `"NoRows"`, wantErr: "unable to add the question",
+		},
+		{
+			name: "sql sentinel", noRowsErr: "sql: no rows in result set",
+			wantDesc: `"NoRows"`, wantErr: "sql: no rows in result set",
+		},
+		{
+			name: "no stated zero-rows branch tolerates", noRowsErr: "",
+			wantDesc: `"Success-NoRows"`, wantErr: "",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -161,11 +177,11 @@ func TestRenderDBMethodDMLNoRowsError(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(m, `desc:          "NoRows"`) {
-				t.Errorf("no zero-rows case:\n%s", m)
+			if !strings.Contains(m, `desc:          `+tc.wantDesc) {
+				t.Errorf("want zero-rows case %s:\n%s", tc.wantDesc, m)
 			}
-			if !strings.Contains(m, `expectedError: "`+tc.wantIn+`"`) {
-				t.Errorf("zero-rows case must assert %q:\n%s", tc.wantIn, m)
+			if !strings.Contains(m, `expectedError: "`+tc.wantErr+`"`) {
+				t.Errorf("zero-rows case must assert %q:\n%s", tc.wantErr, m)
 			}
 		})
 	}

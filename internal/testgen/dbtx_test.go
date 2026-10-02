@@ -265,14 +265,20 @@ func TestExtractDBTxVariants(t *testing.T) {
 	if got := dbExecRegex(f); !strings.Contains(got, "insert") || !strings.Contains(got, "URF_USR_RISK_PROF") {
 		t.Errorf("exec regex = %q", got)
 	}
-	if !isDeleteTx(parseDBFact(t, src, "DeleteQnA")) {
-		t.Error("DeleteQnA must be the tolerated delete-tx")
+	// toleratesNoRows is decided by the body, and these three bodies happen to
+	// agree with the old SQL-verb heuristic for different reasons:
+	// DeleteQnA has no zero-rows branch at all, while InsertStatus's
+	// `return errNoRows` and InsertRiskProfile's domain error are both read
+	// from the body. The corpus is what separates the two: its DeleteQuestion
+	// is a DELETE-tx that returns an error, so the verb cannot decide this.
+	if !toleratesNoRows(parseDBFact(t, src, "DeleteQnA")) {
+		t.Error("DeleteQnA states no zero-rows error, so it must tolerate one")
 	}
-	if isDeleteTx(parseDBFact(t, src, "InsertRiskProfile")) {
-		t.Error("InsertRiskProfile must not be delete-tx")
+	if toleratesNoRows(parseDBFact(t, src, "InsertRiskProfile")) {
+		t.Error("InsertRiskProfile states a zero-rows error, so it must assert it")
 	}
-	if isDeleteTx(parseDBFact(t, src, "InsertStatus")) {
-		t.Error("plain DML must not be delete-tx")
+	if toleratesNoRows(parseDBFact(t, src, "InsertStatus")) {
+		t.Error("InsertStatus returns errNoRows, so it must assert the sentinel")
 	}
 
 	// dbCallArgs excludes the tx handle.

@@ -105,9 +105,17 @@ func (g *store) AddOrder(ctx context.Context, compCd, compName string) error {
 	return errors.New("unable to add the order")
 }
 
+// EditOrder returns ONLY an error, so its EXPECT takes Return(nil) and not the
+// two-element (value, error) payload every read shape gets. riskprofile's
+// EditMarks has this exact shape and its controller suite failed on the arity.
+func (g *store) EditOrder(ctx context.Context, compCd string) error {
+	query := `UPDATE DEMO_ORDER SET DEMO_ORDER_UPD = :1 WHERE DEMO_ORDER_CO_ID = :2`
+	_, err := g.db.ExecContext(ctx, query, compCd, compCd)
+	return err
+}
+
 // DeleteOrder is the DML-tx shape: it tolerates zero rows, so its zero-rows
 // case must assert no error.
-//
 // The query is assigned to a variable rather than inlined because that is how
 // the extractor reads it — an inline backtick literal yields an empty Query,
 // and an empty Query defeats isDeleteTx's DELETE prefix test, so the case is

@@ -15,6 +15,10 @@ type DemoHandler interface {
 	OrderMarksFetch(c *gin.Context)
 	OrderMarkList(c *gin.Context)
 	OrderAudit(c *gin.Context)
+	// OrderEither calls TWO controller methods from one handler, as the
+	// corpus's ViewQuestions does. The generated EXPECT must use one call
+	// site's name AND that call site's own arguments.
+	OrderEither(c *gin.Context)
 }
 
 func NewDemoHandler(controller controller.DemoController) DemoHandler {

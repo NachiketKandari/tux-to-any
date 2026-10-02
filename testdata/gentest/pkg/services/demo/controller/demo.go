@@ -73,3 +73,10 @@ func (s *demoController) OrderAudit(ctx context.Context, request *models.OrderRe
 func (s *demoController) OrderHandle(ctx context.Context) (data *sqlx.DB, err error) {
 	return s.store.GetDB(), nil
 }
+
+// OrderEdit is a passthrough over a store method returning ONLY an error, so
+// its EXPECT's Return arity is exercised by a rendered suite rather than only
+// by a unit pin.
+func (s *demoController) OrderEdit(ctx context.Context, request *models.OrderRequest) (err error) {
+	return s.store.EditOrder(ctx, request.CompCode)
+}
