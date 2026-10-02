@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"database/sql"
 	"demo-be/pkg/logger"
 	"demo-be/pkg/services/demo/db"
 	"demo-be/pkg/services/demo/models"
@@ -44,7 +43,7 @@ func (suite *DemoControllerSuiteController) SetupSuite() {
 func (suite *DemoControllerSuiteController) SetupTest() {
 	suite.mockController = gomock.NewController(suite.T())
 	suite.demoStore = db.NewMockDemoStore(suite.mockController)
-	suite.demoController = NewDemoController(suite.demoStore)
+	suite.demoController = NewDemoController(suite.demoStore, nil)
 }
 
 func (suite *DemoControllerSuiteController) TearDownTest() {
@@ -70,7 +69,7 @@ func (suite *DemoControllerSuiteController) TestOrderDirect() {
 		{
 			desc:           "Success",
 			CompCode:       "fmlcompcd",
-			mockInput:      []any{[]*models.OrderDetails{{CompCd: sql.NullString{String: "compcd", Valid: true}, CompName: sql.NullString{String: "compname", Valid: true}}}, nil},
+			mockInput:      []any{[]*models.OrderResponse{{}}, nil},
 			expectedError:  "",
 			expectedOutput: []*models.OrderResponse{{CompCode: "fmlcompcd", CompName: "fmlcompname"}},
 		},
@@ -82,13 +81,59 @@ func (suite *DemoControllerSuiteController) TestOrderDirect() {
 			if testCase.mockInput != nil {
 				suite.demoStore.
 					EXPECT().
-					GetOrderDetails(gomock.Any(), "fmlcompcd").
+					GetOrderResponses(gomock.Any(), "fmlcompcd").
 					Return(testCase.mockInput...)
 			}
 
 			// Triggering Function
 			request := &models.OrderRequest{CompCode: testCase.CompCode}
 			actualOutput, err := suite.demoController.OrderDirect(suite.ctx, request)
+
+			// Validations
+			if testCase.expectedError != "" {
+				assert.ErrorContains(t, err, testCase.expectedError)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, actualOutput, testCase.expectedOutput)
+			}
+		})
+	}
+}
+
+// run test | debug test
+func (suite *DemoControllerSuiteController) TestOrderHandle() {
+	testCases := []struct {
+		desc           string
+		mockInput      []any
+		expectedError  string
+		expectedOutput *sqlx.DB
+	}{
+		{
+			desc:           "StoreError",
+			mockInput:      []any{nil, errors.New("store error")},
+			expectedError:  "store error",
+			expectedOutput: nil,
+		},
+		{
+			desc:           "Success",
+			mockInput:      nil,
+			expectedError:  "",
+			expectedOutput: nil,
+		},
+	}
+
+	for _, testCase := range testCases {
+		suite.T().Run(testCase.desc, func(t *testing.T) {
+			// Mocking and Setting Expected Result
+			if testCase.mockInput != nil {
+				suite.demoStore.
+					EXPECT().
+					GetDB().
+					Return(suite.sqlDB, nil)
+			}
+
+			// Triggering Function
+			actualOutput, err := suite.demoController.OrderHandle(suite.ctx)
 
 			// Validations
 			if testCase.expectedError != "" {

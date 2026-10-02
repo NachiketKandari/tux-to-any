@@ -1,14 +1,28 @@
 gentest gap report — ../../testdata/gentest/pkg/services/demo (mode service)
 service demo (../../testdata/gentest/pkg/services/demo)
-  db — 3 functions, 0 tested, 3 gaps
-    gap GetOrderDetails (no matching test name or call site)
-    gap GetOrderCount   (no matching test name or call site)
-    gap NewDemoStore    (no matching test name or call site)
-  controller — 3 functions, 0 tested, 3 gaps
+  db — 10 functions, 0 tested, 10 gaps
+    gap GetOrderDetails   (no matching test name or call site)
+    gap GetOrderCount     (no matching test name or call site)
+    gap GetOrderMarks     (no matching test name or call site)
+    gap GetOrderResponses (no matching test name or call site)
+    gap GetDB             (no matching test name or call site)
+    gap AddOrder          (no matching test name or call site)
+    gap DeleteOrder       (no matching test name or call site)
+    gap NewDemoStore      (no matching test name or call site)
+    gap NewDemoAuditStore (no matching test name or call site)
+    gap RecordAudit       (no matching test name or call site)
+  controller — 7 functions, 0 tested, 7 gaps
     gap OrderList         (no matching test name or call site)
     gap OrderDirect       (no matching test name or call site)
+    gap OrderMarks        (no matching test name or call site)
+    gap OrderMarkList     (no matching test name or call site)
+    gap OrderAudit        (no matching test name or call site)
+    gap OrderHandle       (no matching test name or call site)
     gap NewDemoController (no matching test name or call site)
-  handler — 2 functions, 0 tested, 2 gaps
-    gap OrderList      (no matching test name or call site)
-    gap NewDemoHandler (no matching test name or call site)
-gentest: 8 functions, 0 tested, 8 gaps
+  handler — 5 functions, 0 tested, 5 gaps
+    gap OrderList       (no matching test name or call site)
+    gap OrderMarksFetch (no matching test name or call site)
+    gap OrderMarkList   (no matching test name or call site)
+    gap OrderAudit      (no matching test name or call site)
+    gap NewDemoHandler  (no matching test name or call site)
+gentest: 22 functions, 0 tested, 22 gaps

@@ -46,8 +46,12 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 {{- end}}
 
 			// Triggering Function
+{{- if .NoRequest}}
+			actualOutput, err := suite.{{.CtrlVar}}.{{.Name}}(suite.ctx)
+{{- else}}
 			request := &{{.ReqExpr}}
 			actualOutput, err := suite.{{.CtrlVar}}.{{.Name}}(suite.ctx, request)
+{{- end}}
 
 			// Validations
 			if testCase.expectedError != "" {

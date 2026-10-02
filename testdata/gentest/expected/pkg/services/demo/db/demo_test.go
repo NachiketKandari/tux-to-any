@@ -41,7 +41,7 @@ func (suite *DemoStoreSuite) SetupSuite() {
 
 	suite.ctx = context.TODO()
 	suite.sqlDB, suite.sqlMock = utils.NewSqlxMockDB()
-	suite.demoStore = NewDemoStore(suite.sqlDB)
+	suite.demoStore = NewDemoStore(suite.sqlDB, suite.sqlDB)
 }
 
 func (suite *DemoStoreSuite) TestGetOrderDetails() {
@@ -145,6 +145,110 @@ func (suite *DemoStoreSuite) TestGetOrderCount() {
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, actualOutput, testCase.expectedOutput)
+			}
+		})
+	}
+}
+
+func (suite *DemoStoreSuite) TestAddOrder() {
+	// The store's own SQL literal, reused in every expectation below.
+	query := `INSERT INTO DEMO_ORDER (DEMO_ORDER_CO_ID, DEMO_ORDER_CO_NAME) VALUES (:1, :2)`
+	testCases := []struct {
+		desc          string
+		rowsAffected  int64
+		mockError     string
+		expectedError string
+	}{
+		{
+			desc:          "ExecError",
+			mockError:     "ORA Error",
+			expectedError: "ORA Error",
+		},
+		{
+			desc:          "NoRows",
+			rowsAffected:  0,
+			expectedError: "unable to add the order",
+		},
+		{
+			desc:          "Success",
+			rowsAffected:  1,
+			expectedError: "",
+		},
+	}
+
+	for _, testCase := range testCases {
+		suite.T().Run(testCase.desc, func(t *testing.T) {
+			// Mocking and Setting Expected Result
+			if testCase.mockError != "" {
+				suite.sqlMock.
+					ExpectExec(regexp.QuoteMeta(query)).
+					WillReturnError(errors.New(testCase.mockError))
+			} else {
+				suite.sqlMock.
+					ExpectExec(regexp.QuoteMeta(query)).
+					WillReturnResult(sqlmock.NewResult(1, testCase.rowsAffected))
+			}
+			// Triggering Function
+			err := suite.demoStore.AddOrder(suite.ctx, "compcd", "compname")
+
+			// Validations
+			if testCase.expectedError != "" {
+				assert.ErrorContains(t, err, testCase.expectedError)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func (suite *DemoStoreSuite) TestDeleteOrder() {
+	// The store's own SQL literal, reused in every expectation below.
+	query := `DELETE FROM DEMO_ORDER WHERE DEMO_ORDER_CO_ID = :1`
+	testCases := []struct {
+		desc          string
+		rowsAffected  int64
+		mockError     string
+		expectedError string
+	}{
+		{
+			desc:          "ExecError",
+			mockError:     "ORA Error",
+			expectedError: "ORA Error",
+		},
+		{
+			desc:          "Success-NoRows",
+			rowsAffected:  0,
+			expectedError: "",
+		},
+		{
+			desc:          "Success",
+			rowsAffected:  1,
+			expectedError: "",
+		},
+	}
+
+	for _, testCase := range testCases {
+		suite.T().Run(testCase.desc, func(t *testing.T) {
+			suite.sqlMock.ExpectBegin()
+			// Mocking and Setting Expected Result
+			if testCase.mockError != "" {
+				suite.sqlMock.
+					ExpectExec(regexp.QuoteMeta(query)).
+					WillReturnError(errors.New(testCase.mockError))
+			} else {
+				suite.sqlMock.
+					ExpectExec(regexp.QuoteMeta(query)).
+					WillReturnResult(sqlmock.NewResult(1, testCase.rowsAffected))
+			}
+			tx, _ := suite.sqlDB.Beginx()
+			// Triggering Function
+			err := suite.demoStore.DeleteOrder(suite.ctx, tx, "compcd")
+
+			// Validations
+			if testCase.expectedError != "" {
+				assert.ErrorContains(t, err, testCase.expectedError)
+			} else {
+				assert.NoError(t, err)
 			}
 		})
 	}

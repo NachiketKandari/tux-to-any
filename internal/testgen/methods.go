@@ -651,14 +651,19 @@ func renderCtrlMethod(u *unit) (string, error) {
 
 	prov := u.sc.provider()
 	return prov.Render(templates.TestControllerMethod, templates.TestControllerMethodData{
-		SuiteName:  u.suite,
-		StoreVar:   strings.ToLower(sc.name) + "Store",
-		CtrlVar:    strings.ToLower(sc.name) + "Controller",
-		Name:       f.Name,
-		StoreCall:  calls[0].Method,
-		StoreArgs:  calls[0].Args,
-		ReqFields:  reqFields,
-		ReqExpr:    "models." + reqBase + "{" + caseRefs(reqValues) + "}",
+		SuiteName: u.suite,
+		StoreVar:  strings.ToLower(sc.name) + "Store",
+		CtrlVar:   strings.ToLower(sc.name) + "Controller",
+		Name:      f.Name,
+		StoreCall: calls[0].Method,
+		StoreArgs: calls[0].Args,
+		ReqFields: reqFields,
+		ReqExpr:   "models." + reqBase + "{" + caseRefs(reqValues) + "}",
+		// An empty RequestType means the method takes no request. Rendering
+		// the expression anyway yields `request := &{}`, which does not
+		// parse — and a parse failure costs the entire controller suite, not
+		// just this method.
+		NoRequest:  f.RequestType == "",
 		MockReturn: successInputs[0],
 		ExpectType: f.ResponseType,
 		ExpectExpr: expectExpr,

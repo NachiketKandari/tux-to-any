@@ -190,37 +190,60 @@ func TestDMLNoRowsErrorFromBody(t *testing.T) {
 	}
 }
 
-// TestDBCtorCallHandleVote pins F1: the live handle goes to the parameter the
-// methods actually run on, chosen by majority vote over the receivers. Picking
-// by position handed a nil handle to every read, so the suite panicked before
-// asserting anything.
+// TestDBCtorCallHandleVote pins F1: EVERY sqlx handle the store declares gets
+// the live mock connection.
+//
+// The fix plan asked for ONE handle chosen by majority vote over the db facts'
+// Recv field, with nil for the rest, reasoning that "a suite exercising the
+// majority path never touches them". The grown fixture disproved that: a
+// generated db suite exercises EVERY method, so nil-ing the write handle made
+// AddOrder nil-panic. This pin asserts the corrected behaviour.
 func TestDBCtorCallHandleVote(t *testing.T) {
-	twoHandle := func(recvs ...string) *serviceCtx {
-		db := map[string]*dbFact{}
-		for i, r := range recvs {
-			db[string(rune('A'+i))] = &dbFact{Name: string(rune('A' + i)), Shape: "multi", Recv: r}
-		}
+	sc := func(params ...Param) *serviceCtx {
 		return &serviceCtx{
 			name: "rp",
 			dbFacts: &layerFacts{
-				DBCtor: "NewRiskProfileStore",
-				DBCtorParams: []Param{
-					{Name: "db", Type: "*sqlx.DB"},
-					{Name: "writeDb", Type: "*sqlx.DB"},
+				DBCtor:       "NewRiskProfileStore",
+				DBCtorParams: params,
+				DB: map[string]*dbFact{
+					// Reads dominate the first handle; the write method runs
+					// on the second. Both must still be live.
+					"R1": {Name: "R1", Shape: "multi", Recv: "g.db"},
+					"R2": {Name: "R2", Shape: "multi", Recv: "g.db"},
+					"R3": {Name: "R3", Shape: "multi", Recv: "g.db"},
+					"W1": {Name: "W1", Shape: "dml", Recv: "g.writeDb"},
 				},
-				DB: db,
 			},
 		}
 	}
 
-	// Reads dominate on the first handle.
-	if got := dbCtorCall(twoHandle("g.db", "g.db", "g.db", "g.writeDb")); got != "NewRiskProfileStore(suite.sqlDB, nil)" {
-		t.Errorf("majority on arg 1: got %q", got)
+	// The corpus shape: a read handle and a write handle, both live.
+	two := sc(
+		Param{Name: "db", Type: "*sqlx.DB"},
+		Param{Name: "writeDb", Type: "*sqlx.DB"},
+	)
+	if got := dbCtorCall(two); got != "NewRiskProfileStore(suite.sqlDB, suite.sqlDB)" {
+		t.Errorf("both handles must be live: got %q", got)
 	}
-	// Reads dominate on the second handle.
-	if got := dbCtorCall(twoHandle("g.writeDb", "g.writeDb", "g.writeDb", "g.db")); got != "NewRiskProfileStore(nil, suite.sqlDB)" {
-		t.Errorf("majority on arg 2: got %q", got)
+
+	// Order is irrelevant, and so is which handle the methods favour.
+	reversed := sc(
+		Param{Name: "writeDb", Type: "*sqlx.DB"},
+		Param{Name: "db", Type: "*sqlx.DB"},
+	)
+	if got := dbCtorCall(reversed); got != "NewRiskProfileStore(suite.sqlDB, suite.sqlDB)" {
+		t.Errorf("handle order must not matter: got %q", got)
 	}
+
+	// A non-sqlx dependency is not a handle and gets nil.
+	mixed := sc(
+		Param{Name: "db", Type: "*sqlx.DB"},
+		Param{Name: "cfg", Type: "Config"},
+	)
+	if got := dbCtorCall(mixed); got != "NewRiskProfileStore(suite.sqlDB, nil)" {
+		t.Errorf("a non-sqlx parameter must get nil: got %q", got)
+	}
+
 	// A single-argument constructor is unaffected.
 	single := &serviceCtx{
 		name:    "demo",
@@ -229,17 +252,11 @@ func TestDBCtorCallHandleVote(t *testing.T) {
 	if got := dbCtorCall(single); got != "NewDemoStore(suite.sqlDB)" {
 		t.Errorf("single-handle ctor: got %q", got)
 	}
-	// A tx method runs on its own handle and must not vote.
-	txOnly := &serviceCtx{
-		name: "rp",
-		dbFacts: &layerFacts{
-			DBCtor:       "NewRiskProfileStore",
-			DBCtorParams: []Param{{Name: "db", Type: "*sqlx.DB"}, {Name: "writeDb", Type: "*sqlx.DB"}},
-			DB:           map[string]*dbFact{"A": {Name: "A", Shape: "multi", Recv: "g.db", IsTx: true}},
-		},
-	}
-	if got := dbCtorCall(txOnly); got != "NewRiskProfileStore(suite.sqlDB, nil)" {
-		t.Errorf("tx-only evidence must fall back to the first handle: got %q", got)
+
+	// A value-typed handle counts too.
+	value := sc(Param{Name: "db", Type: "sqlx.DB"}, Param{Name: "ext", Type: "sqlx.ExtContext"})
+	if got := dbCtorCall(value); got != "NewRiskProfileStore(suite.sqlDB, suite.sqlDB)" {
+		t.Errorf("value-typed and ExtContext handles must be live: got %q", got)
 	}
 }
 

@@ -448,17 +448,27 @@ func (d TestHandlerMethodData) CasesOrDerived() []HandlerCase {
 // order, request built from the case fields, ErrorContains / NoError+Equal
 // validations.
 type TestControllerMethodData struct {
-	SuiteName  string     // DemoControllerSuiteController
-	StoreVar   string     // demoStore
-	CtrlVar    string     // demoController
-	Name       string     // OrderDirect
-	StoreCall  string     // store dependency (GetOrderDetails)
-	StoreArgs  []string   // EXPECT args after ctx (concrete literals)
-	ReqFields  []ReqField // request fields driving the case struct
-	ReqExpr    string     // models.OrderRequest{CompCode: testCase.CompCode} — pointer added by the template
-	MockReturn string     // []any{<store row literal>, nil} — pre-rendered
-	ExpectType string     // []*models.OrderResponse
-	ExpectExpr string     // success expectedOutput literal — pre-rendered
+	SuiteName string     // DemoControllerSuiteController
+	StoreVar  string     // demoStore
+	CtrlVar   string     // demoController
+	Name      string     // OrderDirect
+	StoreCall string     // store dependency (GetOrderDetails)
+	StoreArgs []string   // EXPECT args after ctx (concrete literals)
+	ReqFields []ReqField // request fields driving the case struct
+	ReqExpr   string     // models.OrderRequest{CompCode: testCase.CompCode} — pointer added by the template
+	// NoRequest marks a controller method that takes no request. The template
+	// then builds no request and calls it with ctx alone.
+	//
+	// This is not cosmetic. extractCtrlFact used to return nil for such a
+	// method, so the case never arose; now it yields a fact with an empty
+	// RequestType, and emitting `request := &{}` for that produces output that
+	// does not parse at all — the whole controller suite was lost, not just
+	// this method. The same principle as F9 on the handler side: a method that
+	// takes no request must not be given one.
+	NoRequest  bool
+	MockReturn string // []any{<store row literal>, nil} — pre-rendered
+	ExpectType string // []*models.OrderResponse
+	ExpectExpr string // success expectedOutput literal — pre-rendered
 	// GT-7: multi-call deterministic rendering. Calls is one entry per store
 	// call occurrence; Cases is the case table (StoreError / Success / and
 	// the logged business-error case when the log has one).

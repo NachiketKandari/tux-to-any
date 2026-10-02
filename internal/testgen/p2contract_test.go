@@ -7,12 +7,17 @@ package testgen
 // pins that would have caught F5/F6/F7/F8/F9 before the corpus run did.
 
 import (
+	"context"
+	"go/parser"
+	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"tux-to-any/internal/templates"
+	"tux-to-any/internal/testscan"
 )
 
 // --- F7: the controller constructor's arity -----------------------------------
@@ -413,6 +418,114 @@ func TestSliceFieldReachesBothTemplates(t *testing.T) {
 
 // --- helpers ----------------------------------------------------------------
 
+// TestFullTestGateReportsCleanOnAKnownGoodSuite closes the other half of the
+// plan's §5: fullTestGate produced gate lines that nothing checked, so the gate
+// could report anything — including success — without a test noticing.
+//
+// It stages a generated suite over the grown fixture (which now covers every
+// F1/F2/F3/F5/F6/F7/F8/F9 shape) and asserts the gate reports PASS rather than
+// failing or degrading to "skipped". The latter two matter as much as a failure:
+// F11 exists because a gate that could not verify looked identical to a gate
+// with nothing to say.
+func TestFullTestGateReportsCleanOnAKnownGoodSuite(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain on PATH")
+	}
+	fixture := filepath.Join("..", "..", "testdata", "gentest")
+	tgt, rep := scanTarget(t, fixture)
+	// Stage into the fixture itself: fullTestGate needs the generated files
+	// inside a real module for `go test` to resolve them, and a temp dir is
+	// outside any module (the gate reports "skipped" there, which is exactly
+	// the degradation this test must not accept).
+	scratch := t.TempDir()
+	if err := copyTree(t, fixture, scratch); err != nil {
+		t.Fatal(err)
+	}
+	// A scratch copy is not in a module, so give it one.
+	if err := os.WriteFile(filepath.Join(scratch, "go.mod"),
+		[]byte("module gentestgate\n\ngo 1.26.4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The scratch fixture's packages import demo-be/... — rewrite that prefix to
+	// this scratch module so the staged suite resolves.
+	if err := rewriteImportPrefix(t, scratch, "demo-be", "gentestgate"); err != nil {
+		t.Fatal(err)
+	}
+
+	tgt.Root = scratch
+	tgt.Path = scratch
+	for i := range tgt.LayerDirs {
+		tgt.LayerDirs[i].Dir = filepath.Join(scratch, "pkg", "services", "demo", string(tgt.LayerDirs[i].Layer))
+		tgt.LayerDirs[i].ServiceDir = filepath.Join(scratch, "pkg", "services", "demo")
+	}
+	rep.Services = []testscan.ServiceReport{{
+		Name: "demo", Dir: filepath.Join(scratch, "pkg", "services", "demo"),
+	}}
+
+	// Staged, exactly as the CLI does it (`Stage: explicit, FullTest: explicit`).
+	// That pairing is the point: fullTestGate used to read only res.Files,
+	// which a staged run leaves empty, so the one gate that actually RUNS the
+	// generated tests never ran from the command line. Writing into the
+	// scratch copy's own out tree keeps the suites inside a real module, which
+	// is what the gate needs to resolve them.
+	out := filepath.Join(scratch, "out")
+	res, err := Generate(context.Background(), tgt, rep, Options{
+		BaseDir: out, Workers: 1, NoLLM: true, Stage: true, FullTest: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files)+len(res.Staged) == 0 {
+		t.Fatalf("nothing was generated, so there is nothing for the gate to check")
+	}
+	if len(res.Gates) == 0 {
+		t.Fatalf("no gate lines at all; gates are unchecked by construction")
+	}
+	for _, g := range res.Gates {
+		if strings.Contains(g, "skipped") || strings.Contains(g, "could not verify") {
+			t.Errorf("gate degraded to a non-answer, which reads like success: %s", g)
+		}
+	}
+	if res.TestsFailed {
+		t.Errorf("a suite over the known-good fixture must not fail the full-test gate:\n%s",
+			strings.Join(res.Gates, "\n"))
+	}
+	// fullTestGate's own line format is "…: PASS"; compileGate's is "…: clean"
+	// and its test run carries `-run ^$` (compile only). Requiring the
+	// fullTestGate shape proves the runnable gate ran, not just the compile one.
+	var sawPass bool
+	for _, g := range res.Gates {
+		if strings.Contains(g, "go test -count=1 ") && !strings.Contains(g, "-run ^$") &&
+			strings.HasSuffix(g, ": PASS") {
+			sawPass = true
+		}
+	}
+	if !sawPass {
+		t.Errorf("expected a fullTestGate line ending in PASS, got:\n%s",
+			strings.Join(res.Gates, "\n"))
+	}
+}
+
+// rewriteImportPrefix rewrites a module path prefix across a tree's .go files.
+// The staged suite refers to the fixture's own module by name; a scratch copy
+// has a different one, so the imports have to follow.
+func rewriteImportPrefix(t *testing.T, root, from, to string) error {
+	t.Helper()
+	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Ext(path) != ".go" {
+			return err
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		if !strings.Contains(string(data), from) {
+			return nil
+		}
+		return os.WriteFile(path, []byte(strings.ReplaceAll(string(data), `"`+from, `"`+to)), 0o644)
+	})
+}
+
 func renderTestCtrlMethod(data templates.TestControllerMethodData) (string, error) {
 	p := templates.NewEmbeddedProvider()
 	return p.Render(templates.TestControllerMethod, data)
@@ -450,6 +563,36 @@ func TestExtractDBIfaceReadsDeclaredShape(t *testing.T) {
 	}
 	if got := sigs["GetByCode"]; got.ArgCount != 2 {
 		t.Errorf("GetByCode arity = %d, want 2", got.ArgCount)
+	}
+}
+
+// TestNoRequestControllerMethodParses pins the fix that F9's own change made
+// necessary: once extractCtrlFact yields a fact for a no-request endpoint, the
+// controller template must not build a request for it. `request := &{}` does
+// not parse, and the parse gate then discards the WHOLE controller suite — so
+// one endpoint's shape silently removed coverage of all of them.
+func TestNoRequestControllerMethodParses(t *testing.T) {
+	out, err := renderTestCtrlMethod(templates.TestControllerMethodData{
+		SuiteName: "DemoControllerSuiteController", StoreVar: "demoStore",
+		CtrlVar: "demoController", Name: "OrderHandle",
+		NoRequest: true, ExpectType: "*sqlx.DB", ExpectExpr: "nil",
+		Calls: []templates.CtrlCall{{Method: "GetDB", Field: "mockInput"}},
+		Cases: []templates.CtrlCase{{Desc: "Success", Inputs: []string{"[]any{nil, nil}"}, ExpectedOutput: "nil"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "request :=") {
+		t.Errorf("a no-request method must not build a request:\n%s", out)
+	}
+	if !strings.Contains(out, "suite.demoController.OrderHandle(suite.ctx)") {
+		t.Errorf("a no-request method is called with ctx alone:\n%s", out)
+	}
+	// The decisive assertion: the generated block must PARSE. Every other check
+	// in this file can be satisfied by text that does not compile, which is
+	// precisely the gap that let eleven findings through.
+	if _, err := parser.ParseFile(token.NewFileSet(), "x.go", "package db\n"+out, 0); err != nil {
+		t.Fatalf("no-request controller output does not parse: %v\n%s", err, out)
 	}
 }
 

@@ -375,11 +375,18 @@ func resolveDeps(root string) []string {
 // package inside the output tree. Non-fatal, but a failure flips the visible
 // Result.TestsFailed summary flag (the CLI prints "gentest: tests FAILED").
 func fullTestGate(res *Result, opts Options) {
-	if !opts.FullTest || len(res.Files) == 0 {
+	// Both lists, not just res.Files. A staged run writes nothing to Files —
+	// it populates Staged — and the CLI only ever sets FullTest together with
+	// Stage (`Stage: explicit, FullTest: explicit`), so reading Files alone
+	// meant this gate returned immediately in every real invocation. It was
+	// dead: the one gate that actually RUNS the generated tests never ran.
+	// compileGate a few lines up already merges both; this now matches it.
+	files := append(append([]string{}, res.Files...), res.Staged...)
+	if !opts.FullTest || len(files) == 0 {
 		return
 	}
 	dirs := map[string]bool{}
-	for _, f := range res.Files {
+	for _, f := range files {
 		if dir := filepath.Dir(f); hasGoFiles(dir) {
 			dirs[dir] = true
 		}
@@ -957,19 +964,29 @@ func ifaceFromFile(path string) string {
 
 // dbCtorCall renders the suite's store construction.
 //
-// A service may hold more than one sqlx.DB (a read handle and a write handle,
-// e.g. NewRiskProfileStore(db, writeDb *sqlx.DB)), and only one of them
-// receives the mock connection. Picking by position rather than by evidence
-// gave every read a nil handle, so the suite panicked before asserting
-// anything. Instead the dominant receiver is chosen by majority vote over
-// the db facts' Recv field: a call on `g.db` proves `db` is the live handle
-// for that method, and the handle most methods run on is the one the suite
-// must supply. Passing nil to the rest is correct — a suite exercising the
-// majority path never touches them.
+// A service may hold more than one sqlx.DB — a read handle and a write handle,
+// e.g. NewRiskProfileStore(db, writeDb *sqlx.DB) — and the old code emitted a
+// single argument, so every read ran against a nil *sqlx.DB and the suite
+// panicked before its first assertion.
 //
-// Voting over Recv rather than special-casing position also gets the
-// genuinely-split case right: a service whose reads mostly use the second
-// handle gets the connection there.
+// EVERY sqlx handle parameter gets the live mock connection. That is not a
+// refinement of a position heuristic; it is what makes the suite correct. A
+// sqlmock suite has exactly one connection, and both handles are the same
+// logical database reached through different pools — so pointing them at the
+// same mock is the only arrangement under which every method in the store can
+// be driven.
+//
+// The fix plan proposed picking ONE handle by majority vote over the db facts'
+// Recv field and nil-ing the rest, on the reasoning that "a suite exercising
+// the majority path never touches them". That reasoning is wrong, and the
+// grown fixture is what proved it: a generated db suite exercises EVERY method,
+// so a store with a write handle has its write method nil-panic. Measured, not
+// assumed — AddOrder (on g.writeDb) panicked at demo.go:89 with a nil
+// *sqlx.DB while the reads on g.db passed.
+//
+// A non-sqlx parameter (a config struct, a logger) still gets nil, which
+// matches the controller layer's rule for a dependency the generator owns no
+// mock for.
 func dbCtorCall(sc *serviceCtx) string {
 	name := sc.dbFacts.DBCtor
 	if name == "" {
@@ -979,10 +996,9 @@ func dbCtorCall(sc *serviceCtx) string {
 	if len(params) <= 1 {
 		return name + "(suite.sqlDB)"
 	}
-	live := dominantDBHandle(sc, params)
 	args := make([]string, len(params))
 	for i, p := range params {
-		if p.Name == live {
+		if isSQLXHandle(p.Type) {
 			args[i] = "suite.sqlDB"
 		} else {
 			args[i] = "nil"
@@ -991,32 +1007,12 @@ func dbCtorCall(sc *serviceCtx) string {
 	return name + "(" + strings.Join(args, ", ") + ")"
 }
 
-// dominantDBHandle returns the constructor parameter name that most of the
-// service's queries run on, e.g. "db" for a store whose reads use g.db.
-// Ties resolve to the earliest declaration so the result is stable across
-// runs. An empty string means no evidence — every receiver was unrecognised —
-// and the caller then falls back to the first handle.
-func dominantDBHandle(sc *serviceCtx, params []Param) string {
-	votes := map[string]int{}
-	for _, f := range sc.dbFacts.DB {
-		if f == nil || f.IsTx || !strings.HasPrefix(f.Recv, "g.") {
-			// A tx runs on the handle its own caller opens, and a receiver
-			// that is not a store field (a local, a package-level pool)
-			// says nothing about which ctor argument is live.
-			continue
-		}
-		votes[strings.TrimPrefix(f.Recv, "g.")]++
-	}
-	best, bestN := "", 0
-	for _, p := range params {
-		if n := votes[p.Name]; n > bestN {
-			best, bestN = p.Name, n
-		}
-	}
-	if best == "" {
-		return params[0].Name
-	}
-	return best
+// isSQLXHandle reports whether a declared parameter type is a sqlx connection
+// handle. The spelling varies (`*sqlx.DB`, `sqlx.DB`, and an aliased import),
+// so the check is on the type's final segment rather than an exact string.
+func isSQLXHandle(typ string) bool {
+	t := strings.TrimPrefix(strings.TrimSpace(typ), "*")
+	return t == "sqlx.DB" || t == "sqlx.ExtContext" || strings.HasSuffix(t, ".sqlx.DB")
 }
 
 // ctrlCtorCall renders the suite's controller construction.
