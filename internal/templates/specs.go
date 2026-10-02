@@ -308,12 +308,26 @@ type TestDBMethodData struct {
 	Row        []string // Success row values (assumed fixture source)
 	NoRows     bool     // single/scalar GetContext: extra Success-NoRows case
 	NoRowsExpr string   // expectedOutput literal for the NoRows case
-	ExpectType string   // []*models.NavDetails / int64
-	ExpectExpr string   // Success expectedOutput literal
-	CallArgs   []string // rendered store-call args after ctx (tx excluded)
-	IsDML      bool     // Exec contract: error-only, ExpectExec + NewResult
-	IsTx       bool     // tx handle: ExpectBegin + Beginx + tx second arg
-	DeleteTx   bool     // DELETE-tx tolerates zero rows (no RowsAffected check)
+	// NoRowsError is what the method itself returns when the query finds
+	// nothing, read from the method's body rather than assumed:
+	//
+	//	read — "sql: no rows in result set" for a read that propagates err
+	//	       unchanged, "" for one that tolerates it. Asserting "" against a
+	//	       propagating read is what made every generated no-rows case fail.
+	//	DML — the error returned when RowsAffected == 0: a domain message for
+	//	       the count-check shape, or the sql.ErrNoRows text for the
+	//	       sentinel shape. "" means the method tolerates zero rows and the
+	//	       case asserts no error.
+	//
+	// Empty is the pre-existing behaviour for every unrecognised body: the
+	// tool asserts only what the code states.
+	NoRowsError string
+	ExpectType  string   // []*models.NavDetails / int64
+	ExpectExpr  string   // Success expectedOutput literal
+	CallArgs    []string // rendered store-call args after ctx (tx excluded)
+	IsDML       bool     // Exec contract: error-only, ExpectExec + NewResult
+	IsTx        bool     // tx handle: ExpectBegin + Beginx + tx second arg
+	DeleteTx    bool     // DELETE-tx tolerates zero rows (no RowsAffected check)
 	// GT-7: the first failed complete trace's row as a second case.
 	HasAlt    bool
 	AltDesc   string   // "Logged#2"

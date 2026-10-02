@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"demo-be/pkg/services/demo/models"
+
+	"github.com/jmoiron/sqlx"
 )
 
 type store struct {

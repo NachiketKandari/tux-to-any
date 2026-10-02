@@ -288,6 +288,22 @@ func parseAll(t *testing.T, files []string) {
 	}
 }
 
+// nonMockWarnings drops the missing-mock warnings a run without -out emits
+// for a fixture that ships no doubles. Those are the never-write-target
+// contract working as intended (the tool says "run mockgen yourself" instead
+// of writing into the scanned tree), so tests that assert "no unexpected
+// warnings" must not be broken by them; every other warning still fails.
+func nonMockWarnings(ws []string) []string {
+	var out []string
+	for _, w := range ws {
+		if strings.Contains(w, "run the MockGen command") {
+			continue
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
 func unitStatus(res *Result, fn string) string {
 	for _, u := range res.Units {
 		if u.Func == fn {
@@ -336,8 +352,8 @@ func TestGenerateNoLLM(t *testing.T) {
 	if res.LLMCalls != 0 {
 		t.Errorf("no-llm run made %d llm calls", res.LLMCalls)
 	}
-	if len(res.Warnings) != 0 {
-		t.Errorf("unexpected warnings: %v", res.Warnings)
+	if w := nonMockWarnings(res.Warnings); len(w) != 0 {
+		t.Errorf("unexpected warnings: %v", w)
 	}
 	if len(res.Files) != 3 {
 		t.Fatalf("want 3 files (db, controller, handler), got %v", res.Files)
@@ -610,8 +626,8 @@ func TestGenerateWithLLM(t *testing.T) {
 	if res.LLMCalls != 2 {
 		t.Errorf("llm calls: got %d, want 2", res.LLMCalls)
 	}
-	if len(res.Warnings) != 0 {
-		t.Errorf("unexpected warnings: %v", res.Warnings)
+	if w := nonMockWarnings(res.Warnings); len(w) != 0 {
+		t.Errorf("unexpected warnings: %v", w)
 	}
 	parseAll(t, res.Files)
 

@@ -38,6 +38,26 @@ type dbFact struct {
 	IsTx       bool     // takes tx *sqlx.Tx (tx-variant: runs on tx, not g.db)
 	Recv       string   // sqlx receiver: "g.db" | "tx" (as written)
 	ReturnType string   // first non-error result type (tx scalar reads)
+	// NoRowsContract classifies what the method does when the query call
+	// fails, which is what a no-rows mock actually exercises:
+	//
+	//	propagate — `if err != nil { return nil, err }`, so the caller sees
+	//	            sql.ErrNoRows and the no-rows case must expect it
+	//	tolerate  — `if err != nil { return &T{}, nil }` or an explicit
+	//	            errors.Is(err, sql.ErrNoRows) branch, so the zero value
+	//	            arrives with a nil error
+	//
+	// This was previously assumed to be `tolerate` for every read, which is
+	// wrong for the common converted shape: every corpus GetContext read
+	// propagates err unchanged, so the generated no-rows case asserted a nil
+	// error against a method that returns one.
+	NoRowsContract string
+	// NoRowsError is the error a DML method returns when RowsAffected == 0,
+	// as written in its body: a domain message ("unable to add the question")
+	// for the count-check shape, or "sql: no rows in result set" for the
+	// `return sql.ErrNoRows` shape. Empty means the method tolerates zero
+	// rows (the DELETE-tx variant discards the result) and no case is emitted.
+	NoRowsError string
 }
 
 // storeCall is one dependency call inside a controller body.
@@ -85,13 +105,20 @@ type ctrlIfaceSig struct {
 
 // layerFacts is one layer directory's extraction outcome.
 type layerFacts struct {
-	DB          map[string]*dbFact
-	Ctrl        map[string]*ctrlFact
-	Handler     map[string]*handlerFact
-	DBCtor      string
-	DBCtorArgs  int
-	CtrlCtor    string
-	HandlerCtor string
+	DB      map[string]*dbFact
+	Ctrl    map[string]*ctrlFact
+	Handler map[string]*handlerFact
+	DBCtor  string
+	// DBCtorParams are the db constructor's parameters as written (name +
+	// type, declaration order). The names are what decide which argument
+	// receives the live handle: a service may expose more than one sqlx.DB
+	// (a read handle and a write handle) and only the names tie a call's
+	// receiver back to the parameter it came from. The count alone was not
+	// enough — a two-handle ctor gave the connection to the wrong argument
+	// and every read nil-panicked.
+	DBCtorParams []Param
+	CtrlCtor     string
+	HandlerCtor  string
 }
 
 // sourceFiles lists the layer's non-test, non-mock .go files.
@@ -154,7 +181,7 @@ func extractLayer(dir string, layer string) *layerFacts {
 				} else if strings.HasPrefix(fd.Name.Name, "New") && fd.Type.Results != nil && fd.Type.Results.NumFields() == 1 {
 					if lf.DBCtor == "" {
 						lf.DBCtor = fd.Name.Name
-						lf.DBCtorArgs = fd.Type.Params.NumFields()
+						lf.DBCtorParams = paramsOf(fd, fset)
 					}
 				}
 			case layer == "controller":
@@ -298,6 +325,24 @@ func tagValue(tag, key string) string {
 	return ""
 }
 
+// paramsOf returns a function's parameters in declaration order, one entry
+// per name (a grouped `a, b string` yields two). Names matter as much as
+// types here: a constructor's parameter names are the only link from a call
+// site back to the handle it should receive.
+func paramsOf(fd *ast.FuncDecl, fset *token.FileSet) []Param {
+	if fd.Type.Params == nil {
+		return nil
+	}
+	var out []Param
+	for _, p := range fd.Type.Params.List {
+		typ := renderExpr(p.Type, fset)
+		for _, n := range p.Names {
+			out = append(out, Param{Name: n.Name, Type: typ})
+		}
+	}
+	return out
+}
+
 // extractDBFact recognizes the store-method conventions: ctx first param, a
 // backtick query literal (assigned, var or const), one sqlx call
 // (SelectContext/GetContext/ExecContext and their aliases on g.db or tx),
@@ -312,13 +357,10 @@ func extractDBFact(fd *ast.FuncDecl, fset *token.FileSet) *dbFact {
 			f.CtxName = names[0].Name
 		}
 	}
-	for _, p := range fd.Type.Params.List {
-		typ := renderExpr(p.Type, fset)
-		for _, n := range p.Names {
-			f.Params = append(f.Params, Param{Name: n.Name, Type: typ})
-			if typ == "*sqlx.Tx" || typ == "sqlx.Tx" || (n.Name == "tx" && strings.Contains(typ, "Tx")) {
-				f.IsTx = true
-			}
+	for _, p := range paramsOf(fd, fset) {
+		f.Params = append(f.Params, p)
+		if p.Type == "*sqlx.Tx" || p.Type == "sqlx.Tx" || (p.Name == "tx" && strings.Contains(p.Type, "Tx")) {
+			f.IsTx = true
 		}
 	}
 	// ReturnType is the first non-error result (tx scalar reads scan into
@@ -422,7 +464,224 @@ func extractDBFact(fd *ast.FuncDecl, fset *token.FileSet) *dbFact {
 			}
 		}
 	}
+	f.NoRowsContract = noRowsContractOf(fd, fset)
+	if f.Shape == "dml" {
+		f.NoRowsError = noRowsErrorOf(fd, fset)
+	}
 	return f
+}
+
+// returnStmt is one `return …` statement's result expressions.
+type returnStmt struct{ results []ast.Expr }
+
+// returnsErr reports whether the statement returns the query's error
+// unchanged — `return …, err`, the shape of a propagating read.
+func (r returnStmt) returnsErr() bool {
+	if len(r.results) == 0 {
+		return false
+	}
+	id, ok := r.results[len(r.results)-1].(*ast.Ident)
+	return ok && id.Name == "err"
+}
+
+// returnsNilError reports whether the statement swallows the error —
+// `return &T{}, nil`, the shape of a tolerating read.
+func (r returnStmt) returnsNilError() bool {
+	if len(r.results) == 0 {
+		return false
+	}
+	id, ok := r.results[len(r.results)-1].(*ast.Ident)
+	return ok && id.Name == "nil"
+}
+
+// returnsIn collects every `return` statement under n. The caller decides
+// which of them belong to the branch it is classifying: an `err != nil` guard
+// is judged on the returns directly inside its own body, so a return nested in
+// a deeper if stays that inner branch's decision instead of being attributed
+// to the guard.
+func returnsIn(n ast.Node) []returnStmt {
+	if n == nil {
+		return nil
+	}
+	var out []returnStmt
+	ast.Inspect(n, func(x ast.Node) bool {
+		if rs, ok := x.(*ast.ReturnStmt); ok {
+			out = append(out, returnStmt{results: rs.Results})
+		}
+		return true
+	})
+	return out
+}
+
+// isErrNilCheck reports whether a condition is the `err != nil` guard over a
+// query call's error. `!(err == nil)` counts too — the converted code uses
+// both spellings and they mean the same thing.
+func isErrNilCheck(cond ast.Expr) bool {
+	un, negated := cond.(*ast.UnaryExpr)
+	if negated && un.Op == token.NOT {
+		if be, ok := un.X.(*ast.BinaryExpr); ok && be.Op == token.EQL {
+			return isErrIdent(be.X) && isNilIdent(be.Y)
+		}
+		return false
+	}
+	be, ok := cond.(*ast.BinaryExpr)
+	if !ok || be.Op != token.NEQ {
+		return false
+	}
+	return isErrIdent(be.X) && isNilIdent(be.Y)
+}
+
+func isErrIdent(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == "err"
+}
+
+func isNilIdent(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == "nil"
+}
+
+// noRowsContractOf classifies a read's error branch. The default is
+// `tolerate`, which is what the no-rows case assumed before the contract was
+// read from the body; defaulting to it means an unrecognised shape keeps the
+// bytes it already had rather than silently flipping to the other contract.
+func noRowsContractOf(fd *ast.FuncDecl, fset *token.FileSet) string {
+	// An explicit sql.ErrNoRows check is the clearest statement of intent:
+	// the author decided what no-rows means for this method.
+	explicit := false
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 2 {
+			return true
+		}
+		// errors.Is(err, sql.ErrNoRows) — the Fun is a SelectorExpr
+		// (errors.Is), not a bare identifier.
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Is" {
+			return true
+		}
+		if isErrNoRowsSentinel(call.Args[1], fset) {
+			explicit = true
+		}
+		return true
+	})
+
+	tolerating, propagating := false, false
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		ifs, ok := n.(*ast.IfStmt)
+		if !ok || ifs.Cond == nil {
+			return true
+		}
+		// Only the guard over the query call's own error matters.
+		if !isErrNilCheck(ifs.Cond) {
+			return true
+		}
+		for _, r := range returnsIn(ifs.Body) {
+			switch {
+			case r.returnsErr():
+				propagating = true
+			case r.returnsNilError():
+				tolerating = true
+			}
+		}
+		return true
+	})
+
+	switch {
+	case explicit:
+		// The author singled out sql.ErrNoRows, so they decided what no-rows
+		// means here. Checked first: a method that special-cases the sentinel
+		// and also propagates other errors still tolerates the no-rows case,
+		// which is the only scenario this contract describes.
+		return "tolerate"
+	case propagating && !tolerating:
+		return "propagate"
+	default:
+		// tolerating-only, both, or nothing recognisable. All three default to
+		// tolerate, which is the behaviour that predated body-reading, so an
+		// unrecognised shape keeps its existing bytes.
+		return "tolerate"
+	}
+}
+
+// noRowsErrorOf returns the error text a DML method produces when
+// RowsAffected == 0, or "" when the body has no such branch.
+//
+// Two converted shapes exist and both must be recognised:
+//
+//	count, err := g.db.ExecContext(...)
+//	if count > 0 { return nil }
+//	return errors.New("unable to add the question")
+//
+// and the direct
+//
+//	if count == 0 { return sql.ErrNoRows }
+//	return nil
+//
+// Anything else yields "" and the caller keeps the existing behaviour rather
+// than guessing a message the code never states — an invented expectation
+// would fail for a reason unrelated to the method under test.
+func noRowsErrorOf(fd *ast.FuncDecl, fset *token.FileSet) string {
+	var found string
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if found != "" {
+			return false
+		}
+		for _, r := range returnsIn(n) {
+			msg, ok := returnedErrorLiteral(r, fset)
+			if ok && msg != "" {
+				found = msg
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// returnedErrorLiteral extracts the message from a `return errors.New("…")`
+// or a `return sql.ErrNoRows` — the two converted shapes for a zero-rows
+// branch. Both are returned as a bare expression rather than inside a call,
+// so both spellings are handled at the top level of the switch.
+func returnedErrorLiteral(r returnStmt, fset *token.FileSet) (string, bool) {
+	for _, res := range r.results {
+		// sql.ErrNoRows — the sentinel itself, rendered to its canonical text.
+		if isErrNoRowsSentinel(res, fset) {
+			return "sql: no rows in result set", true
+		}
+		call, ok := res.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			continue
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		// errors.New("…") — the domain-message shape.
+		if id, ok := sel.X.(*ast.Ident); ok && id.Name == "errors" && sel.Sel.Name == "New" {
+			if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if s, err := strconv.Unquote(lit.Value); err == nil {
+					return s, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// isErrNoRowsSentinel reports whether an expression names the sql.ErrNoRows
+// sentinel, whether qualified (sql.ErrNoRows) or dot-imported into the
+// package's own namespace (errNoRows). Both denote the same error, whose
+// message is fixed by database/sql.
+func isErrNoRowsSentinel(e ast.Expr, fset *token.FileSet) bool {
+	rendered := renderExpr(e, fset)
+	if rendered == "sql.ErrNoRows" {
+		return true
+	}
+	if id, ok := e.(*ast.Ident); ok && strings.HasSuffix(id.Name, "ErrNoRows") {
+		return true
+	}
+	return false
 }
 
 // dbCallShape maps a sqlx / database-sql call name onto the db block shape

@@ -7,16 +7,23 @@ import (
 
 // TestRenderTestDBMethodTxVariants pins the tx-based db test blocks for the
 // db layer (PRD §4.2.3 decision 27): DML-tx (insert/update) through ExpectExec
-// + Beginx with the NoRows→ErrNoRows case, DELETE-tx tolerating zero rows,
-// plain DML without the tx handle, and tx SELECT reads through ExpectQuery +
-// Beginx with the tx second arg.
+// + Beginx with the NoRows case, DELETE-tx tolerating zero rows, plain DML
+// without the tx handle, and tx SELECT reads through ExpectQuery + Beginx with
+// the tx second arg.
+//
+// The zero-rows case's expected error is supplied by the caller (NoRowsError),
+// read from the method's own body — a domain message for the count-check
+// shape, or the sql.ErrNoRows text for the sentinel shape. The template
+// renders it verbatim, so each variant below passes the text its method
+// actually returns.
 func TestRenderTestDBMethodTxVariants(t *testing.T) {
-	// Insert-tx: ExecError / NoRows(ErrNoRows) / Success, Beginx + tx arg.
+	// Insert-tx: ExecError / NoRows / Success, Beginx + tx arg.
 	insertTx := render(t, TestDBMethod, TestDBMethodData{
 		SuiteName: "NavStoreSuite", StoreVar: "navStore", Name: "InsertRiskProfile",
 		Regex:    `(?i)^insert\\s+into\\s+URF_USR_RISK_PROF(\\s+.+)?$`,
 		CallArgs: []string{`"userid"`, `"riskprofile"`},
 		IsDML:    true, IsTx: true,
+		NoRowsError: "sql: no rows in result set",
 	})
 	parseTestFile(t, "insert_tx_test.go", "package db\n"+insertTx)
 	for _, want := range []string{
@@ -65,12 +72,14 @@ func TestRenderTestDBMethodTxVariants(t *testing.T) {
 		t.Errorf("delete-tx must not carry the ErrNoRows NoRows case:\n%s", deleteTx)
 	}
 
-	// Plain DML: no Beginx, no tx arg.
+	// Plain DML: no Beginx, no tx arg. Its zero-rows case carries the domain
+	// message the method's own count-check branch returns, not the sentinel.
 	plain := render(t, TestDBMethod, TestDBMethodData{
 		SuiteName: "NavStoreSuite", StoreVar: "navStore", Name: "InsertStatus",
-		Regex:    `(?i)^insert\\s+into\\s+T(\\s+.+)?$`,
-		CallArgs: []string{`"userid"`},
-		IsDML:    true,
+		Regex:       `(?i)^insert\\s+into\\s+T(\\s+.+)?$`,
+		CallArgs:    []string{`"userid"`},
+		IsDML:       true,
+		NoRowsError: "unable to insert the status",
 	})
 	parseTestFile(t, "plain_test.go", "package db\n"+plain)
 	if strings.Contains(plain, "ExpectBegin") || strings.Contains(plain, "Beginx") || strings.Contains(plain, ", tx") {
@@ -80,6 +89,7 @@ func TestRenderTestDBMethodTxVariants(t *testing.T) {
 		`ExpectExec("(?i)^insert\\s+into\\s+T`,
 		`suite.navStore.InsertStatus(suite.ctx, "userid")`,
 		`desc:          "NoRows",`,
+		`expectedError: "unable to insert the status",`,
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("plain DML test missing %q\n---\n%s", want, plain)

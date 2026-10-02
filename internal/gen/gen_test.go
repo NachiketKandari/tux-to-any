@@ -572,11 +572,11 @@ func TestRunMocksSkipsMissingSources(t *testing.T) {
 // pinned go-run fallback carry identical generation flags.
 func TestMockgenCmd(t *testing.T) {
 	tgt := MockTarget{Source: "db/interface.go", Dest: "db/mock_store.go", Name: "NavStore"}
-	bin := mockgenCmd("/usr/local/bin/mockgen", false, tgt)
+	bin := mockgenCmd("/usr/local/bin/mockgen", tgt)
 	if bin.Path != "/usr/local/bin/mockgen" {
 		t.Errorf("binary path = %q", bin.Path)
 	}
-	fallback := mockgenCmd("", true, tgt)
+	fallback := mockgenCmd("", tgt)
 	if fallback.Path != "go" && !strings.HasSuffix(fallback.Path, "/go") {
 		t.Errorf("fallback runs %q, want the go toolchain", fallback.Path)
 	}
@@ -588,5 +588,23 @@ func TestMockgenCmd(t *testing.T) {
 	}
 	if strings.Join(bin.Args[1:], "\x00") != strings.Join(want[2:], "\x00") {
 		t.Errorf("binary args = %v, want %v", bin.Args[1:], want[2:])
+	}
+}
+
+// TestMockgenCmdLegacyGomock pins the follow-the-tree contract: a target
+// asking for the archived gomock major runs that major's pinned mockgen and
+// never the PATH binary, whose own major is unobservable — reusing it would
+// emit go.uber.org/mock/gomock into a package that vendors
+// github.com/golang/mock, which is the two-majors-in-one-package break.
+func TestMockgenCmdLegacyGomock(t *testing.T) {
+	tgt := MockTarget{
+		Source: "db/interface.go", Dest: "db/mock_store.go", Name: "NavStore",
+		Gomock: LegacyGomockPath,
+	}
+	cmd := mockgenCmd("/usr/local/bin/mockgen", tgt)
+	want := []string{"run", LegacyGomockPath + "/mockgen@" + legacyMockgenVersion,
+		"-source", "db/interface.go", "-destination", "db/mock_store.go", "-package", "db", "NavStore"}
+	if strings.Join(cmd.Args[1:], "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("legacy fallback args = %v, want %v", cmd.Args[1:], want)
 	}
 }

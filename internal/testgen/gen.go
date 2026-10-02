@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -261,8 +262,8 @@ func Generate(ctx context.Context, tgt *testscan.Target, rep *testscan.Report, o
 	}
 
 	stageSources(res, opts, svcs)
-	runServiceMocks(ctx, svcs)
-	compileGate(res)
+	runServiceMocks(ctx, svcs, res, opts)
+	compileGate(res, opts)
 	fullTestGate(res, opts)
 	archiveSummary(opts.Audit, res)
 	return res, nil
@@ -292,7 +293,16 @@ func provenanceLine(tags []string) string {
 // anything) run with a timeout; outcomes are recorded gate lines — never
 // run failures (staged trees without the target module's deps degrade
 // visibly here).
-func compileGate(res *Result) {
+//
+// Under -out the module root is a *staged* copy, so it arrives carrying the
+// target module's go.mod but none of its dependency graph: every command
+// below would then report "missing go.sum entry" and no code error could
+// ever surface. resolveDeps runs once per root first to close that gap, as
+// its own gate line so a dependency failure stays distinguishable from a
+// code failure. It writes go.mod/go.sum, which is why it is staged-only —
+// an in-place run must never touch the user's module files
+// (docs/RULES.md §6 never-write-target).
+func compileGate(res *Result, opts Options) {
 	pkgs := map[string]string{} // package dir → module root
 	skipped := map[string]bool{}
 	files := append(append([]string{}, res.Files...), res.Staged...)
@@ -312,7 +322,16 @@ func compileGate(res *Result) {
 			pkgs[dir] = root
 		}
 	}
+	// One resolution per module root, before that root's first code gate,
+	// so the vet/test lines below report on code rather than on plumbing.
+	resolved := map[string]bool{}
 	for dir, root := range pkgs {
+		if !resolved[root] {
+			resolved[root] = true
+			if opts.Stage {
+				res.Gates = append(res.Gates, resolveDeps(root)...)
+			}
+		}
 		rel, err := filepath.Rel(root, dir)
 		if err != nil || strings.HasPrefix(rel, "..") {
 			continue
@@ -324,6 +343,28 @@ func compileGate(res *Result) {
 		res.Gates = append(res.Gates, gateOne(root, "go", "vet", pkg)...)
 		res.Gates = append(res.Gates, gateOne(root, "go", "test", "-count=1", "-run", "^$", pkg)...)
 	}
+}
+
+// resolveDeps materializes a staged module's dependency graph so the code
+// gates that follow can see real compile errors: `go mod tidy` first (it
+// both resolves requirements and writes go.sum from the copied go.mod),
+// falling back to `GOFLAGS=-mod=mod go mod download` when tidy cannot run —
+// offline, or a go.mod whose requirements cannot be re-resolved.
+//
+// Best-effort by design: a failure is reported, never swallowed, and the
+// caller still runs the code gates — a broken dependency graph must not
+// disable the gate that would have explained it.
+func resolveDeps(root string) []string {
+	detail, failed := gateCmd(root, "go", "mod", "tidy")
+	if !failed {
+		return []string{"go mod tidy [" + root + "]: clean"}
+	}
+	if _, dlFailed := gateCmdEnv(root, []string{"GOFLAGS=-mod=mod"}, "go", "mod", "download"); !dlFailed {
+		return []string{"go mod download [-mod=mod] [" + root + "]: clean"}
+	}
+	// Report the tidy diagnostic: producing go.sum is tidy's contract, so
+	// its failure is the one that explains the missing entries.
+	return []string{"go mod tidy [" + root + "]: FAILED — " + detail}
 }
 
 // fullTestGate is the -out full run (GT-7): `go test -count=1` per written
@@ -352,7 +393,7 @@ func fullTestGate(res *Result, opts Options) {
 		if rel == "." {
 			pkg = "."
 		}
-		detail, failed := gateCmd(root, 120*time.Second, "go", "test", "-count=1", pkg)
+		detail, failed := gateCmd(root, "go", "test", "-count=1", pkg)
 		label := "go test -count=1 " + pkg + " [" + dir + "]"
 		if failed {
 			res.TestsFailed = true
@@ -363,9 +404,14 @@ func fullTestGate(res *Result, opts Options) {
 	}
 }
 
+// gateTimeout bounds every gate command. One bound for the whole gate
+// (vet, compile, dependency resolution) so a wedged toolchain degrades at a
+// predictable point instead of hanging the run.
+const gateTimeout = 90 * time.Second
+
 // gateOne runs one gate command (bounded) and renders its outcome line.
 func gateOne(dir, name string, args ...string) []string {
-	detail, failed := gateCmd(dir, 90*time.Second, name, args...)
+	detail, failed := gateCmd(dir, name, args...)
 	label := name + " " + strings.Join(args, " ") + " [" + dir + "]"
 	if failed {
 		return []string{label + ": FAILED — " + detail}
@@ -375,11 +421,21 @@ func gateOne(dir, name string, args ...string) []string {
 
 // gateCmd runs one bounded gate command; the returned detail is the clipped
 // combined output on failure ("" on success).
-func gateCmd(dir string, timeout time.Duration, name string, args ...string) (string, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func gateCmd(dir string, name string, args ...string) (string, bool) {
+	return gateCmdEnv(dir, nil, name, args...)
+}
+
+// gateCmdEnv is gateCmd with extra environment entries layered over the
+// inherited environment (e.g. GOFLAGS=-mod=mod), used where a command's
+// behaviour depends on a mode flag rather than an argument.
+func gateCmdEnv(dir string, env []string, name string, args ...string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), gateTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return "", false
@@ -894,15 +950,68 @@ func ifaceFromFile(path string) string {
 	return ""
 }
 
+// dbCtorCall renders the suite's store construction.
+//
+// A service may hold more than one sqlx.DB (a read handle and a write handle,
+// e.g. NewRiskProfileStore(db, writeDb *sqlx.DB)), and only one of them
+// receives the mock connection. Picking by position rather than by evidence
+// gave every read a nil handle, so the suite panicked before asserting
+// anything. Instead the dominant receiver is chosen by majority vote over
+// the db facts' Recv field: a call on `g.db` proves `db` is the live handle
+// for that method, and the handle most methods run on is the one the suite
+// must supply. Passing nil to the rest is correct — a suite exercising the
+// majority path never touches them.
+//
+// Voting over Recv rather than special-casing position also gets the
+// genuinely-split case right: a service whose reads mostly use the second
+// handle gets the connection there.
 func dbCtorCall(sc *serviceCtx) string {
 	name := sc.dbFacts.DBCtor
 	if name == "" {
 		name = "New" + dbIfaceName(sc)
 	}
-	if sc.dbFacts.DBCtorArgs > 1 {
-		return name + "(nil, suite.sqlDB)"
+	params := sc.dbFacts.DBCtorParams
+	if len(params) <= 1 {
+		return name + "(suite.sqlDB)"
 	}
-	return name + "(suite.sqlDB)"
+	live := dominantDBHandle(sc, params)
+	args := make([]string, len(params))
+	for i, p := range params {
+		if p.Name == live {
+			args[i] = "suite.sqlDB"
+		} else {
+			args[i] = "nil"
+		}
+	}
+	return name + "(" + strings.Join(args, ", ") + ")"
+}
+
+// dominantDBHandle returns the constructor parameter name that most of the
+// service's queries run on, e.g. "db" for a store whose reads use g.db.
+// Ties resolve to the earliest declaration so the result is stable across
+// runs. An empty string means no evidence — every receiver was unrecognised —
+// and the caller then falls back to the first handle.
+func dominantDBHandle(sc *serviceCtx, params []Param) string {
+	votes := map[string]int{}
+	for _, f := range sc.dbFacts.DB {
+		if f == nil || f.IsTx || !strings.HasPrefix(f.Recv, "g.") {
+			// A tx runs on the handle its own caller opens, and a receiver
+			// that is not a store field (a local, a package-level pool)
+			// says nothing about which ctor argument is live.
+			continue
+		}
+		votes[strings.TrimPrefix(f.Recv, "g.")]++
+	}
+	best, bestN := "", 0
+	for _, p := range params {
+		if n := votes[p.Name]; n > bestN {
+			best, bestN = p.Name, n
+		}
+	}
+	if best == "" {
+		return params[0].Name
+	}
+	return best
 }
 
 func ctrlCtorCall(sc *serviceCtx) string {
@@ -921,22 +1030,168 @@ func handlerCtorCall(sc *serviceCtx) string {
 	return name + "(suite." + strings.ToLower(sc.name) + "Controller)"
 }
 
+// treeGomock reports which gomock major the scanned module vendors, so the
+// generated mock lands in the same major the templates' test files import.
+// A converted service inherits its host's dependencies and the tool must not
+// override them: one package cannot hold both majors, since
+// go.uber.org/mock/gomock and github.com/golang/mock/gomock declare distinct
+// Controller types and a mock from one satisfies neither in the other.
+//
+// The module's go.mod is the authority; a gomock import already present in
+// the tree's test files is the corroborating signal. "" = no evidence, which
+// keeps the existing uber-go default rather than guessing a new import.
+func treeGomock(sc *serviceCtx) string {
+	legacy := gen.LegacyGomockPath
+	for _, root := range []string{sc.moduleRoot, filepath.Dir(sc.dir)} {
+		if root == "" {
+			continue
+		}
+		if declaresRequire(filepath.Join(root, "go.mod"), legacy) {
+			return legacy
+		}
+		if declaresRequire(filepath.Join(root, "go.mod"), "go.uber.org/mock") {
+			return ""
+		}
+	}
+	if importsGomock(filepath.Join(sc.dir, "db"), legacy) {
+		return legacy
+	}
+	return ""
+}
+
+// declaresRequire reports whether a go.mod requires the given module path.
+// It matches the require block textually rather than parsing it: the go.mod
+// grammar the tool needs is one substring, and a parse failure on a
+// partially-written or toolchain-extended go.mod must not read as "absent".
+// Both spellings count — a bare `path v1.2.3` line inside require ( ... ),
+// and the single-line `require path v1.2.3` form.
+func declaresRequire(goMod, path string) bool {
+	b, err := os.ReadFile(goMod)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(strings.TrimPrefix(line, "require "))
+		if strings.HasPrefix(line, path+" ") || line == path || strings.HasPrefix(line, path+"/v") {
+			return true
+		}
+	}
+	return false
+}
+
+// importsGomock reports whether any Go file under dir imports the gomock
+// module path.
+func importsGomock(dir, path string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	fset := token.NewFileSet()
+	needle := strconv.Quote(path + "/gomock")
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || filepath.Ext(name) != ".go" {
+			continue
+		}
+		af, perr := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.ImportsOnly|parser.SkipObjectResolution)
+		if perr != nil {
+			continue
+		}
+		for _, imp := range af.Imports {
+			if imp.Path != nil && imp.Path.Value == needle {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // runServiceMocks regenerates db/controller mocks for every touched service
 // (best-effort, shared runner; the target tree's interfaces only). The
 // target derivation is the shared gen.MockTargetsFor table (A4.3).
-func runServiceMocks(ctx context.Context, svcs []*serviceCtx) {
+//
+// Two tree facts decide whether a mock is written at all, because writing one
+// is a mutation of the user's own module and never a safe default:
+//
+//   - The package may already declare Mock<Iface>. A converted service that
+//     shipped its own doubles (the riskprofile corpus hand-writes
+//     db/interface_mock.go) would get a second declaration of the same type
+//     and stop compiling — "MockRiskProfileStore redeclared in this block".
+//     The existing mock already satisfies what the generated tests import, so
+//     skipping is both correct and cheaper. Note this is not a *filename*
+//     collision: mock_store.go and interface_mock.go are different files in
+//     one package, which is why stage.go's collisionName rename cannot help.
+//
+//   - In-place runs must not write into the scanned tree at all
+//     (docs/RULES.md §6 never-write-target). Without -out there is nowhere
+//     else to put a mock, so the run reports the mockgen command it would
+//     have run and leaves the tree byte-identical apart from the _test.go
+//     files it was asked for.
+func runServiceMocks(ctx context.Context, svcs []*serviceCtx, res *Result, opts Options) {
 	var targets []gen.MockTarget
 	for _, sc := range svcs {
-		for _, t := range gen.MockTargetsFor(sc.dir, dbIfaceName(sc)[:len(dbIfaceName(sc))-len("Store")]) {
-			if _, err := os.Stat(t.Source); err == nil {
-				targets = append(targets, t)
+		base := dbIfaceName(sc)
+		base = strings.TrimSuffix(base, "Store")
+		gomockMajor := treeGomock(sc)
+		for _, t := range gen.MockTargetsFor(sc.dir, base) {
+			t.Gomock = gomockMajor
+			if _, err := os.Stat(t.Source); err != nil {
+				continue
 			}
+			if mockAlreadyDeclared(t.Dest, t.Name) {
+				continue
+			}
+			if !opts.Stage {
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"%s: no %s in %s — run the MockGen command in the generated file's header, or re-run with -out to stage one",
+					filepath.Base(filepath.Dir(t.Dest)), "Mock"+t.Name, filepath.Base(filepath.Dir(t.Dest))))
+				continue
+			}
+			targets = append(targets, t)
 		}
 	}
 	if len(targets) == 0 {
 		return
 	}
 	gen.RunMocks(ctx, targets)
+}
+
+// mockAlreadyDeclared reports whether dir's package already declares a type
+// named `Mock`+iface (mockgen's own naming). It parses rather than
+// substring-matches: a comment or an unrelated identifier mentioning the
+// mock must not suppress generation, and the same package can carry a
+// hand-written double under a filename gentest would not guess.
+func mockAlreadyDeclared(dest, iface string) bool {
+	dir := filepath.Dir(dest)
+	want := "Mock" + iface
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || filepath.Ext(name) != ".go" {
+			continue
+		}
+		af, perr := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
+		if perr != nil {
+			continue
+		}
+		for _, d := range af.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name.Name == want {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // archiveSummary persists the run summary into the audit trail (best-effort).

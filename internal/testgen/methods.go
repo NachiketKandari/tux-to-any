@@ -159,6 +159,19 @@ func isDeleteTx(f *dbFact) bool {
 	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(f.Query)), "DELETE")
 }
 
+// dmlNoRowsError is the error a DML method's zero-rows case asserts: the
+// method's own text when its body states one, else the sentinel the template
+// asserted before bodies were read. The fallback is deliberate — an
+// unrecognised body must not silently downgrade the case to "no error",
+// because that would let a zero-rows DML method pass without exercising the
+// check it exists to verify.
+func dmlNoRowsError(f *dbFact) string {
+	if f.NoRowsError != "" {
+		return f.NoRowsError
+	}
+	return "sql: no rows in result set"
+}
+
 // dbExpectType renders the expectedOutput Go type. Scalar reads that scan
 // into a sql.Null* return the extracted Go type (GetMarks: NullString scan,
 // string return; QuestionNumberExists: NullInt16 scan, bool return) — the
@@ -301,6 +314,13 @@ func renderDBMethod(u *unit) (string, error) {
 			IsDML:     true,
 			IsTx:      f.IsTx,
 			DeleteTx:  isDeleteTx(f),
+			// An unrecognised zero-rows branch keeps the error the template
+			// always asserted. Reading the body replaces that guess with the
+			// method's own text; it must not weaken the case to "no error",
+			// which would make a zero-rows DML method pass for the wrong
+			// reason. Only the DELETE-tx variant truly tolerates zero rows,
+			// and it has its own branch.
+			NoRowsError: dmlNoRowsError(f),
 		})
 	}
 	cols := dbCols(sc, f)
@@ -323,31 +343,41 @@ func renderDBMethod(u *unit) (string, error) {
 			}
 		}
 	}
-	// Single-row and scalar reads tolerate sql.ErrNoRows (the converted
-	// GetContext methods return the zero value with a nil error); multi-row
-	// SelectContext reads do not need the case (an empty slice is success).
-	// Tx reads propagate every error to the flow, so they never carry it.
+	// The no-rows case's expected error is read from the method's own contract,
+	// not assumed. Every converted GetContext read propagates err unchanged,
+	// so a read that propagates must expect sql.ErrNoRows here; only a read
+	// that swallows the error (return &T{}, nil, or an explicit
+	// errors.Is(err, sql.ErrNoRows) branch) expects a nil error. Assuming
+	// tolerance made this case fail against the very code it was generated
+	// from. Multi-row SelectContext reads need no case (an empty slice is a
+	// success), and tx reads carry every error to the flow, so neither takes
+	// one.
 	noRows := (f.Shape == "scalar" || f.Shape == "single") && !f.IsTx
 	noRowsExpr := fx.ZeroExpr(dbExpectType(f))
 	if f.Shape == "single" && f.RowType != "" {
 		noRowsExpr = "&" + f.RowType + "{}"
 	}
+	noRowsErr := ""
+	if f.NoRowsContract == "propagate" {
+		noRowsErr = "sql: no rows in result set"
+	}
 	data := templates.TestDBMethodData{
-		SuiteName:  u.suite,
-		StoreVar:   strings.ToLower(sc.name) + "Store",
-		Name:       f.Name,
-		Query:      f.Query,
-		Regex:      dbRegex(f),
-		Shape:      f.Shape,
-		Cols:       cols,
-		Row:        row,
-		NoRows:     noRows,
-		NoRowsExpr: noRowsExpr,
-		ExpectType: dbExpectType(f),
-		ExpectExpr: expectExpr,
-		CallArgs:   dbCallArgs(sc, f),
-		IsDML:      false,
-		IsTx:       f.IsTx,
+		SuiteName:   u.suite,
+		StoreVar:    strings.ToLower(sc.name) + "Store",
+		Name:        f.Name,
+		Query:       f.Query,
+		Regex:       dbRegex(f),
+		Shape:       f.Shape,
+		Cols:        cols,
+		Row:         row,
+		NoRows:      noRows,
+		NoRowsExpr:  noRowsExpr,
+		NoRowsError: noRowsErr,
+		ExpectType:  dbExpectType(f),
+		ExpectExpr:  expectExpr,
+		CallArgs:    dbCallArgs(sc, f),
+		IsDML:       false,
+		IsTx:        f.IsTx,
 	}
 	// First failed complete trace → second logged row (SELECT shapes only;
 	// a DML failure has no result row to mock).

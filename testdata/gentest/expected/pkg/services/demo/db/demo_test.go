@@ -112,7 +112,7 @@ func (suite *DemoStoreSuite) TestGetOrderCount() {
 		{
 			desc:           "Success-NoRows",
 			mockInput:      sqlmock.NewRows([]string{"count"}),
-			expectedError:  "",
+			expectedError:  "sql: no rows in result set",
 			expectedOutput: 0,
 		},
 		{
