@@ -362,8 +362,19 @@ type TestControllerFileData struct {
 // field carrying its Return payload.
 type CtrlCall struct {
 	Method string   // GetOrderDetails
-	Args   []string // args after gomock.Any() (concrete literal or gomock.Any())
+	Args   []string // args after the ctx matcher (concrete literal or gomock.Any())
 	Field  string   // mockInput, mockInput2, ...
+	// TakesCtx reports whether the store method declares a ctx parameter. A
+	// no-arg method takes no matcher at all: EXPECT().GetDB(gomock.Any()) was
+	// over-arity against `GetDB() *sqlx.DB`. Unknown arity is true, so an
+	// unread declaration keeps the previous behaviour rather than dropping a
+	// matcher that may be required.
+	TakesCtx bool
+	// ReturnsHandle marks a store method whose declared result is a *sqlx.DB.
+	// Its EXPECT must hand back the suite's live mock connection rather than a
+	// fixture row, because the controller passes that handle on to the db layer
+	// and a stubbed *sqlx.DB would fail every query underneath it.
+	ReturnsHandle bool
 }
 
 // CtrlCaseField is one request-field value for one controller case (the
@@ -371,6 +382,25 @@ type CtrlCall struct {
 type CtrlCaseField struct {
 	Name  string
 	Value string // pre-escaped body text (embedded between quotes)
+	// Type is the field's declared Go type for the case struct's declaration,
+	// empty meaning string. Literal, when set, replaces the quoted Value
+	// entirely — a slice or struct value cannot survive being embedded
+	// between quotes, which is how a []string field became the compile error
+	// "cannot use testCase.AnswerID (variable of type string) as []string
+	// value".
+	Type    string
+	Literal string
+}
+
+// Expr renders the case-struct initialiser for this field: the typed literal
+// when one was resolved, else the quoted scalar value. Both routes are byte-
+// identical to the pre-F5 output for a string field, which is the common case
+// and the one the goldens pin.
+func (f CtrlCaseField) Expr() string {
+	if f.Literal != "" {
+		return f.Literal
+	}
+	return `"` + f.Value + `"`
 }
 
 // CtrlCase is one row of the controller test's case table, aligned with the
@@ -446,7 +476,10 @@ func (d TestControllerMethodData) CallsOrDerived() []CtrlCall {
 	if d.StoreCall == "" {
 		return nil
 	}
-	return []CtrlCall{{Method: d.StoreCall, Args: d.StoreArgs, Field: "mockInput"}}
+	// TakesCtx is true here: the legacy single-call path predates the store
+	// interface's arity being readable, and defaulting to the matcher keeps
+	// every byte it produced before.
+	return []CtrlCall{{Method: d.StoreCall, Args: d.StoreArgs, Field: "mockInput", TakesCtx: true}}
 }
 
 // CasesOrDerived returns Cases or the legacy two-case table (StoreError /
@@ -517,19 +550,41 @@ type TestHandlerFileData struct {
 
 // ReqField is one request-struct field mirrored into the handler test's
 // case struct (GT-D2: the example's per-request case fields, derived).
+// Type and Literal mirror CtrlCaseField: a slice-typed request field cannot be
+// declared `string` or embedded between quotes, and both defaults are what
+// produced F5's compile error on the corpus's []string request fields.
 type ReqField struct {
-	Name  string // CompCode
-	Value string // assumed fixture value
+	Name    string // CompCode
+	Value   string // assumed fixture value
+	Type    string // declared Go type; empty means string
+	Literal string // pre-rendered literal replacing the quoted Value
+}
+
+// Expr renders the case-struct initialiser, mirroring CtrlCaseField.Expr.
+func (f ReqField) Expr() string {
+	if f.Literal != "" {
+		return f.Literal
+	}
+	return `"` + f.Value + `"`
 }
 
 // TestHandlerMethodData renders one suite method: gin-context table cases
 // (Error 500 / Failure 204 / Success 200) over the mocked controller. With a
 // log, Cases carries the per-case request values and the logged-error case.
 type TestHandlerMethodData struct {
-	SuiteName    string        // NavHandlerSuite
-	CtrlMockVar  string        // navController
-	HandlerVar   string        // navHandler
-	Name         string        // NavList
+	SuiteName   string // NavHandlerSuite
+	CtrlMockVar string // navController
+	HandlerVar  string // navHandler
+	Name        string // NavList — the HANDLER's own name
+	// CtrlMethod is the controller method the handler invokes, which the
+	// mock's EXPECT() must name. It usually equals Name but not always:
+	// handler.GetCustomerRiskProfile calls controller.GetCustomerRP, and
+	// expecting the handler's name produced a method the mock does not have.
+	CtrlMethod string
+	// CtrlCallArgs are the arguments the controller call actually receives,
+	// rendered. Empty for a controller method that takes no request, which is
+	// why it cannot be inferred from the handler's local request var.
+	CtrlCallArgs []string
 	ReqFields    []ReqField    // request fields driving the case struct
 	ReqInit      string        // models.NavRequest{CompCode: testCase.CompCode}
 	SuccessInput string        // []any{<response literal>, nil} — pre-rendered

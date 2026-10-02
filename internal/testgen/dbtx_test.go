@@ -180,7 +180,7 @@ func parseDBFact(t *testing.T, src, name string) *dbFact {
 	if err := os.WriteFile(filepath.Join(dir, "store.go"), []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	lf := extractLayer(dir, "db")
+	lf := extractLayer(dir, "db", nil)
 	f := lf.DB[name]
 	if f == nil {
 		t.Fatalf("%s not extracted: %v", name, lf.DB)
@@ -248,7 +248,7 @@ func TestExtractDBTxVariants(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "store.go"), []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if lf := extractLayer(dir, "db"); lf.DB["Health"] != nil {
+	if lf := extractLayer(dir, "db", nil); lf.DB["Health"] != nil {
 		t.Errorf("Health extracted as %+v, want nil (no query call)", lf.DB["Health"])
 	}
 

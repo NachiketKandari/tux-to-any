@@ -3,7 +3,7 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 	testCases := []struct {
 		desc           string
 {{- range .ReqFields}}
-		{{.Name}}      string
+		{{.Name}}      {{if .Type}}{{.Type}}{{else}}string{{end}}
 {{- end}}
 {{- range .CallsOrDerived}}
 		{{.Field}}      []any
@@ -15,7 +15,7 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 		{
 			desc:          "{{$c.Desc}}",
 {{- range $c.ReqFields}}
-			{{.Name}}:     "{{.Value}}",
+			{{.Name}}:     {{.Expr}},
 {{- end}}
 {{- range $j, $in := $c.Inputs}}
 {{- with index $.CallsOrDerived $j}}
@@ -36,8 +36,12 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 			if testCase.{{.Field}} != nil {
 				suite.{{$.StoreVar}}.
 					EXPECT().
-					{{.Method}}(gomock.Any(){{range .Args}}, {{.}}{{end}}).
+					{{.Method}}({{if .TakesCtx}}gomock.Any(){{end}}{{range .Args}}, {{.}}{{end}}).
+{{- if .ReturnsHandle}}
+					Return(suite.sqlDB, nil)
+{{- else}}
 					Return(testCase.{{.Field}}...)
+{{- end}}
 			}
 {{- end}}
 

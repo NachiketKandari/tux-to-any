@@ -557,8 +557,9 @@ func renderCtrlMethod(u *unit) (string, error) {
 	successFields := make([]templates.CtrlCaseField, 0, len(reqValues))
 	for _, fv := range reqValues {
 		reqNames = append(reqNames, fv[0])
-		reqFields = append(reqFields, templates.ReqField{Name: fv[0], Value: fv[1]})
-		successFields = append(successFields, templates.CtrlCaseField{Name: fv[0], Value: fv[1]})
+		typ, lit := fx.FieldLit(reqBase, fv[0])
+		reqFields = append(reqFields, templates.ReqField{Name: fv[0], Value: fv[1], Type: typ, Literal: lit})
+		successFields = append(successFields, templates.CtrlCaseField{Name: fv[0], Value: fv[1], Type: typ, Literal: lit})
 	}
 
 	// Request fields the failed trace changes must not be pinned as EXPECT
@@ -584,10 +585,16 @@ func renderCtrlMethod(u *unit) (string, error) {
 		if i > 0 {
 			field = fmt.Sprintf("mockInput%d", i+1)
 		}
+		sig := sc.dbIface[call.Method]
 		calls = append(calls, templates.CtrlCall{
 			Method: call.Method,
 			Args:   ctrlExpectArgs(sc, fx, f, call, ambiguous),
 			Field:  field,
+			// Unknown arity (-1) reads as TakesCtx, preserving the matcher
+			// for a method whose declaration could not be read. Only a
+			// declaration that positively says "no parameters" drops it.
+			TakesCtx:      call.ArgCount != 0,
+			ReturnsHandle: sig.Result == "*sqlx.DB" || sig.Result == "sqlx.DB",
 		})
 	}
 
@@ -676,11 +683,20 @@ func failedRequestFields(sc *serviceCtx, mv MethodLogValues, reqBase string, nam
 	}
 	out := make([]templates.CtrlCaseField, 0, len(names))
 	for i, name := range names {
+		// The declared type and literal carry over from the success case: the
+		// log supplies a different VALUE for a failed request, not a different
+		// type. A logged value for a slice field is already a slice literal by
+		// the time it reaches here (FieldLit), and dropping it would put a
+		// bare string back into a []string field.
+		typ, lit := "", ""
+		if i < len(fallback) {
+			typ, lit = fallback[i].Type, fallback[i].Literal
+		}
 		v, ok := values[name]
 		if !ok {
 			v = fallback[i].Value
 		}
-		out = append(out, templates.CtrlCaseField{Name: name, Value: v})
+		out = append(out, templates.CtrlCaseField{Name: name, Value: v, Type: typ, Literal: lit})
 	}
 	return out
 }
@@ -708,8 +724,9 @@ func renderHandlerMethod(u *unit) (string, error) {
 	var reqFields []templates.ReqField
 	successFields := make([]templates.CtrlCaseField, 0, len(reqValues))
 	for _, fv := range reqValues {
-		reqFields = append(reqFields, templates.ReqField{Name: fv[0], Value: fv[1]})
-		successFields = append(successFields, templates.CtrlCaseField{Name: fv[0], Value: fv[1]})
+		typ, lit := fx.FieldLit(reqBase, fv[0])
+		reqFields = append(reqFields, templates.ReqField{Name: fv[0], Value: fv[1], Type: typ, Literal: lit})
+		successFields = append(successFields, templates.CtrlCaseField{Name: fv[0], Value: fv[1], Type: typ, Literal: lit})
 	}
 	expectExpr := responseLiteral(sc, fx, resp)
 	cases := []templates.HandlerCase{
@@ -752,10 +769,15 @@ func renderHandlerMethod(u *unit) (string, error) {
 	}
 	prov := u.sc.provider()
 	return prov.Render(templates.TestHandlerMethod, templates.TestHandlerMethodData{
-		SuiteName:    u.suite,
-		CtrlMockVar:  strings.ToLower(sc.name) + "Controller",
-		HandlerVar:   strings.ToLower(sc.name) + "Handler",
-		Name:         f.Name,
+		SuiteName:   u.suite,
+		CtrlMockVar: strings.ToLower(sc.name) + "Controller",
+		HandlerVar:  strings.ToLower(sc.name) + "Handler",
+		Name:        f.Name,
+		// The EXPECT() names the controller method, which the handler's own
+		// name only coincidentally matches; the invocation below stays on
+		// Name because that one genuinely is the handler's method.
+		CtrlMethod:   f.CtrlCall,
+		CtrlCallArgs: f.CtrlCallArgs,
 		ReqFields:    reqFields,
 		ReqInit:      "models." + reqBase + "{" + caseRefs(reqValues) + "}",
 		SuccessInput: "[]any{" + expectExpr + ", nil}",

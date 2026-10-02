@@ -32,7 +32,7 @@ func dbContractFixture(t *testing.T, body string) *dbFact {
 	if err := os.WriteFile(filepath.Join(dir, "store.go"), []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f := extractLayer(dir, "db").DB["M"]
+	f := extractLayer(dir, "db", nil).DB["M"]
 	if f == nil {
 		t.Fatalf("no db fact extracted from:\n%s", src)
 	}

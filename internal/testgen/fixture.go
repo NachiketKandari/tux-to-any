@@ -7,11 +7,25 @@ package testgen
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 // FixtureSource provides assumed fixture values for one service.
 type FixtureSource interface {
+	// FieldLit returns the Go type of a json-tagged field and a literal of that
+	// type for the case struct, e.g. ("[]string", `[]string{"answerid"}`).
+	//
+	// It exists because FieldValues cannot express a non-string field: the
+	// generated case struct declared every field `string`, so a slice-typed
+	// request field produced "cannot use testCase.AnswerID (variable of type
+	// string) as []string value". A literal rather than a bare value because
+	// the template embeds it unquoted, which a []string cannot survive.
+	//
+	// ("", "") means "no declared type" and the caller keeps its previous
+	// string behaviour — the conservative reading, since a wrong literal is a
+	// compile error whereas the string form at least renders.
+	FieldLit(structName, field string) (typ, lit string)
 	// RowValues returns one mock row for the db-tag columns, in order.
 	RowValues(cols []string) []string
 	// ColExpr renders the expected-struct field literal for a db column of
@@ -91,6 +105,149 @@ func (a *AssumedFixtureSource) ArgValue(name, typ string) string {
 	default:
 		return "nil"
 	}
+}
+
+// FieldLit implements FixtureSource.
+//
+// Only slices and struct-valued fields get a typed literal. A string field
+// deliberately returns ("", "") so the case struct's declaration and value stay
+// byte-identical to what they were before this method existed — the majority of
+// fields are strings, and re-rendering them buys nothing.
+//
+// A slice becomes a one-element literal over its element type, and a struct
+// element becomes a composite literal over that struct's own fields, so
+// []models.QnA expands into the fields QnA actually declares rather than a
+// placeholder that would not compile.
+func (a *AssumedFixtureSource) FieldLit(structName, field string) (string, string) {
+	typ, elem, isSlice := a.fieldType(structName, field)
+	switch {
+	case isSlice && elem == "string":
+		return typ, "[]string{" + strconv.Quote(placeholder(field)) + "}"
+	case isSlice:
+		q := a.qualified(elem)
+		if lit, ok := a.elemLiteral(elem, 0); ok {
+			return typ, "[]" + q + "{{" + lit + "}}"
+		}
+		return typ, "[]" + q + "{}"
+	case typ != "" && typ != "string":
+		q := a.qualified(elem)
+		if lit, ok := a.elemLiteral(elem, 0); ok {
+			return typ, q + "{" + lit + "}"
+		}
+		return typ, q + "{}"
+	}
+	return "", ""
+}
+
+// qualified renders a model type name as the generated test must spell it.
+// A models file declares its own types unqualified (`QnA []QnA`), but the test
+// lives in the db/controller package and refers to them as models.QnA — so an
+// unqualified name that the inventory knows about gets the package prefix.
+// A name the inventory does not know is already qualified and passes through.
+func (a *AssumedFixtureSource) qualified(name string) string {
+	if name == "" || strings.Contains(name, ".") {
+		return name
+	}
+	if a.Models == nil {
+		return name
+	}
+	if _, ok := a.Models.Structs[name]; ok {
+		return "models." + name
+	}
+	return name
+}
+
+// fieldType resolves a field's declared Go type. elem is the element type with
+// any slice/array prefix and package qualifier stripped, and isSlice reports
+// whether a slice prefix was present.
+func (a *AssumedFixtureSource) fieldType(structName, field string) (typ, elem string, isSlice bool) {
+	if a.Models == nil {
+		return "", "", false
+	}
+	for _, f := range a.Models.Structs[structName] {
+		if f.Name != field {
+			continue
+		}
+		t := f.Type
+		if strings.HasPrefix(t, "[]") {
+			return t, t[2:], true
+		}
+		return f.Type, unqualify(t), false
+	}
+	return "", "", false
+}
+
+// unqualify strips a package qualifier from a type name.
+func unqualify(t string) string {
+	if i := strings.LastIndex(t, "."); i >= 0 {
+		return t[i+1:]
+	}
+	return t
+}
+
+// elemLiteral renders a struct type's fields as `Name: value, …` pairs.
+// Recursion is bounded: a model that refers to itself through a slice would
+// otherwise expand forever, and a self-referential request is not a shape this
+// generator can honour anyway.
+func (a *AssumedFixtureSource) elemLiteral(structName string, depth int) (string, bool) {
+	if a.Models == nil || depth > 2 {
+		return "", false
+	}
+	fields := a.Models.Structs[structName]
+	if len(fields) == 0 {
+		return "", false
+	}
+	parts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		parts = append(parts, f.Name+": "+a.fieldLiteralOf(f, depth+1))
+	}
+	return strings.Join(parts, ", "), true
+}
+
+// fieldLiteralOf renders one fieldInfo's value at the given recursion depth.
+func (a *AssumedFixtureSource) fieldLiteralOf(f fieldInfo, depth int) string {
+	typ := f.Type
+	elem := unqualify(typ)
+	isSlice := strings.HasPrefix(typ, "[]")
+	if isSlice {
+		elem = typ[2:]
+	}
+	switch {
+	case isSlice && elem == "string":
+		return "[]string{" + strconv.Quote(placeholder(f.Name)) + "}"
+	case typ == "string":
+		return strconv.Quote(placeholder(f.Name))
+	case typ == "bool":
+		return "false"
+	case typ == "int" || typ == "int8" || typ == "int16" || typ == "int32" || typ == "int64" ||
+		typ == "uint" || typ == "uint8" || typ == "uint16" || typ == "uint32" || typ == "uint64" ||
+		typ == "float32" || typ == "float64":
+		return "0"
+	case strings.HasPrefix(typ, "sql.Null") || typ == "time.Time":
+		return typ + "{}"
+	case elem != "" && depth <= 2 && a.Models != nil && a.knownStruct(elem):
+		q := a.qualified(elem)
+		if isSlice {
+			if lit, ok := a.elemLiteral(elem, depth); ok {
+				return "[]" + q + "{{" + lit + "}}"
+			}
+			return "[]" + q + "{}"
+		}
+		if lit, ok := a.elemLiteral(elem, depth); ok {
+			return q + "{" + lit + "}"
+		}
+		return q + "{}"
+	}
+	// An interface, a pointer, or a type the models inventory does not
+	// describe: nil is the only value guaranteed to compile.
+	return "nil"
+}
+
+// knownStruct reports whether the models inventory declares this type as a
+// struct, which is what makes a composite literal over its fields meaningful.
+func (a *AssumedFixtureSource) knownStruct(name string) bool {
+	_, ok := a.Models.Structs[name]
+	return ok
 }
 
 // FieldValues implements FixtureSource. Tag options (,omitempty) are

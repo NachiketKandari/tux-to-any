@@ -64,6 +64,69 @@ type dbFact struct {
 type storeCall struct {
 	Method string
 	Args   []string // rendered verbatim, ctx arg dropped
+	// ArgCount is the call site's total argument count including ctx, or -1
+	// when the store interface's declaration for Method could not be read.
+	// The template needs it because a no-argument store method (GetDB())
+	// takes no gomock.Any() matcher: emitting one was over-arity, and five
+	// occurrences of it appeared in the corpus's log-route output.
+	//
+	// -1 means "unknown", and the template then keeps the matcher — guessing
+	// the arity from the call site alone is what this field replaces.
+	ArgCount int
+}
+
+// dbIfaceSig is one store interface method's declared shape. The bodies are
+// not enough: GetDB() has no body worth reading (it returns a field) yet its
+// EXPECT must both take no matcher and hand back a live *sqlx.DB.
+type dbIfaceSig struct {
+	ArgCount int    // declared parameter count, ctx included
+	Result   string // first result type as written (*sqlx.DB, []*models.X, …)
+}
+
+// extractDBIface parses the db layer's interface declarations into per-method
+// signatures. Arity and result type are properties of the declaration, not of
+// any body, so reading them here is data rather than inference.
+func extractDBIface(serviceDir string) map[string]dbIfaceSig {
+	out := map[string]dbIfaceSig{}
+	dir := filepath.Join(serviceDir, "db")
+	fset := token.NewFileSet()
+	for _, name := range sourceFiles(dir) {
+		af, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			continue
+		}
+		for _, d := range af.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				it, ok := ts.Type.(*ast.InterfaceType)
+				if !ok {
+					continue
+				}
+				for _, m := range it.Methods.List {
+					ft, ok := m.Type.(*ast.FuncType)
+					if !ok || len(m.Names) == 0 {
+						continue
+					}
+					sig := dbIfaceSig{ArgCount: -1}
+					if ft.Params != nil {
+						sig.ArgCount = ft.Params.NumFields()
+					}
+					if ft.Results != nil && ft.Results.NumFields() > 0 {
+						sig.Result = renderExpr(ft.Results.List[0].Type, fset)
+					}
+					out[m.Names[0].Name] = sig
+				}
+			}
+		}
+	}
+	return out
 }
 
 // ctrlFact is one controller endpoint's extracted shape.
@@ -81,7 +144,17 @@ type ctrlFact struct {
 type handlerFact struct {
 	Name        string
 	RequestType string
-	CtrlCall    string
+	// CtrlCall is the controller method the handler actually invokes, which
+	// is not always the handler's own name: handler.GetCustomerRiskProfile
+	// calls controller.GetCustomerRP. The generated EXPECT() has to name the
+	// method that exists on the mock.
+	CtrlCall string
+	// CtrlCallArgs is the controller call's arguments after ctx, as written.
+	// It is read from the call site rather than inferred from the handler's
+	// local `var request models.X`, because those two disagree: DisplayMarks
+	// binds a request the controller method never receives, and emitting
+	// EXPECT().DisplayMarks(ctx, &request) was over-arity.
+	CtrlCallArgs []string
 }
 
 // fieldInfo is one struct field of the models layer.
@@ -118,7 +191,13 @@ type layerFacts struct {
 	// and every read nil-panicked.
 	DBCtorParams []Param
 	CtrlCtor     string
-	HandlerCtor  string
+	// CtrlCtorParams is the controller constructor's parameters as written.
+	// A converted controller often takes more than its own store — the corpus
+	// ctor is NewRiskProfileController(store db.RiskProfileStore, userStore
+	// commonDB.UserStore) — and emitting only the first produced "not enough
+	// arguments in call" for every controller suite.
+	CtrlCtorParams []Param
+	HandlerCtor    string
 }
 
 // sourceFiles lists the layer's non-test, non-mock .go files.
@@ -159,7 +238,7 @@ func testFiles(dir string) []string {
 
 // extractLayer parses one layer directory into facts; unparseable files are
 // skipped (the scan already warned).
-func extractLayer(dir string, layer string) *layerFacts {
+func extractLayer(dir string, layer string, dbIface map[string]dbIfaceSig) *layerFacts {
 	lf := &layerFacts{DB: map[string]*dbFact{}, Ctrl: map[string]*ctrlFact{}, Handler: map[string]*handlerFact{}}
 	fset := token.NewFileSet()
 	for _, name := range sourceFiles(dir) {
@@ -186,11 +265,12 @@ func extractLayer(dir string, layer string) *layerFacts {
 				}
 			case layer == "controller":
 				if fd.Recv != nil {
-					if f := extractCtrlFact(fd, fset); f != nil {
+					if f := extractCtrlFact(fd, fset, dbIface); f != nil {
 						lf.Ctrl[f.Name] = f
 					}
 				} else if strings.HasPrefix(fd.Name.Name, "New") && fd.Type.Results != nil && fd.Type.Results.NumFields() == 1 && lf.CtrlCtor == "" {
 					lf.CtrlCtor = fd.Name.Name
+					lf.CtrlCtorParams = paramsOf(fd, fset)
 				}
 			case layer == "handler":
 				if fd.Recv != nil {
@@ -890,9 +970,9 @@ func tablesOf(query string) []string {
 // extractCtrlFact recognizes controller endpoints: (ctx context.Context,
 // request *models.X) → (…, error), collecting `recv.store.M(...)` calls in
 // body order.
-func extractCtrlFact(fd *ast.FuncDecl, fset *token.FileSet) *ctrlFact {
+func extractCtrlFact(fd *ast.FuncDecl, fset *token.FileSet, dbIface map[string]dbIfaceSig) *ctrlFact {
 	f := &ctrlFact{Name: fd.Name.Name, Passthrough: true}
-	if fd.Type.Params == nil || fd.Type.Params.NumFields() < 2 {
+	if fd.Type.Params == nil || fd.Type.Params.NumFields() < 1 {
 		return nil
 	}
 	first := fd.Type.Params.List[0]
@@ -902,12 +982,18 @@ func extractCtrlFact(fd *ast.FuncDecl, fset *token.FileSet) *ctrlFact {
 	if len(first.Names) > 0 {
 		f.CtxName = first.Names[0].Name
 	}
-	reqField := fd.Type.Params.List[len(fd.Type.Params.List)-1]
-	rt := renderExpr(reqField.Type, fset)
-	if !strings.HasPrefix(rt, "*models.") {
-		return nil
+	// A request parameter is optional. DisplayMarks(ctx) is a real endpoint in
+	// the corpus and returning nil for it made the controller unit `unsupported`,
+	// which is how the one method the log route missed stayed missing. An empty
+	// RequestType is the honest shape: no request, and the renderer emits a
+	// call with no request argument.
+	if len(fd.Type.Params.List) > 1 {
+		reqField := fd.Type.Params.List[len(fd.Type.Params.List)-1]
+		rt := renderExpr(reqField.Type, fset)
+		if strings.HasPrefix(rt, "*models.") {
+			f.RequestType = strings.TrimPrefix(rt, "*")
+		}
 	}
-	f.RequestType = strings.TrimPrefix(rt, "*")
 	if fd.Type.Results != nil && fd.Type.Results.NumFields() > 0 {
 		f.ResponseType = renderExpr(fd.Type.Results.List[0].Type, fset)
 	}
@@ -924,7 +1010,10 @@ func extractCtrlFact(fd *ast.FuncDecl, fset *token.FileSet) *ctrlFact {
 		if !ok || inner.Sel.Name != "store" {
 			return true
 		}
-		sc := storeCall{Method: sel.Sel.Name}
+		sc := storeCall{Method: sel.Sel.Name, ArgCount: -1}
+		if sig, ok := dbIface[sel.Sel.Name]; ok {
+			sc.ArgCount = sig.ArgCount
+		}
 		for i, a := range call.Args {
 			if i == 0 {
 				continue // ctx
@@ -978,6 +1067,17 @@ func extractHandlerFact(fd *ast.FuncDecl, fset *token.FileSet) *handlerFact {
 			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
 				if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "controller" {
 					f.CtrlCall = sel.Sel.Name
+					// The call site's own argument list is the only
+					// trustworthy statement of what the controller method
+					// receives. A handler may bind a request and not pass
+					// it, and one that does pass it may pass something
+					// else entirely.
+					for i, a := range x.Args {
+						if i == 0 {
+							continue // ctx
+						}
+						f.CtrlCallArgs = append(f.CtrlCallArgs, renderExpr(a, fset))
+					}
 				}
 			}
 		}

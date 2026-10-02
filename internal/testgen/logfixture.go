@@ -260,6 +260,164 @@ func (l *LogFixtureSource) FieldValues(structName string) [][2]string {
 	return l.fieldValues(structName, false)
 }
 
+// FieldLit implements FixtureSource.
+//
+// The declared type always comes from the models inventory — the log records
+// JSON, which carries no Go type — but the VALUE comes from the log when it
+// holds one. That is the whole point of the log route: a logged
+// AnswerID: ["a","b"] is real fixture data, and rendering it as a scalar
+// placeholder would throw away the realism the log exists to supply.
+//
+// A logged array whose elements do not fit the declared element type is
+// refused rather than coerced: an invented value that fails to compile is worse
+// than the assumed placeholder, which at least has the right shape.
+func (l *LogFixtureSource) FieldLit(structName, field string) (string, string) {
+	typ, lit := l.assumed().FieldLit(structName, field)
+	if typ == "" || l == nil || l.vals == nil {
+		return typ, lit
+	}
+	var f fieldInfo
+	for _, cand := range l.Models.Structs[structName] {
+		if cand.Name == field {
+			f = cand
+			break
+		}
+	}
+	if f.JSON == "" {
+		return typ, lit
+	}
+	raw, ok := pickJSONKey(l.vals.req, jsonBase(f.JSON))
+	if !ok {
+		return typ, lit
+	}
+	elem := unqualify(strings.TrimPrefix(f.Type, "[]"))
+	if !strings.HasPrefix(f.Type, "[]") || elem == "" {
+		return typ, lit // scalar field: FieldValues already carries the value
+	}
+	if lit, ok := l.jsonSliceLit(raw, elem); ok {
+		return typ, lit
+	}
+	return typ, lit
+}
+
+// knownStruct reports whether the models inventory declares this type, which is
+// what distinguishes a struct element (rendered as a composite literal over its
+// fields) from a scalar one.
+func (l *LogFixtureSource) knownStruct(name string) bool {
+	_, ok := l.Models.Structs[name]
+	return ok
+}
+
+// jsonSliceLit renders a logged JSON array as a Go slice literal over elem,
+// or reports false when the logged elements are not of that type.
+func (l *LogFixtureSource) jsonSliceLit(raw json.RawMessage, elem string) (string, bool) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return "", false
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		if !l.knownStruct(elem) {
+			// A scalar element: the logged JSON must actually be one, or the
+			// value would not compile against the declared type.
+			prim, ok := logPrimitiveOf(item)
+			if !ok {
+				return "", false
+			}
+			switch elem {
+			case "string":
+				if prim.Kind != "string" {
+					return "", false
+				}
+				parts = append(parts, strconv.Quote(prim.Text))
+			case "int", "int8", "int16", "int32", "int64",
+				"uint", "uint8", "uint16", "uint32", "uint64",
+				"float32", "float64":
+				if prim.Kind != "number" {
+					return "", false
+				}
+				parts = append(parts, prim.Text)
+			case "bool":
+				if prim.Kind != "bool" {
+					return "", false
+				}
+				parts = append(parts, prim.Text)
+			default:
+				return "", false
+			}
+			continue
+		}
+		// A struct element: map the logged object onto the model's fields by
+		// json tag, the same mapping the scalar path uses, so a nested request
+		// stays honest about what it actually logged.
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(item, &obj); err != nil {
+			return "", false
+		}
+		lit, ok := l.jsonStructLit(obj, elem, 0)
+		if !ok {
+			return "", false
+		}
+		parts = append(parts, lit)
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	return "[]" + l.assumed().qualified(elem) + "{" + strings.Join(parts, ", ") + "}", true
+}
+
+// jsonStructLit renders a logged JSON object as a composite literal over the
+// model's fields, falling back to the assumed placeholder per field the log
+// does not carry.
+func (l *LogFixtureSource) jsonStructLit(obj map[string]json.RawMessage, structName string, depth int) (string, bool) {
+	if depth > 2 {
+		return "", false
+	}
+	fields := l.Models.Structs[structName]
+	if len(fields) == 0 {
+		return "", false
+	}
+	assumed := l.assumed()
+	parts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		parts = append(parts, f.Name+": "+l.jsonFieldLit(obj, f, depth))
+	}
+	return assumed.qualified(structName) + "{" + strings.Join(parts, ", ") + "}", true
+}
+
+// jsonFieldLit renders one field's value from a logged object, falling back to
+// the assumed literal when the log does not carry it.
+func (l *LogFixtureSource) jsonFieldLit(obj map[string]json.RawMessage, f fieldInfo, depth int) string {
+	if f.JSON == "" {
+		return l.assumed().fieldLiteralOf(f, depth)
+	}
+	raw, ok := pickJSONKey(obj, jsonBase(f.JSON))
+	if !ok {
+		return l.assumed().fieldLiteralOf(f, depth)
+	}
+	elem := unqualify(strings.TrimPrefix(f.Type, "[]"))
+	switch {
+	case strings.HasPrefix(f.Type, "[]") && elem == "string":
+		var items []string
+		if err := json.Unmarshal(raw, &items); err == nil {
+			quoted := make([]string, len(items))
+			for i, s := range items {
+				quoted[i] = strconv.Quote(s)
+			}
+			return "[]string{" + strings.Join(quoted, ", ") + "}"
+		}
+	case strings.HasPrefix(f.Type, "[]"):
+		if lit, ok := l.jsonSliceLit(raw, elem); ok {
+			return lit
+		}
+	case f.Type == "string":
+		if prim, ok := logPrimitiveOf(raw); ok && prim.Kind == "string" {
+			return strconv.Quote(prim.Text)
+		}
+	}
+	return l.assumed().fieldLiteralOf(f, depth)
+}
+
 // ResponseFieldValues implements ResponseFieldSource: response values from
 // the logged SuccessJSON data / responseBody.
 func (l *LogFixtureSource) ResponseFieldValues(structName string) [][2]string {

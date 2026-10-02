@@ -135,12 +135,16 @@ type block struct {
 }
 
 type serviceCtx struct {
-	name         string
-	dir          string
-	moduleRoot   string
-	module       string
-	models       *modelsInfo
-	ctrlIface    map[string]ctrlIfaceSig
+	name       string
+	dir        string
+	moduleRoot string
+	module     string
+	models     *modelsInfo
+	ctrlIface  map[string]ctrlIfaceSig
+	// dbIface is the store interface's declared per-method shape. Controller
+	// EXPECTs need it: a no-arg method takes no matcher, and GetDB() must hand
+	// back a live *sqlx.DB rather than a fixture value.
+	dbIface      map[string]dbIfaceSig
 	fixtures     FixtureSource
 	dbFacts      *layerFacts
 	ctrlFacts    *layerFacts
@@ -786,14 +790,15 @@ func buildServiceCtxs(rep *testscan.Report, prov templates.Provider, opts Option
 		sc.module = moduleName(sc.moduleRoot, sr.Dir)
 		sc.models = extractModels(sr.Dir)
 		sc.ctrlIface = extractCtrlIface(sr.Dir)
+		sc.dbIface = extractDBIface(sr.Dir)
 		if opts.Log != nil {
 			sc.fixtures = NewLogFixtureSource(opts.Log, sc.models, sr.Name)
 		} else {
 			sc.fixtures = &AssumedFixtureSource{Models: sc.models}
 		}
-		sc.dbFacts = extractLayer(filepath.Join(sr.Dir, "db"), "db")
-		sc.ctrlFacts = extractLayer(filepath.Join(sr.Dir, "controller"), "controller")
-		sc.handlerFacts = extractLayer(filepath.Join(sr.Dir, "handler"), "handler")
+		sc.dbFacts = extractLayer(filepath.Join(sr.Dir, "db"), "db", sc.dbIface)
+		sc.ctrlFacts = extractLayer(filepath.Join(sr.Dir, "controller"), "controller", sc.dbIface)
+		sc.handlerFacts = extractLayer(filepath.Join(sr.Dir, "handler"), "handler", sc.dbIface)
 		svcs = append(svcs, sc)
 	}
 	return svcs
@@ -1014,12 +1019,86 @@ func dominantDBHandle(sc *serviceCtx, params []Param) string {
 	return best
 }
 
+// ctrlCtorCall renders the suite's controller construction.
+//
+// A converted controller frequently takes more than its own store — the corpus
+// ctor is NewRiskProfileController(store db.RiskProfileStore, userStore
+// commonDB.UserStore) — so hardcoding the single argument produced "not enough
+// arguments in call" and no controller suite compiled at all.
+//
+// One argument is rendered per declared parameter, mirroring dbCtorCall so both
+// layers read the same way. The parameter whose type is this service's own
+// store interface gets the generated mock; every other dependency gets nil.
+//
+// nil rather than a discovered mock is a deliberate limit, not an oversight.
+// gentest only generates mocks for the service's own two interfaces, so a
+// cross-package collaborator (commonDB.UserStore) has no mock to hand over.
+// nil compiles, and a method that actually dereferences it fails loudly at the
+// call rather than silently asserting against a stub the tool invented.
+// Generating those mocks is a feature; discovering cross-package interfaces to
+// mock is follow-up work, not a bug fix.
 func ctrlCtorCall(sc *serviceCtx) string {
 	name := sc.ctrlFacts.CtrlCtor
 	if name == "" {
 		name = "New" + ctrlIfaceName(sc)
 	}
-	return name + "(suite." + strings.ToLower(sc.name) + "Store)"
+	params := sc.ctrlFacts.CtrlCtorParams
+	store := "suite." + strings.ToLower(sc.name) + "Store"
+	if len(params) == 0 {
+		// No params captured — the pre-F7 shape. The store is the only
+		// dependency the generator owns, so it is the only safe guess.
+		return name + "(" + store + ")"
+	}
+	want := ownStoreNames(sc)
+	args := make([]string, len(params))
+	for i, p := range params {
+		if want[ifaceBaseName(p.Type)] {
+			args[i] = store
+		} else {
+			args[i] = "nil"
+		}
+	}
+	return name + "(" + strings.Join(args, ", ") + ")"
+}
+
+// ownStoreNames is the set of names this service's store interface may be
+// spelled with in the controller constructor's signature.
+//
+// Both sources are consulted because each fails in a different situation.
+// dbIfaceName reads the db layer's interface declaration and is the
+// authoritative answer, but it synthesizes a fallback name when the
+// declaration cannot be read. The db constructor's own name carries the same
+// information independently: NewRiskProfileStore implies RiskProfileStore, and
+// the converted code always derives one from the other.
+//
+// Matching only one of them is how a correct signature still rendered as nil:
+// with the declaration unread, the synthesized name did not match the real one
+// and the suite got a nil store — a failure at run time, far from the cause.
+func ownStoreNames(sc *serviceCtx) map[string]bool {
+	out := map[string]bool{ifaceBaseName(dbIfaceName(sc)): true}
+	if sc.dbFacts != nil {
+		if ctor := sc.dbFacts.DBCtor; ctor != "" && strings.HasPrefix(ctor, "New") && len(ctor) > 3 {
+			out[ctor[3:]] = true
+		}
+		if len(sc.dbFacts.DBCtorParams) > 0 {
+			// A *sqlx.DB parameter is a handle, not the store interface, so
+			// it must not be mistaken for one.
+			delete(out, "DB")
+		}
+	}
+	return out
+}
+
+// ifaceBaseName strips the package qualifier from a possibly-qualified type
+// name, so `db.RiskProfileStore` and `RiskProfileStore` compare equal. A
+// constructor may declare its own store either way depending on whether the
+// layer files import their sibling package, and matching on the qualified form
+// alone would silently fall through to nil for the one argument that matters.
+func ifaceBaseName(t string) string {
+	if i := strings.LastIndex(t, "."); i >= 0 {
+		return t[i+1:]
+	}
+	return t
 }
 
 func handlerCtorCall(sc *serviceCtx) string {

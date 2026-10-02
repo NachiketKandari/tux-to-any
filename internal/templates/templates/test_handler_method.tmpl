@@ -3,7 +3,7 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 	testCases := []struct {
 		desc                  string
 {{- range .ReqFields}}
-		{{.Name}}             string
+		{{.Name}}             {{if .Type}}{{.Type}}{{else}}string{{end}}
 {{- end}}
 		mockInput             []any
 		expectedError         string
@@ -13,7 +13,7 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 		{
 			desc: "{{$c.Desc}}",
 {{- range $c.ReqFields}}
-			{{.Name}}: "{{.Value}}",
+			{{.Name}}: {{.Expr}},
 {{- end}}
 			mockInput:     {{$c.Input}},
 			expectedError: "{{$c.ExpectedError}}",
@@ -33,7 +33,7 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 			if testCase.mockInput != nil {
 				suite.{{.CtrlMockVar}}.
 					EXPECT().
-					{{.Name}}(ctx, &request).
+					{{.CtrlMethod}}(ctx{{range .CtrlCallArgs}}, {{.}}{{end}}).
 					Return(testCase.mockInput...)
 			}
 
