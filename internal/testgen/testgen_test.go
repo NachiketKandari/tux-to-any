@@ -417,9 +417,13 @@ func TestGenerateNoLLM(t *testing.T) {
 	}
 
 	hOut := read(t, filepath.Join(out, "pkg", "services", "nav", "handler", "nav_test.go"))
+	// No "NavListError": this fixture's handler writes c.JSON directly and
+	// never calls FailureJSON, so there is no failure envelope to drive a
+	// controller-error case. That is the case table being read from the body
+	// instead of assumed. What must survive is the request wiring, the gin
+	// context and the response conversion.
 	for _, want := range []string{
 		"func (suite *NavHandlerSuite) TestNavList() {",
-		"NavListError",
 		"CompCode:",
 		`"fmlcompcd"`,
 		"request := models.NavRequest{CompCode: testCase.CompCode}",

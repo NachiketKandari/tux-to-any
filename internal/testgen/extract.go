@@ -13,6 +13,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -210,6 +211,174 @@ type handlerFact struct {
 	// binds a request the controller method never receives, and emitting
 	// EXPECT().DisplayMarks(ctx, &request) was over-arity.
 	CtrlCallArgs []string
+	// CtrlBranches is every controller call site in this handler, each with the
+	// request-field comparison that guards it.
+	//
+	// A handler may route one request field to SEVERAL controller methods:
+	//
+	//	if request.RequestType == "B" { data, err = f.controller.ViewQuestions(c, &request) }
+	//	if request.RequestType == "L" { data, err = f.controller.ListSection(c, &request) }
+	//
+	// CtrlCall keeps only one of them, so the generated EXPECT names a method
+	// the request might not reach. The fixture value is then chosen without
+	// knowing which branch it selects, and the run dies with
+	//
+	//	Unexpected call to Mock…Controller.ViewQuestions: there are no
+	//	expected calls of the method "ViewQuestions"
+	//
+	// Each branch's guard is what lets the renderer pick a value that takes
+	// the branch the EXPECT was written for.
+	CtrlBranches []ctrlBranch
+	// Envelope is every response this body writes, read from its own source.
+	// It decides which cases exist: a body that never writes FailureJSON has
+	// no controller-error case to generate.
+	Envelope []envelopeCall
+}
+
+// ctrlCallArgsOf returns a controller call's arguments after ctx, as written.
+func ctrlCallArgsOf(call *ast.CallExpr, fset *token.FileSet) []string {
+	var args []string
+	for i, a := range call.Args {
+		if i == 0 {
+			continue // ctx
+		}
+		args = append(args, renderExpr(a, fset))
+	}
+	return args
+}
+
+// blockHasControllerCall reports whether a block reaches a controller call.
+func blockHasControllerCall(b *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(b, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "controller" {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// guardFieldAndValue splits a routing condition into the field it reads and the
+// literal it compares against.
+func guardFieldAndValue(cond ast.Expr) (field, value string) {
+	if un, ok := cond.(*ast.UnaryExpr); ok && un.Op == token.NOT {
+		cond = un.X
+	}
+	be, ok := cond.(*ast.BinaryExpr)
+	if !ok || be.Op != token.EQL {
+		return "", ""
+	}
+	sel, ok := be.X.(*ast.SelectorExpr)
+	if !ok {
+		return "", ""
+	}
+	id, ok := sel.X.(*ast.Ident)
+	if !ok || id.Name != "request" {
+		return "", ""
+	}
+	lit, ok := be.Y.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", ""
+	}
+	unq, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", ""
+	}
+	return sel.Sel.Name, unq
+}
+
+// isRequestFieldCompare reports whether a condition is
+// `request.<Field> == "<Value>"` or its negation.
+func isRequestFieldCompare(cond ast.Expr) bool {
+	if un, ok := cond.(*ast.UnaryExpr); ok && un.Op == token.NOT {
+		cond = un.X
+	}
+	be, ok := cond.(*ast.BinaryExpr)
+	return ok && be.Op == token.EQL && isRequestField(be.X) && isStringLit(be.Y)
+}
+
+func isRequestField(e ast.Expr) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	return ok && id.Name == "request"
+}
+
+func isStringLit(e ast.Expr) bool {
+	lit, ok := e.(*ast.BasicLit)
+	return ok && lit.Kind == token.STRING
+}
+
+// ctrlBranch is one controller call site and the request-field comparison that
+// guards it.
+type ctrlBranch struct {
+	Method string
+	Args   []string // arguments after ctx, as written
+	// Field is the request field the guard compares, e.g. "RequestType".
+	Field string
+	// Value is the literal the guard compares it against, e.g. "B".
+	Value string
+	// Guarded is false for an unguarded call — a handler that calls exactly one
+	// controller method with no branch in front of it.
+	Guarded bool
+}
+
+// envelopeCall is one response a handler body writes, as the gCtx method that
+// writes it. GinContext owns the status code, so the generated case asserts the
+// envelope the body actually chose instead of a status table the template
+// invented.
+type envelopeCall struct {
+	// Method is the GinContext method: SuccessJSON, FailureJSON, BadRequestJSON.
+	Method string
+	// Reached is the path condition under which the body writes it, as written
+	// in the source ("err != nil", "" when unconditional).
+	Reached string
+}
+
+// handlerEnvelope reads which response envelopes a handler body writes, and the
+// condition guarding each one.
+//
+// The template used to assert a fixed 500/204/200 table, but the mapping lives
+// in GinContext, not in the handler: the corpus answers Success→200,
+// Failure→404 and BadRequest→400, and every generated case asserted the wrong
+// one. Reading the body is also what distinguishes a genuine controller error
+// from a request the binder refused before the controller ran.
+func handlerEnvelope(fd *ast.FuncDecl, fset *token.FileSet) []envelopeCall {
+	var out []envelopeCall
+	if fd == nil || fd.Body == nil {
+		return out
+	}
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch sel.Sel.Name {
+		case "SuccessJSON", "FailureJSON", "BadRequestJSON":
+			out = append(out, envelopeCall{Method: sel.Sel.Name})
+		}
+		return true
+	})
+	return out
 }
 
 // fieldInfo is one struct field of the models layer.
@@ -218,6 +387,12 @@ type fieldInfo struct {
 	Type string
 	JSON string
 	DB   string
+	// Validate is the field's validator constraint as written, from either
+	// the `validate` or `binding` tag. A handler binds its request through
+	// c.BindJSON, which enforces it, so a synthesized value that violates it
+	// is refused with 400 before the controller is called — which is why the
+	// value has to be chosen against the tag rather than against the type.
+	Validate string
 }
 
 // modelsInfo is the service's models inventory (model/ and models/ both).
@@ -445,6 +620,10 @@ func extractModels(serviceDir string) *modelsInfo {
 						tag, _ := strconv.Unquote(f.Tag.Value)
 						info.JSON = tagValue(tag, "json")
 						info.DB = tagValue(tag, "db")
+						info.Validate = tagValue(tag, "validate")
+						if info.Validate == "" {
+							info.Validate = tagValue(tag, "binding")
+						}
 					}
 					if info.Name != "" {
 						fields = append(fields, info)
@@ -457,14 +636,16 @@ func extractModels(serviceDir string) *modelsInfo {
 	return mi
 }
 
+// tagValue reads one key out of a Go struct tag.
+//
+// It used to split the tag on spaces and unquote the remainder, which silently
+// truncated any tag whose value contains a space — and the corpus is full of
+// them: `validate:"oneof=W X Y"` was read as `oneof=W`, so the allowed set
+// collapsed to a single option and the two fields that most often fail
+// validation were never adjusted at all. reflect.StructTag is the parser that
+// handles quoting correctly.
 func tagValue(tag, key string) string {
-	for _, part := range strings.Split(tag, " ") {
-		if strings.HasPrefix(part, key+":") {
-			v, _ := strconv.Unquote(strings.TrimPrefix(part, key+":"))
-			return v
-		}
-	}
-	return ""
+	return reflect.StructTag(tag).Get(key)
 }
 
 // paramsOf returns a function's parameters in declaration order, one entry
@@ -1138,6 +1319,10 @@ func extractHandlerFact(fd *ast.FuncDecl, fset *token.FileSet) *handlerFact {
 			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
 				if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "controller" {
 					f.CtrlCall = sel.Sel.Name
+					f.CtrlBranches = append(f.CtrlBranches, ctrlBranch{
+						Method: sel.Sel.Name,
+						Args:   ctrlCallArgsOf(x, fset),
+					})
 					// The call site's own argument list is the only
 					// trustworthy statement of what the controller method
 					// receives. A handler may bind a request and not pass
@@ -1168,10 +1353,54 @@ func extractHandlerFact(fd *ast.FuncDecl, fset *token.FileSet) *handlerFact {
 		}
 		return true
 	})
+	f.Envelope = handlerEnvelope(fd, fset)
+	f.CtrlBranches = matchBranchesToCalls(f.CtrlBranches, fd.Body.List)
 	if f.CtrlCall == "" {
 		return nil
 	}
 	return f
+}
+
+// matchBranchesToCalls attaches each routing guard to the call site it guards.
+//
+// Both are collected in source order — the calls by ast.Inspect over the body,
+// the guards by scanning its top-level statements — so they line up. A guard
+// with no call of its own, or a call no guard claims, is left unguarded rather
+// than paired by guesswork.
+func matchBranchesToCalls(branches []ctrlBranch, stmts []ast.Stmt) []ctrlBranch {
+	guards := routingGuards(stmts)
+	if len(branches) == 0 || len(guards) == 0 {
+		return branches
+	}
+	for i := range branches {
+		if i >= len(guards) {
+			break
+		}
+		field, value := guardFieldAndValue(guards[i].Cond)
+		if field == "" {
+			continue
+		}
+		branches[i].Field = field
+		branches[i].Value = value
+		branches[i].Guarded = true
+	}
+	return branches
+}
+
+// routingGuards returns the top-level if statements that route to a controller
+// call, in source order.
+func routingGuards(stmts []ast.Stmt) []*ast.IfStmt {
+	var out []*ast.IfStmt
+	for _, s := range stmts {
+		ifs, ok := s.(*ast.IfStmt)
+		if !ok || ifs.Body == nil || !isRequestFieldCompare(ifs.Cond) {
+			continue
+		}
+		if blockHasControllerCall(ifs.Body) {
+			out = append(out, ifs)
+		}
+	}
+	return out
 }
 
 // renderExpr prints an expression/type back to Go source.

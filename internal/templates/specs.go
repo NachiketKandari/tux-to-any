@@ -420,12 +420,29 @@ type HandlerCase struct {
 	ReqFields     []CtrlCaseField
 	Input         string // the mockInput literal
 	ExpectedError string // "" = success path
-	HTTPCode      string // pre-rendered status literal ("" = omit, success path)
+	// ExpectFailure marks a case that must produce the failure envelope
+	// WITHOUT an expected message.
+	//
+	// The binder's error is a go-playground validator rendering, so its text
+	// is a third-party library's wording. Asserting on it would break the
+	// generated test on a validator upgrade while testing nothing about this
+	// service; the envelope's own Status string is this service's choice, via
+	// the BadRequestJSON call in its body, and that is asserted instead.
+	ExpectFailure bool
+	// HTTPCode used to be a pre-rendered status literal asserted directly.
+	// It is gone: the code is the host GinContext's choice, not the handler
+	// body's, so it is not knowable from the service. The envelope's own
+	// Status string and error description are asserted instead.
+	HTTPCode string
 }
 
 // CasesOrDerived returns Cases when the GT-7 case table was built; the
-// legacy three-case table (Error / Failure / Success) from the pre-GT-7
-// fields otherwise — template-data compatibility for external callers.
+// legacy two-case table from the pre-GT-7 fields otherwise — template-data
+// compatibility for external callers.
+//
+// The legacy "Failure" row mocked (nil, nil) and then asserted a "No Data
+// Found" error, which no path produces: a nil error takes the handler's
+// success edge. It is now the empty-result success case it actually was.
 func (d TestHandlerMethodData) CasesOrDerived() []HandlerCase {
 	if len(d.Cases) > 0 {
 		return d.Cases
@@ -438,8 +455,8 @@ func (d TestHandlerMethodData) CasesOrDerived() []HandlerCase {
 		req = append(req, CtrlCaseField{Name: f.Name, Value: f.Value})
 	}
 	return []HandlerCase{
-		{Desc: d.Name + "Error", ReqFields: req, Input: `[]any{nil, errors.New("error while fetching data")}`, ExpectedError: "error while fetching data", HTTPCode: "http.StatusInternalServerError"},
-		{Desc: "Failure", ReqFields: req, Input: "[]any{nil, nil}", ExpectedError: "No Data Found", HTTPCode: "http.StatusNoContent"},
+		{Desc: d.Name + "Error", ReqFields: req, Input: `[]any{nil, errors.New("error while fetching data")}`, ExpectedError: "error while fetching data"},
+		{Desc: "EmptyResult", ReqFields: req, Input: "[]any{nil, nil}"},
 		{Desc: "Success", ReqFields: req, Input: d.SuccessInput},
 	}
 }

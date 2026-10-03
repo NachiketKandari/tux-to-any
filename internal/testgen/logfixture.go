@@ -482,6 +482,9 @@ func (l *LogFixtureSource) fieldValues(structName string, response bool) [][2]st
 		key := jsonBase(f.JSON)
 		if raw, ok := pickJSONKey(values, key); ok {
 			if prim, ok := logPrimitiveOf(raw); ok {
+				// A logged value was accepted by the service's own binder, so
+				// it already satisfies the validator. Only the synthesized
+				// fallback below has to be chosen against the tag.
 				out = append(out, [2]string{f.Name, goStringBody(prim.Text)})
 				continue
 			}

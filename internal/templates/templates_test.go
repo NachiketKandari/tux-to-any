@@ -629,13 +629,17 @@ func TestRenderTestHandlerFile(t *testing.T) {
 		"func (suite *NavHandlerSuite) TestNavList() {",
 		"desc: \"NavListError\",",
 		"CompCode: \"FML_COMP_CD\",",
-		"expectedErrorHttpCode: http.StatusInternalServerError,",
+		// The envelope's own Status and description, not a numeric code: the
+		// code belongs to the host GinContext, which is not in this package.
+		"assert.Contains(t, httpResponse.Error.Description, testCase.expectedError)",
 		"request := models.NavRequest{CompCode: testCase.CompCode}",
 		"utils.CreateTestGinContext(http.MethodPost, request, nil, nil, nil)",
 		"suite.navHandler.NavList(ctx)",
 		"var httpResponse network.HttpResponse",
 		"utils.TypeConverter[[]*models.NavResponse](httpResponse.Data)",
-		"desc: \"Failure\"",
+		// The nil-error case is an empty success, not a "No Data Found"
+		// failure: a nil error takes the handler's success edge.
+		"desc: \"EmptyResult\"",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("handler test file missing %q\n---\n%s", want, out)

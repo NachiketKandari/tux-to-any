@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"demo-be/pkg/network"
 	"demo-be/pkg/services/demo/controller"
 	"demo-be/pkg/services/demo/models"
 
@@ -102,4 +103,29 @@ func (f *demoHandler) OrderAudit(c *gin.Context) {
 		return
 	}
 	c.JSON(200, data)
+}
+
+// OrderEnvelope is the corpus's GinContext shape: it writes a typed envelope
+// for each outcome rather than c.JSON.
+//
+// Every handler above writes c.JSON(200, …) and returns silently on error, so
+// none of them has a failure envelope for the case table to be read from. This
+// one does, which is what makes the generated cases — one per envelope the body
+// actually writes — checkable.
+func (f *demoHandler) OrderEnvelope(c *gin.Context) {
+	var request models.OrderRequest
+	gCtx := &network.GinContext{Context: c}
+
+	if err := c.BindJSON(&request); err != nil {
+		gCtx.BadRequestJSON(err, request)
+		return
+	}
+
+	data, err := f.controller.OrderList(c, &request)
+	if err != nil {
+		gCtx.FailureJSON(err)
+		return
+	}
+
+	gCtx.SuccessJSON(data)
 }

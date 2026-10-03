@@ -463,7 +463,11 @@ func TestGT7LogDrivenGeneration(t *testing.T) {
 		`"909"`,
 		`"Logged-Error"`,
 		`"Question number must be unique across customer type"`,
-		"expectedErrorHttpCode: 500",
+		// The logged error's own description is asserted, not a numeric
+		// status code: the code belongs to the host's GinContext, which is
+		// outside the scanned service. The old pin demanded 500, which this
+		// service never returns.
+		`assert.Contains(t, httpResponse.Error.Description, testCase.expectedError)`,
 		`[]any{"Question Added Successfully", nil}`,
 	} {
 		if !strings.Contains(hOut, want) {

@@ -19,6 +19,9 @@ type DemoHandler interface {
 	// corpus's ViewQuestions does. The generated EXPECT must use one call
 	// site's name AND that call site's own arguments.
 	OrderEither(c *gin.Context)
+	// OrderEnvelope writes a GinContext envelope per outcome, so its generated
+	// cases are one per envelope the body actually writes.
+	OrderEnvelope(c *gin.Context)
 }
 
 func NewDemoHandler(controller controller.DemoController) DemoHandler {

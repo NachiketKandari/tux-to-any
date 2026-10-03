@@ -48,10 +48,73 @@ func stageSources(res *Result, opts Options, svcs []*serviceCtx) {
 				stageOne(res, opts.BaseDir, sc, dir, name)
 			}
 		}
+		stageSupport(res, opts.BaseDir, sc)
 		if sc.moduleRoot != "" {
 			stageOne(res, opts.BaseDir, sc, sc.moduleRoot, "go.mod")
 		}
 	}
+}
+
+// stageSupport copies the module's host packages into the out tree, keeping
+// their module-relative layout.
+//
+// Staging used to copy only the scanned service's own db/controller/handler/
+// models directories. A generated suite also imports the module's support
+// packages — the handler test imports the network package for HttpResponse,
+// and a controller suite that opens a transaction imports utils for the
+// sqlmock handle — so without them the staged tree does not compile:
+//
+//	package gentestgate/pkg/network is not in std
+//
+// That is a missing file, not a bad import: the target tree is never modified,
+// so the out tree has to carry what the generated code references.
+//
+// Everything outside the service dir is copied verbatim, with no collision
+// renaming: these files are being restored at their own paths, not merged into
+// the service's packages.
+func stageSupport(res *Result, baseDir string, sc *serviceCtx) {
+	if sc.moduleRoot == "" {
+		return
+	}
+	absSvc, err := filepath.Abs(sc.dir)
+	if err != nil {
+		absSvc = sc.dir
+	}
+	absRoot, err := filepath.Abs(sc.moduleRoot)
+	if err != nil || absRoot == absSvc {
+		return
+	}
+	filepath.Walk(sc.moduleRoot, func(p string, info os.FileInfo, werr error) error {
+		if werr != nil || info == nil || info.IsDir() {
+			return nil //nolint:nilerr // a stat failure just skips the entry
+		}
+		if filepath.Ext(p) != ".go" || strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		// The service's own packages were staged above, into their renamed
+		// destinations; copying them again would duplicate every symbol.
+		absP, aerr := filepath.Abs(p)
+		if aerr == nil && strings.HasPrefix(absP, absSvc+string(filepath.Separator)) {
+			return nil
+		}
+		rel, rerr := filepath.Rel(sc.moduleRoot, p)
+		if rerr != nil {
+			return nil //nolint:nilerr // outside the module: not ours to stage
+		}
+		dst := filepath.Join(baseDir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return nil //nolint:nilerr // best effort, as stageOne is
+		}
+		data, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return nil //nolint:nilerr // best effort, as stageOne is
+		}
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			return nil //nolint:nilerr // best effort, as stageOne is
+		}
+		res.Staged = append(res.Staged, dst)
+		return nil
+	})
 }
 
 // stageOne writes one source file into the out tree, renaming on collision.

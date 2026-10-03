@@ -830,9 +830,59 @@ func caseRefs(values [][2]string) string {
 	return strings.Join(refs, ", ")
 }
 
-// renderHandlerMethod renders one handler suite method block: gin-context
-// table cases (Error 500 / Failure 204 / Success 200) over the mocked
-// controller, plus the logged-error case from the first failed trace.
+// routingGuardFor returns the request field and literal that select the
+// controller call site the generated EXPECT names, or empty strings when the
+// handler makes a single unguarded call.
+//
+// Only a ROUTED handler needs this. With one call and no branch in front of
+// it, every request reaches it and the fixture value is free.
+func routingGuardFor(f *handlerFact) (field, value string) {
+	if f == nil {
+		return "", ""
+	}
+	// CtrlCall is the call site the EXPECT was written from. Its own branch is
+	// the one the request has to take.
+	for _, b := range f.CtrlBranches {
+		if !b.Guarded {
+			continue
+		}
+		if b.Method == f.CtrlCall {
+			return b.Field, b.Value
+		}
+	}
+	return "", ""
+}
+
+// invalidReqFields returns a copy of the request fields with every value made
+// unusable, for the BadRequest case.
+//
+// The point is to reach the binder's own rejection, so the value has to be
+// empty: the corpus marks its required fields `binding:"required,…"`, and an
+// empty string trips that. Overwriting the value rather than dropping the
+// field keeps the struct shape the other cases share.
+func invalidReqFields(fields []templates.ReqField) []templates.CtrlCaseField {
+	out := make([]templates.CtrlCaseField, 0, len(fields))
+	for _, f := range fields {
+		bad := templates.CtrlCaseField{Name: f.Name, Value: "", Type: f.Type}
+		// A slice or struct field needs a typed zero, not "". Emitting ""
+		// for a []string field was the compile error "cannot use \"\"
+		// (untyped string constant) as []string value in struct literal" —
+		// the BadRequest case has to stay compilable even though nothing
+		// reads its fields.
+		if strings.HasPrefix(f.Type, "[]") {
+			bad.Literal = f.Type + "{}"
+			bad.Value = ""
+		} else if f.Type != "" && f.Type != "string" {
+			bad.Literal = f.Type + "{}"
+		}
+		out = append(out, bad)
+	}
+	return out
+}
+
+// renderHandlerMethod renders one handler suite method block: gin-context table
+// cases over the mocked controller, one per response the body actually writes,
+// plus the logged-error case from the first failed trace.
 func renderHandlerMethod(u *unit) (string, error) {
 	sc := u.sc
 	f := u.handler
@@ -842,10 +892,25 @@ func renderHandlerMethod(u *unit) (string, error) {
 	reqValues := fieldValuesFor(fx, reqBase, false)
 	var reqFields []templates.ReqField
 	successFields := make([]templates.CtrlCaseField, 0, len(reqValues))
+	// The routing field's value must select the branch the EXPECT was written
+	// for. A handler that routes one field to two controller methods keeps only
+	// one call site, so the value has to be forced to that branch's literal —
+	// otherwise the mock is asked for a method the request never calls:
+	//
+	//	Unexpected call to Mock…Controller.ViewQuestions: there are no
+	//	expected calls of the method "ViewQuestions"
+	guardField, guardValue := routingGuardFor(f)
 	for _, fv := range reqValues {
 		typ, lit := fx.FieldLit(reqBase, fv[0])
-		reqFields = append(reqFields, templates.ReqField{Name: fv[0], Value: fv[1], Type: typ, Literal: lit})
-		successFields = append(successFields, templates.CtrlCaseField{Name: fv[0], Value: fv[1], Type: typ, Literal: lit})
+		value := fv[1]
+		if fv[0] == guardField {
+			value = guardValue
+			if typ == "" || typ == "string" {
+				lit = strconv.Quote(value)
+			}
+		}
+		reqFields = append(reqFields, templates.ReqField{Name: fv[0], Value: value, Type: typ, Literal: lit})
+		successFields = append(successFields, templates.CtrlCaseField{Name: fv[0], Value: value, Type: typ, Literal: lit})
 	}
 	expectExpr := responseLiteral(sc, fx, resp)
 	// Every mockInput below is shaped by the CALLED method's declaration, not
@@ -862,27 +927,73 @@ func renderHandlerMethod(u *unit) (string, error) {
 	payload := func(value, errExpr string) string {
 		return returnPayloadLiteral(sig.Results, sig.Response, value, errExpr)
 	}
-	cases := []templates.HandlerCase{
-		{
-			Desc:          f.Name + "Error",
-			ReqFields:     successFields,
-			Input:         payload("nil", `errors.New("error while fetching data")`),
-			ExpectedError: "error while fetching data",
-			HTTPCode:      "http.StatusInternalServerError",
-		},
-		{
-			Desc:          "Failure",
-			ReqFields:     successFields,
-			Input:         payload("nil", "nil"),
-			ExpectedError: "No Data Found",
-			HTTPCode:      "http.StatusNoContent",
-		},
-		{
-			Desc:      "Success",
-			ReqFields: successFields,
-			Input:     payload(expectExpr, "nil"),
-		},
+	// Which envelopes this body actually writes decides which cases exist and
+	// what they assert.
+	//
+	// The old table was invented: it asserted 500 for a controller error and
+	// 204 for "No Data Found", neither of which the service produces. GinContext
+	// answers Success→200, Failure→404 and BadRequest→400, so every one of
+	// those assertions was wrong by construction. The status code is not even
+	// knowable here — it lives in the host's network package, outside the
+	// service being scanned — so the generated case asserts the envelope's
+	// own Status string and error description, which IS in the body, and leaves
+	// the numeric code alone.
+	env := map[string]bool{}
+	for _, e := range f.Envelope {
+		env[e.Method] = true
 	}
+	writesFailure := env["FailureJSON"]
+	writesBadRequest := env["BadRequestJSON"]
+
+	cases := []templates.HandlerCase{}
+	if writesFailure {
+		cases = append(cases, templates.HandlerCase{
+			Desc:      f.Name + "Error",
+			ReqFields: successFields,
+			Input:     payload("nil", `errors.New("error while fetching data")`),
+			// The body forwards err to FailureJSON, which reports it, so the
+			// description carries the message the mock returned.
+			ExpectedError: "error while fetching data",
+		})
+	}
+	if writesFailure {
+		// A nil error is NOT a failure. The old "Failure" case mocked
+		// (nil, nil) and then asserted a "No Data Found" error that the
+		// handler never produces — the handler takes the success path and
+		// answers 200/204. The nil-payload case is the one that genuinely
+		// exercises an empty success, so it asserts success.
+		cases = append(cases, templates.HandlerCase{
+			Desc:      "EmptyResult",
+			ReqFields: successFields,
+			Input:     payload("nil", "nil"),
+		})
+	}
+	if writesBadRequest {
+		// The binder refuses before the controller runs, so there is no
+		// controller EXPECT to satisfy and no mock payload at all.
+		//
+		// What is asserted is the envelope's own failure Status, not the
+		// validator's message text. gin's binding error is a
+		// validator.ValidationErrors rendering, and asserting on it would
+		// pin a third-party library's wording — the generated test would
+		// break on a validator upgrade while testing nothing about this
+		// service. The status string IS this service's choice, via the
+		// BadRequestJSON call the body makes.
+		cases = append(cases, templates.HandlerCase{
+			Desc:      "BadRequest",
+			ReqFields: invalidReqFields(reqFields),
+			// No Input: the EXPECT block is skipped, which is exactly right
+			// because the controller must not be called.
+			Input:         "nil",
+			ExpectedError: "", // failure status, no message assertion
+			ExpectFailure: true,
+		})
+	}
+	cases = append(cases, templates.HandlerCase{
+		Desc:      "Success",
+		ReqFields: successFields,
+		Input:     payload(expectExpr, "nil"),
+	})
 	if mv != nil && mv.FailedTrace() != nil {
 		if text, code := failureText(mv); text != "" {
 			names := make([]string, 0, len(reqValues))

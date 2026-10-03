@@ -164,9 +164,12 @@ func (a *AssumedFixtureSource) qualified(name string) string {
 	return name
 }
 
-// fieldType resolves a field's declared Go type. elem is the element type with
-// any slice/array prefix and package qualifier stripped, and isSlice reports
-// whether a slice prefix was present.
+// fieldType resolves a field's declared Go type. elem is the element type
+// unqualified and isSlice reports whether a slice prefix was present.
+//
+// elem stays as written in models; FieldLit qualifies it before rendering,
+// because the generated case struct lives in another package and needs
+// `models.QnA` where the model says `QnA`.
 func (a *AssumedFixtureSource) fieldType(structName, field string) (typ, elem string, isSlice bool) {
 	if a.Models == nil {
 		return "", "", false
@@ -177,6 +180,10 @@ func (a *AssumedFixtureSource) fieldType(structName, field string) (typ, elem st
 		}
 		t := f.Type
 		if strings.HasPrefix(t, "[]") {
+			// The element stays as DECLARED. FieldLit qualifies it itself
+			// before rendering, and pre-qualifying here made it look up
+			// "models.QnA" in the struct table, miss, and return an empty
+			// composite literal where the element's own fields belong.
 			return t, t[2:], true
 		}
 		return f.Type, unqualify(t), false
@@ -221,15 +228,17 @@ func (a *AssumedFixtureSource) fieldLiteralOf(f fieldInfo, depth int) string {
 	}
 	switch {
 	case isSlice && elem == "string":
-		return "[]string{" + strconv.Quote(placeholder(f.Name)) + "}"
+		return "[]string{" + validatedLit(f.Validate, "string", strconv.Quote(placeholder(f.Name)), false) + "}"
 	case typ == "string":
-		return strconv.Quote(placeholder(f.Name))
+		return validatedLit(f.Validate, "string", strconv.Quote(placeholder(f.Name)), false)
 	case typ == "bool":
 		return "false"
 	case typ == "int" || typ == "int8" || typ == "int16" || typ == "int32" || typ == "int64" ||
 		typ == "uint" || typ == "uint8" || typ == "uint16" || typ == "uint32" || typ == "uint64" ||
 		typ == "float32" || typ == "float64":
-		return "0"
+		// A zero is a legal number but not a legal positive one, so a
+		// positivenum/gte tag has to move it.
+		return validatedLit(f.Validate, typ, "0", false)
 	case strings.HasPrefix(typ, "sql.Null") || typ == "time.Time":
 		return typ + "{}"
 	case elem != "" && depth <= 2 && a.Models != nil && a.knownStruct(elem):
@@ -270,9 +279,29 @@ func (a *AssumedFixtureSource) FieldValues(structName string) [][2]string {
 		if i := strings.Index(name, ","); i >= 0 {
 			name = name[:i]
 		}
-		out = append(out, [2]string{f.Name, placeholder(name)})
+		out = append(out, [2]string{f.Name, validatedBody(f, name)})
 	}
 	return out
+}
+
+// validatedBody returns a request field's body text — the value a case struct
+// carries, unquoted — chosen to satisfy the field's validator tag.
+//
+// The body is escaped for embedding between quotes by the template, so the
+// tag is applied to the escaped form and the result is escaped back. A tag
+// with no rule this file models leaves the placeholder alone.
+func validatedBody(f fieldInfo, name string) string {
+	body := placeholder(name)
+	if f.Validate == "" {
+		return body
+	}
+	// validatedLit works on quoted literals for string fields; strip the
+	// quotes so a tag like oneof=A B reaches it as text.
+	lit := validatedLit(f.Validate, "string", strconv.Quote(body), false)
+	if unq, err := strconv.Unquote(lit); err == nil {
+		return unq
+	}
+	return body
 }
 
 // ZeroExpr implements FixtureSource.
