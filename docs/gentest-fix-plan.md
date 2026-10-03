@@ -77,6 +77,100 @@ and the handler layer stopped being a second copy of the same bug.
 only ever sets `FullTest` together with `Stage`. The one gate that actually
 RUNS the generated tests was dead in every real invocation.
 
+## 0d. Quick-win plan
+
+Five defects are small enough to fix in one sitting each. Ordered by
+effort/benefit, not by severity. Every item is **pin first**: a test that fails
+before the fix and passes after, since a fix with no pin is how the current state
+was reached.
+
+**Not in this batch**, deliberately:
+
+  - **Controller logroute wiring** (4 of 5 cases fail). Feature-sized — three
+    coordinated changes, already specified in §0c. Calling it a quick win is how
+    it got reverted once already.
+  - **Hardcoded host package paths** (`pkg/logger` / `pkg/network` /
+    `pkg/utils`). Medium: the answer is in the handler body's own imports, which
+    are already parsed, but it touches package resolution, staging and the
+    templates together. Do it right after this batch, not inside it.
+  - **db coverage 92 vs the human suite's 97.** A coverage gap, not a defect.
+
+### Q1 — stop emitting `utils.RegisterValidations` unconditionally
+
+`internal/templates/templates/test_handler_file.tmpl:48` writes the call
+unconditionally. It only compiles if the target's `pkg/utils` actually declares
+it. This is the first thing that breaks on `-in-place`, and it will break on any
+repo that never registered gin validators.
+
+Fix: gate the call on the symbol existing in the scanned utils package. That
+package is already parsed for `NewSqlxMockDB` / `TypeConverter`, so this is a
+lookup, not new machinery.
+
+Pin: a fixture whose `pkg/utils` lacks the helper must not emit the call; one
+that has it still must.
+
+### Q2 — stage only the packages the generated tests import
+
+`stageSupport` (`internal/testgen/stage.go:75`) walks the whole module. Measured
+on the corpus: 7 files copied, 3 packages imported, **4 dead weight** —
+`pkg/repo/repo.go`, `pkg/services/common/db/{mock_user,user}.go`,
+`pkg/services/common/utils/utils.go`.
+
+Fix: copy the host package directories by name instead of walking. The set is
+already known, and already emitted into the templates' imports.
+
+Risk to watch: a host package that itself imports something outside the set
+would stop resolving. That is a *sharper* failure than copying too much, so the
+pin must assert the resolved import list, not just a file count.
+
+Pin: the 4 dead-weight files absent from a staged tree, `pkg/utils` present.
+
+### Q3 — extract an inline backtick query literal
+
+`dbFact.Query` is filled from a `query` variable (`extract.go:764`). A method
+passing the literal straight to `ExecContext` gets an empty `Query`, which
+defeats `isDeleteTx`'s DELETE-prefix test and silently changes what the case
+asserts.
+
+Fix: also accept a string literal at the call site's argument position.
+
+Pin: a corpus-shaped method with the literal inline yields the same `Query` as
+the variable form.
+
+### Q4 — a struct-typed bind argument renders as `nil`
+
+`gen.go:1004` and `gen.go:1054` emit a literal `nil` for a parameter whose type
+is a struct. It compiles, then nil-panics at run time — the worst failure shape,
+because it passes every compile gate.
+
+Fix: emit a typed zero (`models.X{}`) from the parameter's declared type, which
+the call site already carries.
+
+Pin: no generated argument literal is `nil` when the declared parameter type is
+a struct.
+
+### Q5 — the gomock major disagreement  ← root cause NOT yet isolated
+
+`treeGomock` picks the gomock major for the **templates** from `go.mod`; the
+**mockgen invocation** takes it from `t.Gomock`. Observed failure:
+
+    cannot use gomock.NewController(suite.T())
+        (value of type *"github.com/golang/mock/gomock".Controller)
+        as *"go.uber.org/mock/gomock".Controller
+
+**Probed, and the obvious explanation is wrong.** For the fixture `treeGomock`
+returns `github.com/golang/mock` — `declaresRequire` is true for *both* majors
+and legacy is checked first — so the templates correctly import legacy. The
+generated mock is nevertheless uber-major, and `mockgenCmd` does appear to
+thread `t.Gomock` through to `go run <module>@<version>`.
+
+So the major is either dropped between the two call sites, or the two decisions
+read different `sc.moduleRoot` values, or F10's "keep an existing mock" rule
+leaves an uber-major mock in place while the template follows `go.mod`.
+**Not established.** The first task is a pin asserting the two decisions agree,
+which will localise it; guessing at the fix before that is exactly how the
+earlier wrong assumptions in this file happened.
+
 ## 0c. State at `3e56f02` — the control-flow work, and the one blocker left
 
 **To run this on your own repo, see [gentest-running.md](gentest-running.md).**
