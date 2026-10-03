@@ -80,3 +80,20 @@ func (s *demoController) OrderHandle(ctx context.Context) (data *sqlx.DB, err er
 func (s *demoController) OrderEdit(ctx context.Context, request *models.OrderRequest) (err error) {
 	return s.store.EditOrder(ctx, request.CompCode)
 }
+
+// OrderStatus returns a plain string, and its success path is a CONSTANT. The
+// generator knew the response type and nothing about the value, so the
+// deterministic route asserted "" here:
+//
+//	expected: "order updated"
+//	actual  : ""
+//
+// and the log route passed because it supplies a real value. A scalar response
+// has no fields to map, which is why the body's own literal is the only other
+// source available.
+func (s *demoController) OrderStatus(ctx context.Context, request *models.OrderRequest) (string, error) {
+	if err := s.store.EditOrder(ctx, request.CompCode); err != nil {
+		return "", err
+	}
+	return "order updated", nil
+}

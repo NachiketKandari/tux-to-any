@@ -146,8 +146,48 @@ type ctrlFact struct {
 	RequestType  string // models.NavRequest
 	ResponseType string
 	StoreCalls   []storeCall
-	Passthrough  bool   // body returns the store result without field mapping
-	Src          string // verbatim function source (LLM prompt input)
+	Passthrough  bool // body returns the store result without field mapping
+	// ScalarResponse is a basic-literal value the body returns on SUCCESS,
+	// e.g. `return "Marks Edited Successfully", nil`. It is only set when
+	// ResponseType is a basic scalar, where a struct-mapping expectation is
+	// meaningless and the only alternative was the zero value.
+	//
+	// Without it the deterministic route asserted "" against a method that
+	// returns a constant string, because the tool knew the response TYPE and
+	// nothing about the VALUE. The log route already supplies the value; this
+	// is the third source, and the body's own literal outranks a guess.
+	ScalarResponse string
+	Src            string // verbatim function source (LLM prompt input)
+}
+
+// scalarSuccessReturn finds the literal a controller body returns on success:
+// a `return <basic literal>, nil`. The nil error is what distinguishes it from
+// the method's failure returns, which pair the same shape with a real error.
+//
+// It reports false for anything else — a variable, a call, a composite literal,
+// or a model response — so an unrecognised body keeps the zero value rather
+// than gaining an invented expectation.
+func scalarSuccessReturn(fd *ast.FuncDecl, fset *token.FileSet, responseType string) (string, bool) {
+	if !isScalarType(responseType) {
+		return "", false
+	}
+	for _, r := range returnsIn(fd.Body) {
+		if len(r.results) < 2 || !isNilIdent(r.results[len(r.results)-1]) {
+			continue
+		}
+		lit := r.results[0]
+		switch v := lit.(type) {
+		case *ast.BasicLit:
+			return renderExpr(v, fset), true
+		case *ast.Ident:
+			// A named constant: true/false and the predeclared zero values.
+			switch v.Name {
+			case "true", "false", "nil", "iota":
+				return v.Name, true
+			}
+		}
+	}
+	return "", false
 }
 
 // handlerFact is one gin handler's extracted shape.
@@ -184,6 +224,12 @@ type modelsInfo struct {
 type ctrlIfaceSig struct {
 	Request  string // models.NavHistoryRequest (pointer stripped)
 	Response string // []*models.NavHistoryResponse (first result, as written)
+	// Results is the declared result COUNT, for the same reason the store
+	// interface records it: a handler EXPECT's Return payload has to match
+	// the method's arity, and `[]any{nil, nil}` is wrong for a controller
+	// method that returns only `error`. The first result's TYPE cannot answer
+	// it — `error` is a type like any other.
+	Results int
 }
 
 // layerFacts is one layer directory's extraction outcome.
@@ -337,6 +383,7 @@ func extractCtrlIface(serviceDir string) map[string]ctrlIfaceSig {
 						}
 					}
 					if ft.Results != nil && ft.Results.NumFields() > 0 {
+						sig.Results = ft.Results.NumFields()
 						sig.Response = renderExpr(ft.Results.List[0].Type, fset)
 					}
 					if sig.Response != "" {
@@ -1008,6 +1055,9 @@ func extractCtrlFact(fd *ast.FuncDecl, fset *token.FileSet, dbIface map[string]d
 	}
 	if fd.Type.Results != nil && fd.Type.Results.NumFields() > 0 {
 		f.ResponseType = renderExpr(fd.Type.Results.List[0].Type, fset)
+	}
+	if lit, ok := scalarSuccessReturn(fd, fset, f.ResponseType); ok {
+		f.ScalarResponse = lit
 	}
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)

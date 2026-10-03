@@ -8,6 +8,7 @@ package testgen
 
 import (
 	"context"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -277,40 +278,41 @@ func TestStoreCallReadsArityFromTheInterface(t *testing.T) {
 func TestControllerExpectHonoursStoreArity(t *testing.T) {
 	cases := []struct {
 		name    string
+		method  string
 		sig     dbIfaceSig
 		want    string
 		notWant string
 	}{
 		{
 			name:    "no-arg store method takes no matcher",
-			sig:     dbIfaceSig{ArgCount: 0, Result: "*sqlx.DB"},
+			method:  "GetDB",
+			sig:     dbIfaceSig{ArgCount: 0, Result: "*sqlx.DB", Results: 1},
 			want:    "GetDB().",
 			notWant: "GetDB(gomock.Any())",
 		},
 		{
-			name: "a ctx-taking method keeps its matcher",
-			sig:  dbIfaceSig{ArgCount: 1, Result: "*models.RiskResponse"},
-			want: "GetByCode(gomock.Any()",
+			name:   "a ctx-taking method keeps its matcher",
+			method: "GetByCode",
+			sig:    dbIfaceSig{ArgCount: 1, Result: "*models.RiskResponse", Results: 2},
+			want:   "GetByCode(gomock.Any()",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			data := templates.TestControllerMethodData{
+			out, err := renderTestCtrlMethod(templates.TestControllerMethodData{
 				SuiteName: "RiskProfileControllerSuite",
 				StoreVar:  "rpStore",
 				CtrlVar:   "rpController",
 				Name:      "Get",
 				Calls: []templates.CtrlCall{{
-					Method:        pickMethod(tc.sig),
-					Field:         "mockInput",
-					TakesCtx:      tc.sig.ArgCount != 0,
-					ReturnsHandle: tc.sig.Result == "*sqlx.DB",
+					Method:   tc.method,
+					Field:    "mockInput",
+					TakesCtx: tc.sig.ArgCount != 0,
 				}},
 				Cases: []templates.CtrlCase{{
 					Desc: "Success", Inputs: []string{"[]any{nil, nil}"},
 				}},
-			}
-			out, err := renderTestCtrlMethod(data)
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -320,18 +322,44 @@ func TestControllerExpectHonoursStoreArity(t *testing.T) {
 			if tc.notWant != "" && strings.Contains(out, tc.notWant) {
 				t.Errorf("must not contain %q:\n%s", tc.notWant, out)
 			}
-			if tc.sig.Result == "*sqlx.DB" && !strings.Contains(out, "Return(suite.sqlDB, nil)") {
-				t.Errorf("a handle-returning method must hand back the live connection:\n%s", out)
-			}
 		})
 	}
 }
 
-func pickMethod(sig dbIfaceSig) string {
-	if sig.Result == "*sqlx.DB" {
-		return "GetDB"
+// TestControllerExpectNeverNamesALiveHandle pins the correction to F8's own
+// first attempt, which the corpus run caught. A handle-returning store method
+// (`GetDB() *sqlx.DB`) had its EXPECT return `suite.sqlDB`, on the reasoning
+// that the controller hands that handle on to the db layer and a stub would
+// fail every query underneath it. The controller suite has no such field to
+// name:
+//
+//	suite.riskprofileStore.EXPECT().
+//	    GetDB().
+//	    Return(suite.sqlDB, nil)
+//
+//	vet: suite.sqlDB undefined (type *RiskprofileControllerSuiteController
+//	      has no field or method sqlDB)
+//
+// A controller suite MOCKS the store, so there is no live handle to hand over
+// and nil is the honest value. The db suite's own SetupSuite is where a real
+// connection is supplied — and F1's both-handles-live correction already
+// guarantees it, which is what made this special case unnecessary.
+func TestControllerExpectNeverNamesALiveHandle(t *testing.T) {
+	out, err := renderTestCtrlMethod(templates.TestControllerMethodData{
+		SuiteName: "RiskProfileControllerSuite", StoreVar: "rpStore",
+		CtrlVar: "rpController", Name: "Get",
+		Calls: []templates.CtrlCall{{Method: "GetDB", Field: "mockInput", TakesCtx: false}},
+		Cases: []templates.CtrlCase{{Desc: "Success", Inputs: []string{"[]any{nil}"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	return "GetByCode"
+	if strings.Contains(out, "suite.sqlDB") {
+		t.Errorf("a controller suite has no live handle; its store is a mock:\n%s", out)
+	}
+	if !strings.Contains(out, "Return(testCase.mockInput...)") {
+		t.Errorf("the EXPECT must return the case payload:\n%s", out)
+	}
 }
 
 // --- F5: slice-typed request fields keep their type --------------------------
@@ -670,6 +698,175 @@ func TestNoRequestControllerMethodParses(t *testing.T) {
 	// precisely the gap that let eleven findings through.
 	if _, err := parser.ParseFile(token.NewFileSet(), "x.go", "package db\n"+out, 0); err != nil {
 		t.Fatalf("no-request controller output does not parse: %v\n%s", err, out)
+	}
+}
+
+// TestScalarSuccessReturnReadsTheBody pins the third source for a scalar
+// response value. A `string` response has no fields to map, so responseLiteral
+// fell back to the type's zero value and the deterministic route asserted ""
+// against riskprofile's EditMarks, whose body says
+// `return "Marks Edited Successfully", nil`. The log route passed because it
+// supplies a real value; the body is the only source left for the assumed one.
+//
+// It pins scalarSuccessReturn rather than a rendered suite because three of
+// these methods have no store call, and extractCtrlFact declines a body without
+// one — so they never become facts and never reach the renderer. The wiring is
+// covered separately by the demo fixture's OrderStatus golden.
+func TestScalarSuccessReturnReadsTheBody(t *testing.T) {
+	src := "package controller\n\n" +
+		"// riskprofile's EditMarks shape.\n" +
+		"func EditMarks(ctx context.Context, request *models.EditMarksRequest) (string, error) {\n" +
+		"\tif err := store(ctx); err != nil {\n" +
+		"\t\treturn \"\", err\n" +
+		"\t}\n" +
+		"\treturn \"Marks Edited Successfully\", nil\n" +
+		"}\n\n" +
+		// A bool constant is an Ident, not a BasicLit.
+		"func Active(ctx context.Context) (bool, error) {\n" +
+		"\tif err := store(ctx); err != nil {\n" +
+		"\t\treturn false, err\n" +
+		"\t}\n" +
+		"\treturn true, nil\n" +
+		"}\n\n" +
+		// A numeric literal.
+		"func Count(ctx context.Context) (int64, error) {\n" +
+		"\treturn 7, nil\n" +
+		"}\n\n" +
+		// A model response must not take one: the field-mapping path owns it.
+		"func Rich(ctx context.Context) (*models.Rich, error) {\n" +
+		"\treturn \"not a scalar\", nil\n" +
+		"}\n\n" +
+		// A variable return is not a literal.
+		"func Computed(ctx context.Context) (string, error) {\n" +
+		"\tout := \"whatever\"\n" +
+		"\treturn out, nil\n" +
+		"}\n\n" +
+		// Every return pairs a real error with a literal; none is a success.
+		"func AlwaysFails(ctx context.Context) (string, error) {\n" +
+		"\treturn \"nope\", errors.New(\"boom\")\n" +
+		"}\n"
+
+	fset := token.NewFileSet()
+	af, err := parser.ParseFile(fset, "riskprofile.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, d := range af.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Body == nil || fd.Type.Results == nil || fd.Type.Results.NumFields() == 0 {
+			continue
+		}
+		resp := renderExpr(fd.Type.Results.List[0].Type, fset)
+		if lit, ok := scalarSuccessReturn(fd, fset, resp); ok {
+			got[fd.Name.Name] = lit
+		}
+	}
+	want := map[string]string{
+		"EditMarks":   `"Marks Edited Successfully"`,
+		"Active":      "true",
+		"Count":       "7",
+		"Rich":        "",
+		"Computed":    "",
+		"AlwaysFails": "",
+	}
+	for name, wantLit := range want {
+		if got[name] != wantLit {
+			t.Errorf("%s ScalarResponse = %q, want %q", name, got[name], wantLit)
+		}
+	}
+}
+
+// TestReturnPayloadLiteralReadsTheDeclaredShape pins the one rule both layers
+// now share for a mock's Return payload. Both layers had their own hardcoded
+// two-element (value, error) form and each failed on the corpus in its own way:
+//
+//	EditMarks is (…, error)        → "wrong number of arguments to Return …
+//	                                got 2, want 1"
+//	QuestionIdExists is (bool, error) → "argument 0 … is nil, but bool is not
+//	                                nillable"
+//	AddQuestion is (string, error) → "argument 0 … is nil, but string is not
+//	                                nillable"
+//
+// One rule over the declared shape covers all three, and the two failures that
+// were one layer apart stopped being two fixes.
+func TestReturnPayloadLiteralReadsTheDeclaredShape(t *testing.T) {
+	cases := []struct {
+		name    string
+		results int
+		typ     string
+		value   string
+		errExpr string
+		want    string
+	}{
+		{
+			name: "error-only method takes one element",
+			// riskprofile's EditMarks.
+			results: 1, typ: "error", value: "nil", errExpr: `errors.New("store error")`,
+			want: `[]any{errors.New("store error")}`,
+		},
+		{
+			name: "a single non-error result also takes one element",
+			// riskprofile's GetDB. A rule keyed on "error" missed this
+			// one, so it produced "wrong number of arguments to Return
+			// …GetDB: got 2, want 1" on the log route.
+			results: 1, typ: "*sqlx.DB", value: "nil", errExpr: "nil",
+			want: `[]any{nil}`,
+		},
+		{
+			name:    "a single scalar result takes its zero, not nil",
+			results: 1, typ: "string", value: "nil", errExpr: "nil",
+			want: `[]any{""}`,
+		},
+		{
+			name: "a bool result cannot take nil",
+			// riskprofile's QuestionIdExists.
+			results: 2, typ: "bool", value: "nil", errExpr: `errors.New("store error")`,
+			want: `[]any{false, errors.New("store error")}`,
+		},
+		{
+			name: "a string result cannot take nil",
+			// riskprofile's AddQuestion.
+			results: 2, typ: "string", value: "nil", errExpr: `errors.New("error while fetching data")`,
+			want: `[]any{"", errors.New("error while fetching data")}`,
+		},
+		{
+			name:    "an int result cannot take nil",
+			results: 2, typ: "int64", value: "nil", errExpr: "nil",
+			want: `[]any{0, nil}`,
+		},
+		{
+			name:    "a pointer result keeps nil",
+			results: 2, typ: "*models.QuestionResponse", value: "nil", errExpr: "nil",
+			want: `[]any{nil, nil}`,
+		},
+		{
+			name:    "a slice result keeps nil",
+			results: 2, typ: "[]*models.QuestionResponse", value: "nil", errExpr: "nil",
+			want: `[]any{nil, nil}`,
+		},
+		{
+			name: "a real value is never replaced by a zero",
+			// The success path carries a row literal; only the nil
+			// placeholder is substituted.
+			results: 2, typ: "string", value: `"Marks Edited Successfully"`, errExpr: "nil",
+			want: `[]any{"Marks Edited Successfully", nil}`,
+		},
+		{
+			name: "an unread declaration keeps the two-element nil form",
+			// results == 0 means the declaration could not be read, and
+			// the previous behaviour is the conservative choice.
+			results: 0, typ: "", value: "nil", errExpr: "nil",
+			want: `[]any{nil, nil}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := returnPayloadLiteral(tc.results, tc.typ, tc.value, tc.errExpr)
+			if got != tc.want {
+				t.Errorf("got %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 

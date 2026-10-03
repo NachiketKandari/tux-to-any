@@ -495,6 +495,92 @@ func zeroExpectLiteral(fx FixtureSource, responseType string) string {
 	return "nil"
 }
 
+// storeReturnLiteral renders one mock's Return payload from its value and its
+// error expression, with the element COUNT taken from the store interface's
+// declaration.
+//
+// The two-element (value, error) form is right for every read shape and wrong
+// for a method whose only result is `error` — riskprofile's EditMarks is
+// `EditMarks(ctx, …) error`, and all three payload sites produced
+// "wrong number of arguments to Return for MockRiskProfileStore.EditMarks:
+// got 2, want 1". Routing all three through here is the point: they each
+// carried their own copy of the assumption, and fixing one left the other two
+// broken.
+//
+// An undeclared method keeps two elements, which is what every payload did
+// before and what a (value, error) read needs.
+func storeReturnLiteral(sc *serviceCtx, method, value, errExpr string) string {
+	sig, known := sc.dbIface[method]
+	if !known {
+		return "[]any{" + value + ", " + errExpr + "}"
+	}
+	return returnPayloadLiteral(sig.Results, sig.Result, value, errExpr)
+}
+
+// returnPayloadLiteral builds one mock's Return payload from a method's
+// DECLARED shape, and is the single rule both layers use.
+//
+// The element COUNT is the declared result count, with the error last. That is
+// simpler than the special cases it replaces, and each one was a symptom:
+//
+//   - Results == 1 && error → one element. `EditMarks(ctx, …) error` produced
+//     "wrong number of arguments to Return … got 2, want 1".
+//   - Results == 1 && anything else → one element too. `GetDB() *sqlx.DB`
+//     produced the same error, and a rule keyed on "error" missed it.
+//   - Results >= 2 → the value placeholder may not be nil for a scalar first
+//     result: `QuestionIdExists(ctx, …) (bool, error)` and `AddQuestion(…)
+//     (string, error)` both produced "argument 0 … is nil, but bool/string is
+//     not nillable".
+//
+// Both layers had their own hardcoded two-element form, which is how fixing the
+// store layer left the handler layer broken in exactly the same way. results == 0
+// means the declaration was unread, and the two-element nil form is kept.
+func returnPayloadLiteral(results int, resultType, value, errExpr string) string {
+	switch {
+	case results <= 0:
+		return "[]any{" + value + ", " + errExpr + "}"
+	case results == 1:
+		// A single result: it is the value, or the error.
+		if resultType == "error" {
+			return "[]any{" + errExpr + "}"
+		}
+		if value == "nil" {
+			value = zeroForResultType(resultType)
+		}
+		return "[]any{" + value + "}"
+	default:
+		if value == "nil" {
+			value = zeroForResultType(resultType)
+		}
+		return "[]any{" + value + ", " + errExpr + "}"
+	}
+}
+
+// zeroForResultType is the nil-or-not decision's answer: the zero literal for a
+// declared result type, or nil for anything a pointer/slice/map/interface
+// already accepts.
+//
+// AssumedFixtureSource.ZeroExpr is deliberately NOT reused here. Its default is
+// "0", which is right for a db row scalar and invalid for a pointer return, so
+// only the types where nil genuinely fails to compile are listed.
+func zeroForResultType(typ string) string {
+	switch typ {
+	case "string":
+		return `""`
+	case "bool":
+		return "false"
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64",
+		"float32", "float64":
+		return "0"
+	case "sql.NullString", "sql.NullInt64", "sql.NullInt32",
+		"sql.NullBool", "sql.NullFloat64", "sql.NullTime",
+		"time.Time":
+		return typ + "{}"
+	}
+	return "nil"
+}
+
 // mockReturnLiteral renders the gomock Return payload for a controller's
 // store call from the assumed fixtures: the store's own row shape from its
 // db fact (nil when unknown).
@@ -503,25 +589,16 @@ func mockReturnLiteral(sc *serviceCtx, method string) string {
 	if df == nil {
 		return "nil"
 	}
-	// A method whose only result is `error` takes Return(nil), not
-	// Return(nil, nil). The row-shaped payloads below all carry two elements
-	// (value, error) because every read shape returns both, and that assumption
-	// is wrong for a DML method — riskprofile's EditMarks is
-	// `EditMarks(ctx, …) error`, and the suite died on "wrong number of
-	// arguments to Return for MockRiskProfileStore.EditMarks: got 2, want 1".
-	if sig, ok := sc.dbIface[method]; ok && sig.Results == 1 && sig.Result == "error" {
-		return "[]any{nil}"
-	}
+	value := "nil"
 	switch df.Shape {
 	case "multi":
-		return "[]any{" + rowLiteral(sc, "[]*"+df.RowType) + ", nil}"
+		value = rowLiteral(sc, "[]*"+df.RowType)
 	case "single":
-		return "[]any{" + rowLiteral(sc, "*"+df.RowType) + ", nil}"
+		value = rowLiteral(sc, "*"+df.RowType)
 	case "scalar":
-		return "[]any{" + sc.fixtures.ZeroExpr(df.Scalar) + ", nil}"
-	default:
-		return "[]any{nil, nil}"
+		value = sc.fixtures.ZeroExpr(df.Scalar)
 	}
+	return storeReturnLiteral(sc, method, value, "nil")
 }
 
 // ctrlCaseInputs consumes the trace's per-method db occurrences in call
@@ -536,6 +613,26 @@ func ctrlCaseInputs(sc *serviceCtx, calls []storeCall, trace *LogTrace) []string
 		next[call.Method] = k + 1
 		list := trace.DBCalls(call.Method)
 		if k >= len(list) {
+			// No EXPECT: the call did not run in this trace.
+			//
+			// It is tempting to special-case a store method with no dbFact —
+			// GetDB() runs no SQL, so the log cannot record it and its
+			// absence is not evidence. That was tried and reverted. It fixes
+			// the success case ("Unexpected call to GetDB: no expected
+			// calls") and breaks the error cases, because which calls run is
+			// path-dependent and the tool has no model of the path:
+			//
+			//	err = utils.ExecTransaction(ctx, c.store.GetDB(), func(…) {
+			//	    if err := c.store.DeleteQnA(…); err != nil { return err }
+			//
+			// GetDB is an ARGUMENT, reached only after DeleteQnA succeeds. A
+			// StoreError case makes DeleteQnA fail, so GetDB is never called
+			// and an EXPECT for it can never be satisfied:
+			//
+			//	missing call(s) to *db.MockRiskProfileStore.GetDB()
+			//
+			// Same failure count either way, one fewer special case. Modelling
+			// the path is real work, not a bug fix — see the plan's open items.
 			out[i] = "nil"
 			continue
 		}
@@ -544,8 +641,9 @@ func ctrlCaseInputs(sc *serviceCtx, calls []storeCall, trace *LogTrace) []string
 			out[i] = lit
 			continue
 		}
-		// Executed but value-less (DML/void call): return nil, nil.
-		out[i] = "[]any{nil, nil}"
+		// Executed but value-less (DML/void call). The arity still comes from
+		// the declaration: a method returning only `error` gets one element.
+		out[i] = storeReturnLiteral(sc, call.Method, "nil", "nil")
 	}
 	return out
 }
@@ -594,7 +692,6 @@ func renderCtrlMethod(u *unit) (string, error) {
 		if i > 0 {
 			field = fmt.Sprintf("mockInput%d", i+1)
 		}
-		sig := sc.dbIface[call.Method]
 		calls = append(calls, templates.CtrlCall{
 			Method: call.Method,
 			Args:   ctrlExpectArgs(sc, fx, f, call, ambiguous),
@@ -602,8 +699,7 @@ func renderCtrlMethod(u *unit) (string, error) {
 			// Unknown arity (-1) reads as TakesCtx, preserving the matcher
 			// for a method whose declaration could not be read. Only a
 			// declaration that positively says "no parameters" drops it.
-			TakesCtx:      call.ArgCount != 0,
-			ReturnsHandle: sig.Result == "*sqlx.DB" || sig.Result == "sqlx.DB",
+			TakesCtx: call.ArgCount != 0,
 		})
 	}
 
@@ -619,13 +715,22 @@ func renderCtrlMethod(u *unit) (string, error) {
 		}
 	}
 	expectExpr := responseLiteral(sc, fx, f.ResponseType)
+	// A scalar response has no fields to map, so responseLiteral falls back to
+	// the type's zero value — which asserted "" against a method whose own body
+	// says `return "Marks Edited Successfully", nil`. The log route supplies a
+	// real value and wins; this is the assumed-route's third source, and the
+	// equality test is what identifies that the zero was a fallback rather than
+	// a deliberate constant.
+	if f.ScalarResponse != "" && expectExpr == fx.ZeroExpr(f.ResponseType) {
+		expectExpr = f.ScalarResponse
+	}
 
 	storeErrInputs := make([]string, len(calls))
 	for i := range storeErrInputs {
 		storeErrInputs[i] = "nil"
 	}
 	if len(storeErrInputs) > 0 {
-		storeErrInputs[0] = `[]any{nil, errors.New("store error")}`
+		storeErrInputs[0] = storeReturnLiteral(sc, calls[0].Method, "nil", `errors.New("store error")`)
 	}
 	cases := []templates.CtrlCase{
 		{
@@ -743,25 +848,39 @@ func renderHandlerMethod(u *unit) (string, error) {
 		successFields = append(successFields, templates.CtrlCaseField{Name: fv[0], Value: fv[1], Type: typ, Literal: lit})
 	}
 	expectExpr := responseLiteral(sc, fx, resp)
+	// Every mockInput below is shaped by the CALLED method's declaration, not
+	// by a fixed two-element (value, error) form. The handler layer hit both
+	// of the store layer's failures independently: a controller method
+	// returning only `error` needs one element, and one returning a `string`
+	// rejects nil for its value —
+	//
+	//	argument 0 to Return for *controller.MockRiskProfileController
+	//	  .AddQuestion is nil, but string is not nillable
+	//
+	// so all three cases go through returnPayloadLiteral like the store's do.
+	sig := sc.ctrlIface[f.CtrlCall]
+	payload := func(value, errExpr string) string {
+		return returnPayloadLiteral(sig.Results, sig.Response, value, errExpr)
+	}
 	cases := []templates.HandlerCase{
 		{
 			Desc:          f.Name + "Error",
 			ReqFields:     successFields,
-			Input:         `[]any{nil, errors.New("error while fetching data")}`,
+			Input:         payload("nil", `errors.New("error while fetching data")`),
 			ExpectedError: "error while fetching data",
 			HTTPCode:      "http.StatusInternalServerError",
 		},
 		{
 			Desc:          "Failure",
 			ReqFields:     successFields,
-			Input:         "[]any{nil, nil}",
+			Input:         payload("nil", "nil"),
 			ExpectedError: "No Data Found",
 			HTTPCode:      "http.StatusNoContent",
 		},
 		{
 			Desc:      "Success",
 			ReqFields: successFields,
-			Input:     "[]any{" + expectExpr + ", nil}",
+			Input:     payload(expectExpr, "nil"),
 		},
 	}
 	if mv != nil && mv.FailedTrace() != nil {
@@ -775,7 +894,7 @@ func renderHandlerMethod(u *unit) (string, error) {
 			cases = append(cases, templates.HandlerCase{
 				Desc:          "Logged-Error",
 				ReqFields:     failedRequestFields(sc, mv, reqBase, names, fallback),
-				Input:         `[]any{nil, errors.New(` + strconv.Quote(text) + `)}`,
+				Input:         payload("nil", "errors.New("+strconv.Quote(text)+")"),
 				ExpectedError: text,
 				HTTPCode:      strconv.Itoa(code),
 			})

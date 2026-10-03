@@ -439,7 +439,11 @@ func TestGT7LogDrivenGeneration(t *testing.T) {
 		`QuestionNumberExists(gomock.Any(), gomock.Any())`,
 		`[]any{"91", nil}`,
 		`[]any{false, nil}`,
-		`[]any{nil, nil}`,
+		// The DML call is `AddQuestion(ctx, questionNo string) error` — one
+		// result — so its payload has one element. It used to be []any{nil,
+		// nil}, which is the arity mismatch that broke riskprofile's
+		// EditMarks on the corpus.
+		`[]any{nil}`,
 		// The logged business error from the failed trace, with its own
 		// request values (909 vs 929) and executed-call returns.
 		`"Logged-Error"`,

@@ -37,11 +37,7 @@ func (suite *{{.SuiteName}}) Test{{.Name}}() {
 				suite.{{$.StoreVar}}.
 					EXPECT().
 					{{.Method}}({{if .TakesCtx}}gomock.Any(){{end}}{{range .Args}}, {{.}}{{end}}).
-{{- if .ReturnsHandle}}
-					Return(suite.sqlDB, nil)
-{{- else}}
 					Return(testCase.{{.Field}}...)
-{{- end}}
 			}
 {{- end}}
 

@@ -30,6 +30,10 @@ type DemoController interface {
 	// OrderEdit returns only an error, mirroring riskprofile's EditMarks path:
 	// the store method has one result, so its EXPECT's Return takes one value.
 	OrderEdit(ctx context.Context, request *models.OrderRequest) (err error)
+	// OrderStatus returns a scalar whose success value is a constant in the
+	// body, so a scalar response is asserted from the body rather than the
+	// type's zero value.
+	OrderStatus(ctx context.Context, request *models.OrderRequest) (string, error)
 }
 
 // NewDemoController takes TWO dependencies. The generator emitted exactly one

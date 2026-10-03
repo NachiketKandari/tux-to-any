@@ -42,6 +42,82 @@ was changed to take scalar binds instead, which is what the corpus does
 this is out of scope for F1–F11 and remains an open defect. The corpus does not
 expose it; a converted service that differs would.
 
+**A scalar response was asserted as its zero value (fixed).** A controller
+returning `(string, error)` has no fields to map, so `responseLiteral` fell back
+to the type's zero and the deterministic route asserted `""` against
+riskprofile's `EditMarks`, whose body says `return "Marks Edited Successfully",
+nil`. `ctrlFact.ScalarResponse` now reads the body's own literal — a third
+source below the log's real value.
+
+**Three more shape-vs-body defects, all the same mistake (fixed).** The corpus
+run found each independently:
+
+  - `isDeleteTx` read "DELETE-in-a-tx tolerates zero rows" off the SQL verb.
+    riskprofile's `DeleteQuestion` IS a DELETE-tx that returns
+    `errors.New("unable to delete the question")`, so every zero-rows case
+    failed. The branch is now chosen by whether the body states an error, which
+    also removes F2's sentinel fallback — a method with no zero-rows branch has
+    no way to produce one, so asserting the sentinel for it was the invented
+    expectation F2 exists to eliminate.
+  - `CtrlCallArgs` APPENDED across call sites, so a handler calling two
+    controller methods produced `ListSection(c, &request, &request)`.
+  - `isErrNoRowsSentinel` matched `HasSuffix("ErrNoRows")` and so missed the
+    conventional lowercase `errNoRows`.
+
+**Every mock payload hardcoded a two-element `(value, error)` form (fixed).**
+Four sites across three files, each with its own copy, and the corpus broke on
+all of them one after another: `EditMarks(ctx, …) error` (got 2, want 1),
+`GetDB() *sqlx.DB` (got 2, want 1), `QuestionIdExists(…) (bool, error)` (nil is
+not nillable), `AddQuestion(…) (string, error)` (nil is not nillable). One rule
+— element count IS the declared result count, error last — replaces all four,
+and the handler layer stopped being a second copy of the same bug.
+
+**`fullTestGate` never ran (fixed).** It returned early on
+`len(res.Files) == 0`, but a staged run populates `res.Staged` — and the CLI
+only ever sets `FullTest` together with `Stage`. The one gate that actually
+RUNS the generated tests was dead in every real invocation.
+
+## 0b. Measured result, and what is still open
+
+After P0–P3, both corpus routes, re-measured with
+`riskPipelineTest/run_routes.sh`:
+
+| layer | deterministic | logroute |
+|---|---|---|
+| db | **pass** (124 subtests) | **pass** (127 subtests) |
+| controller | **pass** | 2 subtests fail |
+| handler | 1 method's cases fail | 1 method's cases fail |
+
+db was failing every DML zero-rows case before; controller and handler did not
+compile at all. Both now compile on both routes.
+
+Three things remain, and all three are feature-sized rather than bug fixes:
+
+  - **Error-path call flow (controller, logroute).** `ctrlCaseInputs` decides
+    which store calls get an EXPECT from whether the log recorded them. For
+    `GetDB()` — an argument to `utils.ExecTransaction`, reached only after
+    `DeleteQnA` succeeds — the log can never record it (no SQL), so its absence
+    is not evidence of absence. Emitting an EXPECT anyway fixes the success
+    case and breaks the error cases, where the call genuinely never runs. Tried,
+    measured, reverted: the failure count is identical either way and the
+    special case is not worth it. Which calls execute is path-dependent, and the
+    tool has no model of the path.
+  - **The handler's response envelope (both routes).** The template asserts a
+    fixed 500 / 204 / 200 table, and the corpus's `GinContext` helper returns
+    204 whenever the payload is empty and 500/404 from its own error mapping —
+    so a success case with an empty response disagrees with the table. Deriving
+    each handler's envelope from `network.GinContext` plus the controller's real
+    return shape is the work.
+  - **Validator tags in assumed values (deterministic).** `c.BindJSON` rejects
+    the synthesized placeholders on `oneof` / `positivenum` tags, so the handler
+    returns 400 and never reaches the controller. Honouring validator tags when
+    synthesizing values is a feature; the log route does not hit it because it
+    supplies real ones.
+
+None of these are F1–F11, and the plan already recorded that the handler layer
+has no trustworthy baseline. They are listed here so the next person does not
+rediscover them.
+
 **An inline backtick query literal is not extracted (new, NOT fixed).**
 `dbFact.Query` is read from a `query` variable, `var` or `const`. A method that
 passes the literal inline to `ExecContext` gets an empty `Query`, which then

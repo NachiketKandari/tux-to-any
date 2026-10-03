@@ -905,21 +905,18 @@ func loggedReturn(sc *serviceCtx, method string, call LogDBCall) string {
 	if df == nil || !call.HasVal {
 		return ""
 	}
+	// Every shape below used to spell out `[]any{<lit>, nil}` itself, four
+	// copies of the same arity assumption inside one function. They go through
+	// storeReturnLiteral so the declared result count decides the shape — which
+	// is what GetDB() *sqlx.DB needs, since the log route was still handing it
+	// two elements.
 	switch df.Shape {
-	case "multi":
+	case "multi", "single", "scalar":
 		if lit, ok := loggedDBExpect(sc, df, call); ok {
-			return "[]any{" + lit + ", nil}"
-		}
-	case "single":
-		if lit, ok := loggedDBExpect(sc, df, call); ok {
-			return "[]any{" + lit + ", nil}"
-		}
-	case "scalar":
-		if lit, ok := loggedDBExpect(sc, df, call); ok {
-			return "[]any{" + lit + ", nil}"
+			return storeReturnLiteral(sc, method, lit, "nil")
 		}
 	case "dml":
-		return "[]any{nil, nil}"
+		return storeReturnLiteral(sc, method, "nil", "nil")
 	}
 	return ""
 }

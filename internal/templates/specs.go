@@ -376,11 +376,6 @@ type CtrlCall struct {
 	// unread declaration keeps the previous behaviour rather than dropping a
 	// matcher that may be required.
 	TakesCtx bool
-	// ReturnsHandle marks a store method whose declared result is a *sqlx.DB.
-	// Its EXPECT must hand back the suite's live mock connection rather than a
-	// fixture row, because the controller passes that handle on to the db layer
-	// and a stubbed *sqlx.DB would fail every query underneath it.
-	ReturnsHandle bool
 }
 
 // CtrlCaseField is one request-field value for one controller case (the

@@ -110,7 +110,7 @@ func (suite *DemoControllerSuiteController) TestOrderHandle() {
 	}{
 		{
 			desc:           "StoreError",
-			mockInput:      []any{nil, errors.New("store error")},
+			mockInput:      []any{nil},
 			expectedError:  "store error",
 			expectedOutput: nil,
 		},
@@ -129,7 +129,7 @@ func (suite *DemoControllerSuiteController) TestOrderHandle() {
 				suite.demoStore.
 					EXPECT().
 					GetDB().
-					Return(suite.sqlDB, nil)
+					Return(testCase.mockInput...)
 			}
 
 			// Triggering Function
@@ -158,7 +158,7 @@ func (suite *DemoControllerSuiteController) TestOrderEdit() {
 		{
 			desc:           "StoreError",
 			CompCode:       "fmlcompcd",
-			mockInput:      []any{nil, errors.New("store error")},
+			mockInput:      []any{errors.New("store error")},
 			expectedError:  "store error",
 			expectedOutput: nil,
 		},
@@ -184,6 +184,56 @@ func (suite *DemoControllerSuiteController) TestOrderEdit() {
 			// Triggering Function
 			request := &models.OrderRequest{CompCode: testCase.CompCode}
 			actualOutput, err := suite.demoController.OrderEdit(suite.ctx, request)
+
+			// Validations
+			if testCase.expectedError != "" {
+				assert.ErrorContains(t, err, testCase.expectedError)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, actualOutput, testCase.expectedOutput)
+			}
+		})
+	}
+}
+
+// run test | debug test
+func (suite *DemoControllerSuiteController) TestOrderStatus() {
+	testCases := []struct {
+		desc           string
+		CompCode       string
+		mockInput      []any
+		expectedError  string
+		expectedOutput string
+	}{
+		{
+			desc:           "StoreError",
+			CompCode:       "fmlcompcd",
+			mockInput:      []any{errors.New("store error")},
+			expectedError:  "store error",
+			expectedOutput: "",
+		},
+		{
+			desc:           "Success",
+			CompCode:       "fmlcompcd",
+			mockInput:      []any{nil},
+			expectedError:  "",
+			expectedOutput: "order updated",
+		},
+	}
+
+	for _, testCase := range testCases {
+		suite.T().Run(testCase.desc, func(t *testing.T) {
+			// Mocking and Setting Expected Result
+			if testCase.mockInput != nil {
+				suite.demoStore.
+					EXPECT().
+					EditOrder(gomock.Any(), "fmlcompcd").
+					Return(testCase.mockInput...)
+			}
+
+			// Triggering Function
+			request := &models.OrderRequest{CompCode: testCase.CompCode}
+			actualOutput, err := suite.demoController.OrderStatus(suite.ctx, request)
 
 			// Validations
 			if testCase.expectedError != "" {

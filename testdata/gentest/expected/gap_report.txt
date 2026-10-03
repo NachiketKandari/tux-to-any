@@ -12,7 +12,7 @@ service demo (../../testdata/gentest/pkg/services/demo)
     gap NewDemoStore      (no matching test name or call site)
     gap NewDemoAuditStore (no matching test name or call site)
     gap RecordAudit       (no matching test name or call site)
-  controller — 8 functions, 0 tested, 8 gaps
+  controller — 9 functions, 0 tested, 9 gaps
     gap OrderList         (no matching test name or call site)
     gap OrderDirect       (no matching test name or call site)
     gap OrderMarks        (no matching test name or call site)
@@ -20,6 +20,7 @@ service demo (../../testdata/gentest/pkg/services/demo)
     gap OrderAudit        (no matching test name or call site)
     gap OrderHandle       (no matching test name or call site)
     gap OrderEdit         (no matching test name or call site)
+    gap OrderStatus       (no matching test name or call site)
     gap NewDemoController (no matching test name or call site)
   handler — 6 functions, 0 tested, 6 gaps
     gap OrderList       (no matching test name or call site)
@@ -28,4 +29,4 @@ service demo (../../testdata/gentest/pkg/services/demo)
     gap OrderEither     (no matching test name or call site)
     gap OrderAudit      (no matching test name or call site)
     gap NewDemoHandler  (no matching test name or call site)
-gentest: 25 functions, 0 tested, 25 gaps
+gentest: 26 functions, 0 tested, 26 gaps
