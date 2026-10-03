@@ -178,6 +178,59 @@ func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string, irFil
 	return h.best()
 }
 
+// tailSpans returns the line spans of the shared epilogue: the KEPT lines of
+// the trailing run of top-level nodes after the LAST axis-touching chain —
+// the cleanup, commit and final tpreturn every scenario runs. It is the
+// label the flattened .pc needs to show where the per-arm logic stops.
+//
+// The spans are intersected with what the fold actually kept, so Tail is
+// always a subset of Body: a blank separator line belongs to no node span
+// and a contradicted node is not emitted at all. The renderer relies on
+// that (it walks the body's lines and filters by the tail set), and it keeps
+// the fold's view and the coverage reconcile untouched.
+//
+// from is the preamble/body split. Nothing is returned when no axis chain
+// remains at or after it (the nil-axis fallback, where the whole function is
+// body) or when the chain is the entry's last top-level statement. sc.Body
+// must already be set.
+func tailSpans(sc *Scenario, root []*Node, from int, inAxis func(*pred.Expr) bool) []int {
+	lastChainEnd := from
+	for i := from; i < len(root); {
+		end := chainExtent(root, i)
+		for _, m := range root[i:end] {
+			if m.Kind == KindBranch && m.Predicate != nil && inAxis(m.Predicate) {
+				lastChainEnd = end
+				break
+			}
+		}
+		i = end
+	}
+	if lastChainEnd >= len(root) {
+		return nil
+	}
+	epilogue := map[int]bool{}
+	for _, n := range root[lastChainEnd:] {
+		for l := n.Line; l <= n.EndLine; l++ {
+			epilogue[l] = true
+		}
+	}
+	// bodyLines is ascending, so the kept epilogue lines come out ascending
+	// and group into contiguous [start,end] runs: the pair's second element
+	// is the open run's end, extended while the next line abuts it.
+	var out []int
+	for _, l := range bodyLines(sc) {
+		if !epilogue[l] {
+			continue
+		}
+		if n := len(out); n > 0 && out[n-1] == l-1 {
+			out[n-1] = l
+			continue
+		}
+		out = append(out, l, l)
+	}
+	return out
+}
+
 // guardSitesOf counts the distinct branch-guard lines a candidate's values
 // sit in: the candidate's own guards, plus the alias's char-compare guards
 // (a candidate may be the alias side of the normalize idiom — its
@@ -408,14 +461,28 @@ type Scenario struct {
 	FilterMatched []string `json:"filter_matched,omitempty"`
 	// FilterPruned lists the matching assignments the prune dropped, each
 	// with its reason ("c_flag=H && new_flag=K (no reachable new_flag)").
-	FilterPruned []string        `json:"filter_pruned,omitempty"`
-	Preamble     []int           `json:"preamble,omitempty"` // line spans [start,end] pairs, flattened
-	Body         []*SliceNode    `json:"body,omitempty"`
-	Gets         []string        `json:"gets,omitempty"`
-	Adds         []string        `json:"adds,omitempty"`
-	ErrorAdds    []string        `json:"error_adds,omitempty"`
-	Codes        []string        `json:"codes,omitempty"`
-	Queries      []ScenarioQuery `json:"queries,omitempty"`
+	FilterPruned []string `json:"filter_pruned,omitempty"`
+	Preamble     []int    `json:"preamble,omitempty"` // line spans [start,end] pairs, flattened
+	// Tail is the trailing run of top-level nodes AFTER the last
+	// axis-touching chain — the shared epilogue (cleanup, commit, the
+	// final tpreturn) every scenario runs. Its lines also appear in Body
+	// (Body is the fold's view, and the coverage reconcile keys on it);
+	// Tail only carves them out so the renderer can label where the
+	// per-arm logic ends. Empty for the nil-axis fallback (whole function
+	// is body) and when the axis chain is the last thing in the entry.
+	Tail []int `json:"tail,omitempty"`
+	// LocalFuncs are the same-file function definitions this slice calls
+	// that ≥2 scenarios also call — the common ones, appended below the
+	// slice so a reviewer can read the callee without opening the source.
+	// Set by MarkCommonLocalFuncs before rendering; empty for a
+	// single-scenario entry (nothing can be common).
+	LocalFuncs []LocalFunc     `json:"local_funcs,omitempty"`
+	Body       []*SliceNode    `json:"body,omitempty"`
+	Gets       []string        `json:"gets,omitempty"`
+	Adds       []string        `json:"adds,omitempty"`
+	ErrorAdds  []string        `json:"error_adds,omitempty"`
+	Codes      []string        `json:"codes,omitempty"`
+	Queries    []ScenarioQuery `json:"queries,omitempty"`
 	// TxSpans lists the live begin→commit pairs in the slice (SCEN-D8) —
 	// the evidence behind the per-query Tx flags, visible for review.
 	TxSpans []txSpan `json:"tx_spans,omitempty"`
@@ -427,6 +494,23 @@ type Scenario struct {
 	Responses []ScenarioResponse `json:"responses,omitempty"`
 	Residue   []string           `json:"residue,omitempty"`
 	Counts    ScenarioCounts     `json:"counts"`
+}
+
+// LocalFunc is one same-file function definition a scenario calls, with the
+// calling scenario keys. Start/End span the DEFINITION (signature line
+// through its closing brace) — a different region of the file from the
+// scenario body, and the reason this cannot come out of the fold.
+type LocalFunc struct {
+	Name string `json:"name"`
+	// SigLine is the line the function name sits on (the signature, or its
+	// first line when the return type wraps).
+	SigLine int `json:"sig_line"`
+	Start   int `json:"start"` // first line emitted (the signature)
+	End     int `json:"end"`   // last line emitted (its closing brace)
+	// Keys are the scenarios that call it, in scenario order. Two or more
+	// is the "common" test — the same ≥2 rule DiffScenarios uses for a
+	// shared block.
+	Keys []string `json:"keys"`
 }
 
 // CarriesContract is the census rubric (SCEN-5): the slice maps to an API
@@ -596,6 +680,7 @@ func ScenarioFor(tree *Tree, axis *DispatchAxis, value string) *Scenario {
 		sc.Preamble = append(sc.Preamble, n.Line, n.EndLine)
 	}
 	sc.Body = walk(tree.Root[split:])
+	sc.Tail = tailSpans(sc, tree.Root, split, inAxis)
 
 	// Census + queries + tx over the surviving body (own-line census, no
 	// descendant double-count: parent branches carry no FML of their own
@@ -1587,12 +1672,48 @@ func RenderScenario(sc *Scenario, tree *Tree, entry string, src []byte, irFile *
 		}
 		sb.WriteString("\n/* ---- body under " + sc.Var + " == '" + sc.Value + "' ---- */\n")
 	}
+	// The shared epilogue is the last top-level run after the final
+	// axis-touching chain. Its lines live in Body too, so they are held
+	// back here and emitted under their own banner — otherwise a reader
+	// cannot tell where the per-arm logic stops.
+	tail := map[int]bool{}
+	for i := 0; i+1 < len(sc.Tail); i += 2 {
+		for l := sc.Tail[i]; l <= sc.Tail[i+1]; l++ {
+			tail[l] = true
+		}
+	}
 	for _, l := range bodyLines(sc) {
-		if emitted[l] || braces[l] {
+		if emitted[l] || braces[l] || tail[l] {
 			continue
 		}
 		emitted[l] = true
 		emitLine(l, true)
+	}
+	if len(tail) > 0 {
+		sb.WriteString("\n/* ---- tail (shared epilogue: runs after every " + sc.Var + " arm) ---- */\n")
+		for _, l := range bodyLines(sc) {
+			if emitted[l] || braces[l] || !tail[l] {
+				continue
+			}
+			emitted[l] = true
+			emitLine(l, true)
+		}
+	}
+	// Same-file helpers this slice calls that the sibling slices call too.
+	// Appended last and verbatim so the appendix never perturbs the slice's
+	// own line accounting above.
+	if len(sc.LocalFuncs) > 0 {
+		sb.WriteString("\n/* ---- referenced local functions (common to these scenarios) ---- */\n")
+		for _, lf := range sc.LocalFuncs {
+			fmt.Fprintf(&sb, "/* %s — called by: %s */\n", lf.Name, strings.Join(lf.Keys, ", "))
+			for l := lf.Start; l <= lf.End; l++ {
+				if l < 1 || l > len(lines) {
+					continue
+				}
+				emitLine(l, false)
+			}
+			sb.WriteString("\n")
+		}
 	}
 	return sb.String()
 }

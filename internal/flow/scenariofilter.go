@@ -774,6 +774,14 @@ func ScenarioForFilter(tree *Tree, registry []*DispatchAxis, filter *ScenarioFil
 		sc.Preamble = append(sc.Preamble, n.Line, n.EndLine)
 	}
 	sc.Body = ff.walk(tree.Root[split:], reachAll(len(live)))
+	sc.Tail = tailSpans(sc, tree.Root, split, func(e *pred.Expr) bool {
+		for _, fs := range ff.envs {
+			if exprTouchesAny(e, fs) {
+				return true
+			}
+		}
+		return false
+	})
 	censusOf(sc, tree)
 	if len(sc.Body) == 0 {
 		return nil, fmt.Errorf("scenarioFilter %q leaves no body in %s — every branch was contradicted", filter.Text, tree.Function)

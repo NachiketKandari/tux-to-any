@@ -47,6 +47,9 @@ func scenarioArtifacts(log *slog.Logger, dir, entry string, src []byte, scens []
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	// Resolve the same-file helpers the slices share before any rendering —
+	// "common" is a cross-scenario judgement, so it needs the whole set.
+	flow.MarkCommonLocalFuncs(tree, scens)
 	var written []string
 	seen := map[string]bool{}
 	for _, sc := range scens {
