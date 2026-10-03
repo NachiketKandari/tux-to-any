@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"tux-to-any/internal/budget"
+	"tux-to-any/internal/common"
 	"tux-to-any/internal/config"
 	"tux-to-any/internal/csdraft"
 	"tux-to-any/internal/flow"
@@ -123,12 +124,24 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *con
 
 	rec := auditRecorder(ctx)
 
+	// Service names key the generated package/directory, so two drafts in
+	// one tree must not share one. The uniqueness space spans this run's
+	// drafts and the drafts already on disk (never-clobber means old ones
+	// accumulate in out); stdout runs dedupe within the run only, keeping
+	// the printed text deterministic.
+	usedServices := map[string]bool{}
+	if !stdout {
+		usedServices = usedServiceNames(out)
+	}
+
 	written, existing := 0, 0
 	for _, f := range irFiles {
 		if f.Entry == "" {
 			fmt.Printf("- %s: no entry function (fn library) — skipped\n", filepath.Base(f.Path))
 			continue
 		}
+		svc := uniqueServiceName(serviceName(f), usedServices)
+		usedServices[svc] = true
 		src, err := os.ReadFile(f.Path)
 		if err != nil {
 			return written, fmt.Errorf("discover: read %s: %w", f.Path, err)
@@ -163,7 +176,7 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *con
 				fmt.Printf("- %s: axis %s — no scenario carries FML traffic (reads or writes); map manually if you know better\n", f.Entry, axis)
 			} else {
 				aiNames := aiNameScenarios(ctx, log, client, bd, f, scens, diff, src, rec)
-				draft = renderScenarioDraft(f, axis, scens, diff, aiNames, dirMode, tree, axes)
+				draft = renderScenarioDraft(f, axis, scens, diff, aiNames, dirMode, tree, axes, svc)
 			}
 			if !stdout {
 				scenDir := filepath.Join(filepath.Dir(out), config.DefaultScenDir)
@@ -192,7 +205,7 @@ func discoverCore(ctx context.Context, target, out string, stdout bool, cfg *con
 			fmt.Printf("- %s: no dispatch axis — condition-based discovery\n", f.Entry)
 			printReturnCrossCheck(tree, facts, f)
 			aiNames := aiNameEndpoints(ctx, log, client, bd, f, tree, candidates, src, rec)
-			draft = renderDraft(f, candidates, dirMode, aiNames)
+			draft = renderDraft(f, candidates, dirMode, aiNames, svc)
 			printDiscoverSummary(f, tree, candidates)
 		}
 		if stdout {
@@ -247,6 +260,53 @@ func writeDraft(out, name, draft string) (string, bool, error) {
 	return path, kept, nil
 }
 
+// serviceName derives the draft's default service name (the generated
+// package/directory key) from the entry file stem: lower snake with
+// non-identifier bytes folded to '_' and a leading digit escaped, so the
+// emitted draft always passes the loader's identifier check.
+func serviceName(f *ir.File) string {
+	stem := strings.TrimSuffix(filepath.Base(f.Path), filepath.Ext(f.Path))
+	return common.EscapeLeadingDigit(common.Snake(stem))
+}
+
+// uniqueServiceName keeps service names unique across one discover run and
+// the drafts already on disk: the first occurrence keeps the stem-derived
+// base, a collision gains the first free numeric suffix ("nav", "nav2", …).
+// The service name keys the generated package/directory, so two drafts
+// under one service would share a generation target.
+func uniqueServiceName(base string, used map[string]bool) string {
+	if !used[base] {
+		return base
+	}
+	for i := 2; ; i++ {
+		if cand := base + strconv.Itoa(i); !used[cand] {
+			return cand
+		}
+	}
+}
+
+// usedServiceNames seeds the run's service-name uniqueness space from the
+// Go mapping drafts already in out (never-clobber accumulates them there).
+// A draft that fails to parse contributes nothing — discover must not fail
+// on a file it merely wants to avoid repeating.
+func usedServiceNames(out string) map[string]bool {
+	used := map[string]bool{}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		return used
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".mapping.yaml") || strings.HasSuffix(name, ".cs.mapping.yaml") {
+			continue
+		}
+		if svc, err := plan.MappingServiceOf(filepath.Join(out, name)); err == nil && svc != "" {
+			used[svc] = true
+		}
+	}
+	return used
+}
+
 // discoverOutDir resolves the draft directory: the -out override, else the
 // mappings/ convention next to the working directory.
 func discoverOutDir(flagOut string) string {
@@ -261,10 +321,14 @@ func discoverOutDir(flagOut string) string {
 // always editable), census comments, dbMethods pins when the AI proposed
 // them, and the non-candidates kept (commented) for user control. Module and
 // readDBs stay commented hints — module defaults to the service name at
-// load, so a draft is loadable as-is once names exist.
-func renderDraft(f *ir.File, candidates []flow.Candidate, dirMode bool, aiNames map[string]aiSuggestion) string {
+// load, so a draft is loadable as-is once names exist. service is discover's
+// run-unique name; empty derives the default from the entry stem.
+func renderDraft(f *ir.File, candidates []flow.Candidate, dirMode bool, aiNames map[string]aiSuggestion, service string) string {
 	entry := filepath.Base(f.Path)
-	svc := strings.ToLower(strings.ReplaceAll(strings.TrimSuffix(entry, filepath.Ext(entry)), "-", "_"))
+	svc := service
+	if svc == "" {
+		svc = serviceName(f)
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# %s — generated by tuxgo (endpoint discovery).\n", entry)
 	sb.WriteString("#\n")
@@ -403,10 +467,14 @@ func writeDBMethods(sb *strings.Builder, f *ir.File, aiPins map[string]methodPin
 // the tx evidence, pre-filled advisory names, the non-qualifying scenarios
 // kept (commented) for user control, and registry-derived scenarioFilter
 // examples (commented) for merged slices. Module and readDBs stay commented
-// hints — module defaults to the service name at load.
-func renderScenarioDraft(f *ir.File, axis *flow.DispatchAxis, scens []*flow.Scenario, diff *flow.ScenarioDiff, aiNames map[string]aiSuggestion, dirMode bool, tree *flow.Tree, axes []*flow.DispatchAxis) string {
+// hints — module defaults to the service name at load. service is
+// discover's run-unique name; empty derives the default from the entry stem.
+func renderScenarioDraft(f *ir.File, axis *flow.DispatchAxis, scens []*flow.Scenario, diff *flow.ScenarioDiff, aiNames map[string]aiSuggestion, dirMode bool, tree *flow.Tree, axes []*flow.DispatchAxis, service string) string {
 	entry := filepath.Base(f.Path)
-	svc := strings.ToLower(strings.ReplaceAll(strings.TrimSuffix(entry, filepath.Ext(entry)), "-", "_"))
+	svc := service
+	if svc == "" {
+		svc = serviceName(f)
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# %s — generated by tuxgo (dispatch-axis scenarios).\n", entry)
 	sb.WriteString("#\n")

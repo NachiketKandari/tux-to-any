@@ -112,6 +112,25 @@ func MappingSourceOf(path string) (string, error) {
 	return m.Source, nil
 }
 
+// MappingServiceOf reads only the service field — the lenient read
+// discover uses to seed its service-name uniqueness space from drafts
+// already on disk. A parse error surfaces; callers decide whether that is
+// fatal (discover ignores it: it must not fail on a file it only wants to
+// avoid repeating).
+func MappingServiceOf(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("plan: read mapping %s: %w", path, err)
+	}
+	var m struct {
+		Service string `yaml:"service"`
+	}
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return "", fmt.Errorf("plan: parse mapping %s: %w", path, err)
+	}
+	return m.Service, nil
+}
+
 // LoadMapping reads and validates a mapping YAML file. An absent module
 // defaults to the service name — discover drafts load without a second edit
 // (the generated import prefix then equals the service name; set module: in

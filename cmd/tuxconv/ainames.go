@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 
 	"tux-to-any/internal/audit"
@@ -59,27 +60,40 @@ func aiNameEndpoints(ctx context.Context, log *slog.Logger, client llm.Client, b
 	for _, q := range f.Queries {
 		queriesByID[q.ID] = q
 	}
+	// The distinguishing token is the condition's inventory index: stable
+	// across runs and natural as a name suffix.
+	keys := make([]string, 0, len(candidates))
+	tokens := make(map[string]string, len(candidates))
+	for _, c := range candidates {
+		keys = append(keys, c.Key)
+		tokens[c.Key] = strings.SplitN(strings.TrimPrefix(c.Key, "c"), ".", 2)[0]
+	}
 	if client == nil {
 		for _, c := range candidates {
-			out[c.Key] = deterministicSuggestion(c.QueryIDs, c.Adds, c.Gets, "Endpoint"+strings.SplitN(strings.TrimPrefix(c.Key, "c"), ".", 2)[0])
+			out[c.Key] = deterministicSuggestion(c.QueryIDs, c.Adds, c.Gets, "Endpoint"+tokens[c.Key])
 		}
-		return out
+	} else {
+		lines := strings.Split(string(src), "\n")
+		for _, c := range candidates {
+			cond, err := flow.ConditionFor(tree, f.Conditions, c.Key)
+			if err != nil {
+				out[c.Key] = deterministicSuggestion(c.QueryIDs, c.Adds, c.Gets, "Endpoint"+tokens[c.Key])
+				continue
+			}
+			sug, err := aiNameOne(ctx, log, client, b, f, cond, queriesByID, lines, rec)
+			if err != nil {
+				log.Warn("ai naming failed — deterministic names used", "candidate", c.Key, "error", err)
+				out[c.Key] = deterministicSuggestion(c.QueryIDs, c.Adds, c.Gets, "Endpoint"+tokens[c.Key])
+				continue
+			}
+			out[c.Key] = sug
+		}
 	}
-	lines := strings.Split(string(src), "\n")
-	for _, c := range candidates {
-		cond, err := flow.ConditionFor(tree, f.Conditions, c.Key)
-		if err != nil {
-			out[c.Key] = deterministicSuggestion(c.QueryIDs, c.Adds, c.Gets, "Endpoint"+strings.SplitN(strings.TrimPrefix(c.Key, "c"), ".", 2)[0])
-			continue
-		}
-		sug, err := aiNameOne(ctx, log, client, b, f, cond, queriesByID, lines, rec)
-		if err != nil {
-			log.Warn("ai naming failed — deterministic names used", "candidate", c.Key, "error", err)
-			out[c.Key] = deterministicSuggestion(c.QueryIDs, c.Adds, c.Gets, "Endpoint"+strings.SplitN(strings.TrimPrefix(c.Key, "c"), ".", 2)[0])
-			continue
-		}
-		out[c.Key] = sug
-	}
+	// Loader-legal defaults: mapping names must be unique (plan.Validate
+	// rejects duplicates), so a repeated proposal — identical census shapes
+	// often are — gains the condition index, then a numeric suffix.
+	// Advisory still, always editable.
+	dedupeEndpointNames(out, keys, func(key string) string { return tokens[key] }, log)
 	return out
 }
 
@@ -109,21 +123,15 @@ func aiNameScenarios(ctx context.Context, log *slog.Logger, client llm.Client, b
 		}
 	}
 	// Loader-legal defaults: mapping names must be unique, so a repeated
-	// proposal (identical census shapes often are) gains the axis value —
-	// advisory still, always editable.
-	seen := map[string]string{}
+	// proposal (identical census shapes often are) gains the axis value,
+	// then a numeric suffix — advisory still, always editable.
+	keys := make([]string, 0, len(scens))
+	tokens := make(map[string]string, len(scens))
 	for _, sc := range scens {
-		sug := out[sc.Key]
-		if prev, dup := seen[sug.Name]; dup {
-			sug.Name += common.CamelGo(sc.Value)
-			if prev == sug.Name {
-				sug.Name += common.CamelGo(sc.Key)
-			}
-			out[sc.Key] = sug
-			continue
-		}
-		seen[sug.Name] = sc.Key
+		keys = append(keys, sc.Key)
+		tokens[sc.Key] = common.CamelGo(sc.Value)
 	}
+	dedupeEndpointNames(out, keys, func(key string) string { return tokens[key] }, log)
 	dedupeRowNames(out, queriesByID, log)
 	return out
 }
@@ -172,6 +180,55 @@ func dedupeRowNames(sugs map[string]aiSuggestion, queriesByID map[string]*ir.Que
 			owner[pin.Row] = id
 		}
 		sugs[k] = sug
+	}
+}
+
+// uniqueEndpointName returns a name unique within taken: base when free,
+// else base+token (the distinguishing scenario value / condition index),
+// else the first free numeric suffix. Every returned name is registered in
+// taken, so a collision rename can never collide with a later entry — the
+// cascade the first cut missed. The empty name is the draft's TODO
+// placeholder, not a proposal: it stays empty and unregistered.
+func uniqueEndpointName(base, token string, taken map[string]bool) string {
+	if base == "" {
+		return ""
+	}
+	if !taken[base] {
+		taken[base] = true
+		return base
+	}
+	if token != "" && !taken[base+token] {
+		taken[base+token] = true
+		return base + token
+	}
+	for i := 2; ; i++ {
+		cand := base + strconv.Itoa(i)
+		if !taken[cand] {
+			taken[cand] = true
+			return cand
+		}
+	}
+}
+
+// dedupeEndpointNames makes every suggestion's name unique over order —
+// plan.Validate rejects duplicates ("endpoint name %q used twice"), and the
+// name is the generated Go method. token returns the entry's distinguishing
+// suffix; the map is walked in order so the first proposal keeps its name
+// and later collisions gain the suffix, then a number. Empty names (the
+// TODO placeholder) pass through untouched, untouched suggestions are not
+// rewritten.
+func dedupeEndpointNames(out map[string]aiSuggestion, order []string, token func(string) string, log *slog.Logger) {
+	taken := map[string]bool{}
+	for _, key := range order {
+		sug := out[key]
+		name := uniqueEndpointName(sug.Name, token(key), taken)
+		if name == sug.Name {
+			continue
+		}
+		log.Debug("endpoint name collision — distinguishing suffix added",
+			"key", key, "name", sug.Name, "kept", name)
+		sug.Name = name
+		out[key] = sug
 	}
 }
 

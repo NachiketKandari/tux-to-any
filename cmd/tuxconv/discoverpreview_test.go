@@ -154,7 +154,7 @@ func TestRenderScenarioDraftFilterExamples(t *testing.T) {
 	axis := tree.DispatchAxisFor([]byte(previewSrc))
 	scens := flow.Scenarios(tree, axis)
 	f := &ir.File{Path: "demo.pc"}
-	draft := renderScenarioDraft(f, axis, scens, flow.DiffScenarios("SVC_DEMO", scens), nil, false, tree, axes)
+	draft := renderScenarioDraft(f, axis, scens, flow.DiffScenarios("SVC_DEMO", scens), nil, false, tree, axes, "")
 	if !strings.Contains(draft, "# scenarioFilter examples") {
 		t.Fatalf("draft carries no filter examples:\n%s", draft)
 	}

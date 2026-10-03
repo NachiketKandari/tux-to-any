@@ -150,10 +150,7 @@ func runAINames(ctx context.Context, args []string) error {
 		}
 		// Loader-legal uniqueness: a colliding proposal gains a numeric
 		// suffix — advisory still, always editable.
-		for usedNames[sug.Name] {
-			sug.Name += "2"
-		}
-		usedNames[sug.Name] = true
+		sug.Name = uniqueEndpointName(sug.Name, "", usedNames)
 		suggestions[key] = sug
 		log.Info("ai naming proposal", "ref", key, "name", sug.Name, "route", sug.Route, "db_pins", len(sug.Methods))
 	}
