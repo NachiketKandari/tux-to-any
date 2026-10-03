@@ -79,6 +79,9 @@ RUNS the generated tests was dead in every real invocation.
 
 ## 0c. State at `3e56f02` — the control-flow work, and the one blocker left
 
+**To run this on your own repo, see [gentest-running.md](gentest-running.md).**
+This section is the design record; that one is the operating manual.
+
 Two commits after the P0–P3 work: `38baa7b` (controller path model) and
 `3e56f02` (handler validator tags + envelope).
 
