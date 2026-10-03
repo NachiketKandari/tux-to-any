@@ -162,6 +162,14 @@ type axisCandidate struct {
 // ranks them with the recognizer's weight, breaking ties by site count then
 // identifier (the exact rig DispatchAxisFor's pickAxis always used — one
 // implementation now).
+//
+// Qualification is per CANDIDATE, never per cascade result: a candidate
+// needs ≥2 distinct values as well as ≥2 guard sites. Gating the value
+// count here (rather than only on DispatchAxisFor's final winner) keeps a
+// sub-threshold candidate in an earlier recognizer from short-circuiting
+// the cascade past a qualifying spine in a later one — `strcmp(x, "")`
+// emptiness probes harvest one value and sit in several guards, which is a
+// validation check, not a dispatch.
 func collectAxes(stats map[string]*axisStats, links map[string]map[string]int, idents map[string]*axisStats, weightOf func(*axisStats) (string, int)) []axisCandidate {
 	keys := make([]string, 0, len(stats))
 	for k := range stats {
@@ -178,8 +186,12 @@ func collectAxes(stats map[string]*axisStats, links map[string]map[string]int, i
 		if guardSitesOf(st, alias, idents) < 2 {
 			continue
 		}
+		axis := composeAxis(st, alias, links, idents)
+		if len(axis.Domain) < 2 {
+			continue
+		}
 		cands = append(cands, axisCandidate{
-			axis:   composeAxis(st, alias, links, idents),
+			axis:   axis,
 			weight: weight,
 			sites:  st.sites + st.compares,
 			key:    k,

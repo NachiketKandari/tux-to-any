@@ -160,9 +160,12 @@ func axisSymbolValue(f *ir.File, fn string, line int, name string) (string, bool
 //  3. char-compare: predicates compare a scalar against char literals,
 //     domain from the distinct compares.
 //
-// An axis needs ≥2 distinct values (a 1-value domain is not a dispatch);
-// no qualifying spine → nil, and the caller falls back to one scenario over
-// the whole function (never a silent no-op). Harvest is line-based over the
+// An axis needs ≥2 distinct values (a 1-value domain is not a dispatch) and
+// ≥2 guard sites; both are candidate-qualification rules enforced in
+// collectAxes, so a sub-threshold candidate in an earlier recognizer falls
+// through to the next one instead of short-circuiting the cascade. No
+// qualifying spine → nil, and the caller falls back to one scenario over the
+// whole function (never a silent no-op). Harvest is line-based over the
 // entry's body span with comment masking (facts.InComment) so commented-out
 // predicates never pollute the domain.
 func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string, irFile *ir.File) *DispatchAxis {
@@ -187,9 +190,6 @@ func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string, irFil
 	// compare anywhere).
 	if best == nil {
 		best = h.charFirst()
-	}
-	if best == nil || len(best.Domain) < 2 {
-		return nil
 	}
 	return best
 }
