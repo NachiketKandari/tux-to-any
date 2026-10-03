@@ -77,7 +77,175 @@ and the handler layer stopped being a second copy of the same bug.
 only ever sets `FullTest` together with `Stage`. The one gate that actually
 RUNS the generated tests was dead in every real invocation.
 
+## 0c. State at `3e56f02` — the control-flow work, and the one blocker left
+
+Two commits after the P0–P3 work: `38baa7b` (controller path model) and
+`3e56f02` (handler validator tags + envelope).
+
+| layer | deterministic | logroute |
+|---|---|---|
+| db | 124 pass / 0 fail | 127 pass / 0 fail |
+| controller | 3 pass / 0 fail | **1 pass / 4 fail** |
+| handler | **45 pass / 0 fail** | **47 pass / 0 fail** |
+
+Handler went from 1/35 and 8/28 to 45/0 and 47/0. Its three old open items
+below are now closed; the controller's is half-closed.
+
+### Closed since 0b
+
+  - **Validator tags in assumed values.** `internal/testgen/validate.go` picks
+    a value against the field's `binding`/`validate` tag. Three things were
+    hiding it, and each one silently disabled the whole approach: `tagValue`
+    split tags on spaces (so `oneof=W X Y` read as `oneof=W`) and is now
+    `reflect.StructTag.Get`; `required` consumed the rule so the `oneof` behind
+    it was never reached (required is a precondition, not a constraint, and now
+    falls through); `fieldType` stripped the models qualifier off slice elements
+    so the struct lookup missed.
+  - **The handler's response envelope.** The case table is read from the body —
+    one case per `SuccessJSON` / `FailureJSON` / `BadRequestJSON` the handler
+    actually writes. Two assertions were REMOVED rather than corrected, because
+    the code was inventing them: the numeric status code (it is `GinContext`'s
+    choice, and `GinContext` is outside the scanned service, so 500 and 204
+    were wrong by construction) and the old `"Failure"` case, which mocked
+    `(nil, nil)` and then asserted a `"No Data Found"` error no path produces.
+  - **Missing support packages in the staged tree.** `stageSources` now copies
+    the module's host packages (`stageSupport`). Generated suites import
+    `network` for `HttpResponse` and `utils` for a sqlmock handle, and staging
+    only took the service's own directories, so the out tree could not compile:
+    `package …/pkg/network is not in std`. **This was also the controller's
+    blocker — see below.**
+
+#### Staging verified WITHOUT the harness
+
+The corpus run cannot distinguish "the generator staged it" from "`sync_support`
+copied it afterwards", so the fix was re-run with the harness removed
+completely — `riskPipelineTest/src` as the input, `-out` a bare temp dir, no
+`sync_support`, no `measure.sh`:
+
+    go mod tidy     exit 0
+    go build ./...  exit 0
+    go vet          clean on db, controller, handler
+    go test         db ok · handler ok · controller FAIL
+
+The out tree was self-contained. **The defect was never a fixture or harness
+artifact** — it would have hit any converted service, since `logger` / `network`
+/ `utils` are host packages every one of them has. The controller `FAIL` above
+is the same 4 logroute failures from the table, not a new one.
+
+This also means the harness is now redundant for support packages. Leaving it
+in place is deliberate — it is measurement-only and out of scope — but the
+generator is no longer relying on it.
+
+### The controller: model built, wiring not shipped
+
+`internal/testgen/ctrlpath.go` enumerates every path through a controller
+method from its body — one case per guard, the shape a hand-written Go table
+test already uses. `ctrlFact.Paths` carries it to the pipeline. Pinned against
+the two corpus methods that broke (`AddQuestion`, `AssessQnA`), the `GetDB`
+path-dependence, the `ErrNoRows` split, declared arity, and walk-order
+stability over 20 runs.
+
+**NOT WIRED INTO THE CASE TABLE.** A first attempt passed the repo suite and
+the golden, then made the compile gate drop the log route's controller suite
+outright — the file was simply not staged. Cause: the generated suite needed
+`pkg/utils` (for `utils.NewSqlxMockDB`) and `go-sqlmock`, and `stageSources`
+copied neither. `3e56f02` fixes exactly that, so **retry this first**.
+
+The wiring needs three coordinated changes, all written and then reverted:
+
+  1. `templates.CtrlCall` gains `Times` (a looped call runs once per element,
+     so the trip count IS the EXPECT arity) and `IsHandle` (a call returning
+     `*sqlx.DB` cannot be mocked with nil — see below).
+  2. `TestControllerFileData` gains `NeedsTx` + `UtilsPkg`; the file template
+     gains a `sqlDB`/`sqlMock` suite field, `utils.NewSqlxMockDB()` in
+     `SetupSuite`, and `ExpectBegin`/`ExpectCommit` around the handle's EXPECT.
+  3. `gen.go` sets `NeedsTx` from whether any store call's declared result is a
+     sqlx handle.
+
+The flat `mockInputN` case layout already supports per-path EXPECT sets: a
+path is always a PREFIX of the call list, and `if testCase.mockInputN != nil`
+skips the rest. So the renderer only has to populate those fields per path.
+
+**Why a nil handle is the third cause of the controller failure**, found by
+reading `utils.ExecTransaction`:
+
+    if db == nil { return nil }   // the closure is NEVER called
+
+So `GetDB().Return(nil)` does not merely weaken an assertion — it makes every
+call inside the transaction silently disappear, which is why `AddQuestion` and
+`AddAnswer` go unmet. The handle must be the suite's sqlmock-backed one. A path
+that fails inside the transaction rolls back, and `ExecTransaction` discards
+that error, so leaving `ExpectCommit` unmet is harmless — nothing calls
+`ExpectationsWereMet`.
+
+### Still open, unchanged
+
+  - **An inline backtick query literal is not extracted.** `dbFact.Query` is
+    read from a `query` variable, `var` or `const`; a method passing the literal
+    inline to `ExecContext` gets an empty `Query`, defeating `isDeleteTx`'s
+    DELETE prefix test.
+  - **A struct-typed bind argument renders as literal `nil`** and nil-panics.
+  - **db coverage is short of the plan's bar**: 92 case rows against the human
+    suite's 97, so 124 against a ≥129 target. A coverage gap, not a failure —
+    zero cases fail.
+  - **The human handler baseline is 11/48.** The generated 45/0 exceeds it, but
+    that is not evidence of quality: the human suite simply does not cover
+    those methods. Treat the handler numbers as "the generated cases run", not
+    as a correctness claim.
+
+### Staging limitations found while verifying the above
+
+Two things surfaced in the isolation run. Neither is a failure, and neither
+blocks the controller work, but both should be recorded rather than discovered
+later.
+
+  - **`stageSupport` copies the whole module, not what is needed.** It walks
+    every non-test `.go` outside the scanned service with no notion of which
+    packages the generated suites import. The copies are *required* — the out
+    tree is its own module and cannot reach back into the source tree, so a
+    support package must physically exist under `out/` — but the breadth is not
+    tuned. **The scale cost is unmeasured.** The corpus has 7 support files /
+    12 KB; there is no large real module here, so "a real service would copy a
+    lot more" is a hypothesis, not a finding. The concrete risk is not disk: it
+    is that `go mod tidy` must then resolve dependencies for every copied
+    package, and one that does not compile standalone fails the whole build.
+
+    The narrow replacement is cheap and exact. Generated output imports only six
+    module-local packages, and three are service-internal and already staged by
+    the `db`/`controller`/`handler`/`models` loop. The host set is exactly
+    `pkg/logger`, `pkg/network`, `pkg/utils`.
+
+  - **Host package paths are HARDCODED, never discovered.** All six come from
+    string concatenation in `gen.go`:
+
+        LoggerPkg:  sc.module + "/pkg/logger"
+        NetworkPkg: sc.module + "/pkg/network"
+        UtilsPkg:   sc.module + "/pkg/utils"
+
+    There is no import-scanning logic anywhere in `internal/testgen`. A repo
+    whose envelope package is `pkg/httpresponse` gets a hardcoded import that
+    does not exist, and the generated suite will not compile. **This is
+    pre-existing — not introduced by `stageSupport`** — and it is the recurring
+    bug class named below in its purest form: the layout is inferred from the
+    corpus, not read from the module. Fixing it means resolving the host
+    packages from the handler body's own imports, which are already parsed.
+
+### Corrections to earlier numbers
+
+Two claims in this file were wrong and have been fixed in place:
+
+  - A run-to-run nondeterminism was reported and then **disproved**. The
+    outlier was a stale artifact in `riskPipelineTest/out/` from a mid-edit
+    working tree, predating the commit. Generation is reproducible: 6/6
+    identical full-tree hashes, both routes.
+  - The measurement this section originally quoted ran against that stale
+    artifact. Re-measured on fresh output, the controller's logroute failures
+    went from 3 to 4. The table at the top of §0c is the measured one.
+
 ## 0b. Measured result, and what is still open
+
+Superseded by §0c above, which re-measured both routes after `3e56f02`. Kept
+for the record of what was believed at `bc4816b` + P0–P3.
 
 After P0–P3, both corpus routes, re-measured with
 `riskPipelineTest/run_routes.sh`:
