@@ -146,7 +146,12 @@ type ctrlFact struct {
 	RequestType  string // models.NavRequest
 	ResponseType string
 	StoreCalls   []storeCall
-	Passthrough  bool // body returns the store result without field mapping
+	// Paths is the control-flow path model of this body: one entry per way
+	// through it, each carrying the store calls that happen, which one fails,
+	// and how many times a looped call runs. It is read from the body, not
+	// from a captured log, so it is the same on both routes.
+	Paths       []ctrlPath
+	Passthrough bool // body returns the store result without field mapping
 	// ScalarResponse is a basic-literal value the body returns on SUCCESS,
 	// e.g. `return "Marks Edited Successfully", nil`. It is only set when
 	// ResponseType is a basic scalar, where a struct-mapping expectation is
@@ -1059,6 +1064,10 @@ func extractCtrlFact(fd *ast.FuncDecl, fset *token.FileSet, dbIface map[string]d
 	if lit, ok := scalarSuccessReturn(fd, fset, f.ResponseType); ok {
 		f.ScalarResponse = lit
 	}
+	// The path model is read from the body here, while the FuncDecl is in
+	// hand. Every consumer downstream shares it, so the two routes cannot
+	// disagree about how many times a call happens.
+	f.Paths = enumerateCtrlPaths(fd, fset, dbIface, f.ScalarResponse)
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
