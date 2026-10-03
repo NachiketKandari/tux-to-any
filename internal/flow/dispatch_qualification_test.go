@@ -66,3 +66,130 @@ func TestDispatchAxisOneValueProbeIsNotAnAxis(t *testing.T) {
 		t.Errorf("axis = %v, want nil (a 1-value domain is not a dispatch)", a)
 	}
 }
+
+// nestedHeavierSrc pins API-level precedence (regression). outer_flg is the
+// entry's top-level spine (2 guards); inner_flg is a NESTED chain with more
+// values and more compares (4 each). Weight alone used to hand rank 0 to
+// inner_flg, so scenarios were sliced on per-arm detail instead of the API
+// surface — and classifyAxisKinds, judging depth relative to rank 0, then
+// labelled BOTH primary.
+const nestedHeavierSrc = `void SVC_DEMO(TPSVCINFO *rqst) {
+	char outer_flg;
+	char inner_flg;
+	if (outer_flg == 'A') {
+		stuff_a();
+	}
+	if (outer_flg == 'B') {
+		stuff_b();
+	}
+	if (li_sssn_id != 0) {
+		if (inner_flg == 'P') {
+			work_p();
+		}
+		if (inner_flg == 'R') {
+			work_r();
+		}
+		if (inner_flg == 'A') {
+			work_a();
+		}
+		if (inner_flg == 'W') {
+			work_w();
+		}
+	}
+	tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+
+func TestDispatchAxisPrefersTopLevelOverHeavierNested(t *testing.T) {
+	a := dispatchAxisOf(t, nestedHeavierSrc)
+	if a == nil {
+		t.Fatal("axis: nil")
+	}
+	if a.Key() != "outer_flg" {
+		t.Errorf("axis key = %q (domain %v, sites %d), want %q — a nested chain is per-arm detail, not the entry's spine",
+			a.Key(), a.Domain, a.Sites, "outer_flg")
+	}
+}
+
+func TestAxesForNestedChainIsSecondaryNotPrimary(t *testing.T) {
+	tree := axesTree(t, nestedHeavierSrc, nil)
+	axes := tree.AxesFor([]byte(nestedHeavierSrc))
+	if len(axes) != 2 {
+		t.Fatalf("axes = %d, want 2: %v", len(axes), axes)
+	}
+	if axes[0].Key() != "outer_flg" || axes[0].Kind != AxisPrimary {
+		t.Errorf("rank 0 = %s/%s, want outer_flg/primary", axes[0].Key(), axes[0].Kind)
+	}
+	if axes[1].Key() != "inner_flg" || axes[1].Kind != AxisSecondary {
+		t.Errorf("rank 1 = %s/%s, want inner_flg/secondary", axes[1].Key(), axes[1].Kind)
+	}
+}
+
+// topLevelHeavierSrc is the ordinary shape — the top-level spine also wins on
+// weight. Depth must not change the outcome here.
+const topLevelHeavierSrc = `void SVC_DEMO(TPSVCINFO *rqst) {
+	char outer_flg;
+	char inner_flg;
+	if (outer_flg == 'A') {
+		stuff_a();
+	}
+	if (outer_flg == 'B') {
+		stuff_b();
+	}
+	if (outer_flg == 'C') {
+		stuff_c();
+	}
+	if (outer_flg == 'D') {
+		stuff_d();
+	}
+	if (li_sssn_id != 0) {
+		if (inner_flg == 'P') {
+			work_p();
+		}
+		if (inner_flg == 'R') {
+			work_r();
+		}
+	}
+	tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+
+func TestDispatchAxisTopLevelStillWinsWhenAlsoHeavier(t *testing.T) {
+	a := dispatchAxisOf(t, topLevelHeavierSrc)
+	if a == nil {
+		t.Fatal("axis: nil")
+	}
+	if a.Key() != "outer_flg" {
+		t.Errorf("axis key = %q (domain %v), want outer_flg", a.Key(), a.Domain)
+	}
+	if len(a.Domain) != 4 {
+		t.Errorf("domain = %v, want 4 values", a.Domain)
+	}
+}
+
+// nestedOnlySrc: every qualifying candidate is nested. Depth preference must
+// not manufacture a nil here — the best nested chain is still the entry's
+// only spine, and reporting none would be a silent no-op.
+const nestedOnlySrc = `void SVC_DEMO(TPSVCINFO *rqst) {
+	char inner_flg;
+	if (li_sssn_id != 0) {
+		if (inner_flg == 'P') {
+			work_p();
+		}
+		if (inner_flg == 'R') {
+			work_r();
+		}
+	}
+	tpreturn(TPSUCCESS, 0, (char *)ptr_fml_Obuffer, 0L, 0);
+}
+`
+
+func TestDispatchAxisNestedOnlyStillDetected(t *testing.T) {
+	a := dispatchAxisOf(t, nestedOnlySrc)
+	if a == nil {
+		t.Fatal("axis: nil — a nested chain is the only spine here; reporting none would be a silent no-op")
+	}
+	if a.Key() != "inner_flg" {
+		t.Errorf("axis key = %q, want inner_flg", a.Key())
+	}
+}

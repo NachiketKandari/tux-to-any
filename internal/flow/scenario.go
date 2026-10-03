@@ -160,81 +160,22 @@ func axisSymbolValue(f *ir.File, fn string, line int, name string) (string, bool
 //  3. char-compare: predicates compare a scalar against char literals,
 //     domain from the distinct compares.
 //
-// An axis needs ≥2 distinct values (a 1-value domain is not a dispatch) and
-// ≥2 guard sites; both are candidate-qualification rules enforced in
-// collectAxes, so a sub-threshold candidate in an earlier recognizer falls
-// through to the next one instead of short-circuiting the cascade. No
-// qualifying spine → nil, and the caller falls back to one scenario over the
-// whole function (never a silent no-op). Harvest is line-based over the
-// entry's body span with comment masking (facts.InComment) so commented-out
-// predicates never pollute the domain.
+// A candidate qualifies on ≥2 distinct values (a 1-value domain is not a
+// dispatch) and ≥2 guard sites; both are enforced in collectAxes. Among the
+// qualifying, the one whose guards sit SHALLOWEST in the branch nest wins —
+// a nested chain is per-arm API detail, not the entry's spine, so it never
+// outranks a top-level candidate however many values it carries — with
+// recognizer priority, then each recognizer's own rubric, breaking ties
+// (harvest.candidates). No qualifying spine → nil, and the caller falls
+// back to one scenario over the whole function (never a silent no-op).
+// Harvest is line-based over the entry's body span with comment masking
+// (facts.InComment) so commented-out predicates never pollute the domain.
 func DispatchAxisFor(src []byte, facts *scanner.SourceFacts, entry string, irFile *ir.File) *DispatchAxis {
 	h := harvestAxes(src, facts, entry, irFile)
 	if h == nil {
 		return nil
 	}
-
-	// Recognizer 1: the ref with the most normalization links (its alias
-	// is the most-linked ident); domain = linked values ∪ strcmp values.
-	best := h.normalizeFirst()
-
-	// Recognizer 2: direct compare — strcmp refs and defined-constant
-	// compares compete on the same rubric, most distinct values first
-	// (the file's main if-chain is the dispatcher, whatever spelling its
-	// tests use); ties break by site count, then identifier.
-	if best == nil {
-		best = h.directBest()
-	}
-
-	// Recognizer 3: char-compare scalar (no strcmp or defined-constant
-	// compare anywhere).
-	if best == nil {
-		best = h.charFirst()
-	}
-	return best
-}
-
-// betterDirectAxis resolves recognizer 2's contest between the direct-
-// strcmp candidate and the defined-constant-compare candidate: more
-// distinct values wins; ties break by more predicate sites, then the
-// lexically smaller identifier (deterministic on every input). The
-// DispatchAxis carries its own alias — nothing to return beside it.
-func betterDirectAxis(refBest, symbBest *DispatchAxis) *DispatchAxis {
-	if refBest == nil {
-		return symbBest
-	}
-	if symbBest == nil {
-		return refBest
-	}
-	switch {
-	case len(symbBest.Domain) > len(refBest.Domain):
-		return symbBest
-	case len(refBest.Domain) > len(symbBest.Domain):
-		return refBest
-	case symbBest.Sites > refBest.Sites:
-		return symbBest
-	case refBest.Sites > symbBest.Sites:
-		return refBest
-	case symbBest.RefName < refBest.RefName:
-		return symbBest
-	default:
-		return refBest
-	}
-}
-
-// pickAxis selects the qualifying stats with the recognizer's weight,
-// breaking ties by site count then identifier, and composes the axis (the
-// ranking lives in collectAxes, axes.go — one home for the rubric). A
-// candidate qualifies only when its values sit in at least two distinct
-// branch guards (the candidate's own strcmp/compare guards, plus the
-// alias's char-compare guards — the normalize idiom splits the test
-// between spellings): one guard is a compound condition, not a dispatch.
-func pickAxis(stats map[string]*axisStats, links map[string]map[string]int, idents map[string]*axisStats, weightOf func(*axisStats) (alias string, weight int)) *DispatchAxis {
-	cands := collectAxes(stats, links, idents, weightOf)
-	if len(cands) == 0 {
-		return nil
-	}
-	return cands[0].axis
+	return h.best()
 }
 
 // guardSitesOf counts the distinct branch-guard lines a candidate's values

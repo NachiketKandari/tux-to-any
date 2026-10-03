@@ -29,6 +29,10 @@ type axisHarvest struct {
 	idents map[string]*axisStats
 	symbs  map[string]*axisStats     // ident == defined-constant compares
 	links  map[string]map[string]int // ref → alias → linked count
+	// guardNest maps a branch-guard start line to its nest depth, for the
+	// guards this entry harvests. Depth is what separates the entry's
+	// API-level spine from per-arm detail (see nestOf).
+	guardNest map[int]int
 }
 
 // harvestAxes runs the two recognition passes over the entry's body span
@@ -54,14 +58,15 @@ func harvestAxes(src []byte, facts *scanner.SourceFacts, entry string, irFile *i
 		return nil
 	}
 	h := &axisHarvest{
-		facts:  facts,
-		lines:  lines,
-		from:   from,
-		to:     to,
-		refs:   map[string]*axisStats{},
-		idents: map[string]*axisStats{},
-		symbs:  map[string]*axisStats{},
-		links:  map[string]map[string]int{},
+		facts:     facts,
+		lines:     lines,
+		from:      from,
+		to:        to,
+		refs:      map[string]*axisStats{},
+		idents:    map[string]*axisStats{},
+		symbs:     map[string]*axisStats{},
+		links:     map[string]map[string]int{},
+		guardNest: map[int]int{},
 	}
 
 	// Pass 1: strcmp + normalize + char-compare harvest (comment-masked).
@@ -131,6 +136,7 @@ func harvestAxes(src []byte, facts *scanner.SourceFacts, entry string, irFile *i
 		if b.Function != entry || b.Cond == "" || b.StartLine < from || b.StartLine > to {
 			continue
 		}
+		h.guardNest[b.StartLine] = b.NestDepth
 		for _, m := range strcmpSiteRe.FindAllStringSubmatch(b.Cond, -1) {
 			if st := h.refs[m[1]]; st != nil {
 				st.guards[b.StartLine] = true
@@ -292,38 +298,79 @@ func composeAxis(st *axisStats, alias string, links map[string]map[string]int, i
 	}
 }
 
-// normalizeFirst is recognizer 1's winner (nil when no ref carries a
-// normalization link that clears the rubric).
-func (h *axisHarvest) normalizeFirst() *DispatchAxis {
-	if c := collectAxes(h.refs, h.links, h.idents, normalizeWeightOf(h.links)); len(c) > 0 {
-		return c[0].axis
+// nestOf reports the shallowest branch-nest depth among an axis's guards —
+// the API-level test. 0 is the entry's top level; deeper is per-arm detail.
+// A candidate whose guard lines cannot be located reports 0: the registry
+// never demotes on missing evidence.
+func (h *axisHarvest) nestOf(a *DispatchAxis) int {
+	best := -1
+	for _, l := range a.GuardLines {
+		if d, ok := h.guardNest[l]; ok && (best < 0 || d < best) {
+			best = d
+		}
 	}
-	return nil
-}
-
-// directBest is recognizer 2's winner: the direct-strcmp ref and the
-// defined-constant ident compete under betterDirectAxis.
-func (h *axisHarvest) directBest() *DispatchAxis {
-	refBest := pickAxis(h.refs, h.links, h.idents, byValuesWeight)
-	symbBest := pickAxis(h.symbs, h.links, h.idents, byValuesWeight)
-	return betterDirectAxis(refBest, symbBest)
-}
-
-// charFirst is recognizer 3's winner.
-func (h *axisHarvest) charFirst() *DispatchAxis {
-	if c := collectAxes(h.idents, h.links, h.idents, charCompareWeight); len(c) > 0 {
-		return c[0].axis
+	if best < 0 {
+		return 0
 	}
-	return nil
+	return best
 }
 
-// ranked returns every qualifying axis in registry order: recognizer 1
-// candidates first (the cascade's priority), then recognizer 2's ref and
-// defined-constant candidates merged under betterDirectAxis's rubric, then
-// recognizer 3. One logical axis appears once: the first spelling wins and
-// later candidates sharing its scenario key, ref, or alias are the same
-// spine (the normalize ref, its alias, and their char compares collapse to
-// one entry).
+// candidates returns every qualifying candidate in dispatch-axis order —
+// the single home for the ranking both the slicer and the registry read.
+//
+// The recognizer cascade's three groups come first, in priority order
+// (normalize-chain, direct compare, char-compare), each ranked by its own
+// rubric; the concatenation is then STABLY re-ordered so a shallower-nested
+// guard wins. Depth leads because a nested chain is per-arm API detail, not
+// the entry's spine: it must not outrank a top-level candidate however many
+// values it carries. Stability is what preserves the cascade — within a
+// group the group's own rubric still decides, and across groups at equal
+// depth the earlier (higher-priority) recognizer still wins, exactly as
+// before depth entered the rubric.
+func (h *axisHarvest) candidates() []axisCandidate {
+	// Recognizer 2's two spellings contest on one rubric: most distinct
+	// values, then sites, then identifier (betterDirectAxis's order).
+	direct := append(
+		collectAxes(h.refs, h.links, h.idents, byValuesWeight),
+		collectAxes(h.symbs, h.links, h.idents, byValuesWeight)...,
+	)
+	sort.SliceStable(direct, func(i, j int) bool {
+		di, dj := len(direct[i].axis.Domain), len(direct[j].axis.Domain)
+		if di != dj {
+			return di > dj
+		}
+		if direct[i].axis.Sites != direct[j].axis.Sites {
+			return direct[i].axis.Sites > direct[j].axis.Sites
+		}
+		return direct[i].axis.RefName < direct[j].axis.RefName
+	})
+	all := make([]axisCandidate, 0, len(direct)+4)
+	all = append(all, collectAxes(h.refs, h.links, h.idents, normalizeWeightOf(h.links))...)
+	all = append(all, direct...)
+	all = append(all, collectAxes(h.idents, h.links, h.idents, charCompareWeight)...)
+	sort.SliceStable(all, func(i, j int) bool {
+		return h.nestOf(all[i].axis) < h.nestOf(all[j].axis)
+	})
+	return all
+}
+
+// best is the entry's dispatch axis: the first candidate — the API-level
+// (shallowest) spine, recognizer priority and each recognizer's own rubric
+// breaking ties. nil when nothing qualifies.
+func (h *axisHarvest) best() *DispatchAxis {
+	c := h.candidates()
+	if len(c) == 0 {
+		return nil
+	}
+	return c[0].axis
+}
+
+// ranked returns every qualifying axis in registry order — the same
+// candidate ordering the slicer reads (candidates), so rank 0 and
+// DispatchAxisFor cannot disagree. One logical axis appears once: the first
+// spelling wins and later candidates sharing its scenario key, ref, or alias
+// are the same spine (the normalize ref, its alias, and their char compares
+// collapse to one entry).
 func (h *axisHarvest) ranked() []*DispatchAxis {
 	var out []*DispatchAxis
 	seenKeys := map[string]bool{}
@@ -353,25 +400,7 @@ func (h *axisHarvest) ranked() []*DispatchAxis {
 		out = append(out, a)
 	}
 
-	for _, c := range collectAxes(h.refs, h.links, h.idents, normalizeWeightOf(h.links)) {
-		add(c.axis)
-	}
-	direct := collectAxes(h.refs, h.links, h.idents, byValuesWeight)
-	direct = append(direct, collectAxes(h.symbs, h.links, h.idents, byValuesWeight)...)
-	sort.SliceStable(direct, func(i, j int) bool {
-		di, dj := len(direct[i].axis.Domain), len(direct[j].axis.Domain)
-		if di != dj {
-			return di > dj
-		}
-		if direct[i].axis.Sites != direct[j].axis.Sites {
-			return direct[i].axis.Sites > direct[j].axis.Sites
-		}
-		return direct[i].axis.RefName < direct[j].axis.RefName
-	})
-	for _, c := range direct {
-		add(c.axis)
-	}
-	for _, c := range collectAxes(h.idents, h.links, h.idents, charCompareWeight) {
+	for _, c := range h.candidates() {
 		add(c.axis)
 	}
 	return out
